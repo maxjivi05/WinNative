@@ -42,8 +42,6 @@ import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.preference.PreferenceManager;
 
 import com.google.android.material.navigation.NavigationView;
-import com.winlator.cmod.box86_64.rc.RCFile;
-import com.winlator.cmod.box86_64.rc.RCManager;
 import com.winlator.cmod.container.Container;
 import com.winlator.cmod.container.ContainerManager;
 import com.winlator.cmod.container.Shortcut;
@@ -1149,21 +1147,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                     )
             );
         }
-
-        // RC (box86_64rc) file handling
-        RCManager manager = new RCManager(this);
-        manager.loadRCFiles();
-        int rcfileId = shortcut == null
-                ? container.getRCFileId()
-                : Integer.parseInt(shortcut.getExtra("rcfileId", String.valueOf(container.getRCFileId())));
-        RCFile rcfile = manager.getRcfile(rcfileId);
-
-        File file = new File(container.getRootDir(), ".box64rc");
-        String str = rcfile == null ? "" : rcfile.generateBox86_64rc();
-        FileUtils.writeString(file, str);
-
-        // Let Box64 inside Wine see this config
-        envVars.put("BOX64_RCFILE", file.getAbsolutePath());
 
         // Pass final envVars to the launcher
         guestProgramLauncherComponent.setEnvVars(envVars);

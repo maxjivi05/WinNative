@@ -64,7 +64,6 @@ public class Container {
     private String box64Preset = Box86_64Preset.COMPATIBILITY;
     private File rootDir;
     private JSONObject extraData;
-    private int rcfileId = 0;
     private String midiSoundFont = "";
     private int inputType = WinHandler.DEFAULT_INPUT_TYPE;
     private String lc_all = "";
@@ -350,14 +349,6 @@ public class Container {
         this.desktopTheme = desktopTheme;
     }
 
-    public int getRCFileId() {
-        return rcfileId;
-    }
-
-    public void setRcfileId(int id) {
-        rcfileId = id;
-    }
-
     public String getMIDISoundFont() {
         return midiSoundFont;
     }
@@ -427,7 +418,6 @@ public class Container {
             data.put("fexcoreVersion", fexcoreVersion);
             data.put("desktopTheme", desktopTheme);
             data.put("extraData", extraData);
-            data.put("rcfileId", rcfileId);
             data.put("midiSoundFont", midiSoundFont);
             data.put("lc_all", lc_all);
             data.put("primaryController", primaryController);
@@ -526,9 +516,6 @@ public class Container {
                     break;
                 case "desktopTheme" :
                     setDesktopTheme(data.getString(key));
-                    break;
-                case "rcfileId" :
-                    setRcfileId(data.getInt(key));
                     break;
                 case "midiSoundFont" :
                     setMidiSoundFont(data.getString(key));

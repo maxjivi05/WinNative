@@ -361,9 +361,6 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             case R.id.main_menu_input_controls:
                 show(new InputControlsFragment(selectedProfileId), false);  // Forward animation
                 break;
-            case R.id.main_menu_box_rc:
-                show(new Box86_64RCFragment(), false);  // Forward animation
-                break;
             case R.id.main_menu_contents:
                 show(new ContentsFragment(), false);  // Forward animation
                 break;

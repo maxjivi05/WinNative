@@ -278,7 +278,6 @@
     <string name="enabled_async">Enable Async</string>
     <string name="enabled_async_cache">Enable Async Cache</string>
     <string name="vkd3d_feature_level">VKD3D Feature Level</string>
-    <string name="box64_rc_file">Box64 RCFile</string>
     <string name="filter">Filter</string>
     <string name="all">All</string>
     <string name="group">Group</string>
