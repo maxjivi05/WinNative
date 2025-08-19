@@ -68,7 +68,7 @@ public class Container {
     private int primaryController = 1;
     private String controllerMapping = new String(new char[XrControllerMapping.values().length]);
     private String fexcoreVersion = DefaultVersion.FEXCORE;
-    private String box64Version = DefaultVersion.BOX64;
+    private String box64Version;
     private String emulator;
     private boolean isRelativeMouseMovement;
 

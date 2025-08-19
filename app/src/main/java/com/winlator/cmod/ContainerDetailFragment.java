@@ -355,7 +355,6 @@ public class ContainerDetailFragment extends Fragment {
         final View vGraphicsDriverConfig = view.findViewById(R.id.BTGraphicsDriverConfig);
         vGraphicsDriverConfig.setTag(isEditMode() ? container.getGraphicsDriverConfig() : Container.DEFAULT_GRAPHICSDRIVERCONFIG);
 
-        setupDXWrapperSpinner(sDXWrapper, vDXWrapperConfig);
         setupDDrawSpinner(sDDrawrapper, isEditMode() ? container.getDDrawWrapper() : Container.DEFAULT_DDRAWRAPPER);
         loadGraphicsDriverSpinner(sGraphicsDriver, sDXWrapper, vGraphicsDriverConfig,
                 isEditMode() ? container.getGraphicsDriver() : Container.DEFAULT_GRAPHICS_DRIVER,
@@ -848,13 +847,13 @@ public class ContainerDetailFragment extends Fragment {
         update.run();
     }
 
-    public static void setupDXWrapperSpinner(final Spinner sDXWrapper, final View vDXWrapperConfig) {
+    public static void setupDXWrapperSpinner(final Spinner sDXWrapper, final View vDXWrapperConfig, boolean isARM64EC) {
         sDXWrapper.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 String dxwrapper = StringUtils.parseIdentifier(sDXWrapper.getSelectedItem());
                 if (dxwrapper.equals("dxvk")) {
-                    vDXWrapperConfig.setOnClickListener((v) -> (new DXVKConfigDialog(vDXWrapperConfig)).show());
+                    vDXWrapperConfig.setOnClickListener((v) -> (new DXVKConfigDialog(vDXWrapperConfig, isARM64EC)).show());
                     vDXWrapperConfig.setVisibility(View.VISIBLE);
                 }
                 else if (dxwrapper.equals("vkd3d")) {
@@ -1054,6 +1053,8 @@ public class ContainerDetailFragment extends Fragment {
                 FrameLayout fexcoreFL = view.findViewById(R.id.fexcoreFrame);
                 Spinner sEmulator = view.findViewById(R.id.SEmulator);
                 Spinner sEmulator64 = view.findViewById(R.id.SEmulator64);
+                Spinner sDXWrapper = view.findViewById(R.id.SDXWrapper);
+                View vDXWrapperConfig = view.findViewById(R.id.BTDXWrapperConfig);
                 sEmulator64.setEnabled(false);
                 String wineVersion = sWineVersion.getSelectedItem().toString();
                 WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersion);
@@ -1070,28 +1071,11 @@ public class ContainerDetailFragment extends Fragment {
                     sEmulator64.setSelection(1);
                 }
                 loadBox64VersionSpinner(context, container, contentsManager, sBox64Version, wineInfo.isArm64EC());
+                setupDXWrapperSpinner(sDXWrapper, vDXWrapperConfig, wineInfo.isArm64EC());
                 cbWoW64Mode.setEnabled(true); // Always allow user to toggle WoW64 mode
             }
             @Override
             public void onNothingSelected(AdapterView<?> parent) {
-                FrameLayout fexcoreFL = view.findViewById(R.id.fexcoreFrame);
-                Spinner sEmulator = view.findViewById(R.id.SEmulator);
-                Spinner sEmulator64 = view.findViewById(R.id.SEmulator64);
-                sEmulator64.setEnabled(false);
-                String wineVersion = sWineVersion.getSelectedItem().toString();
-                WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersion);
-                if (wineInfo.isArm64EC()) {
-                    fexcoreFL.setVisibility(View.VISIBLE);
-                    sEmulator.setEnabled(true);
-                    sEmulator64.setSelection(0);
-                }
-                else {
-                    fexcoreFL.setVisibility(View.GONE);
-                    sEmulator.setEnabled(false);
-                    sEmulator.setSelection(1);
-                    sEmulator64.setSelection(1);
-                }
-                loadBox64VersionSpinner(context, container, contentsManager, sBox64Version, wineInfo.isArm64EC());
             }
         });
 
@@ -1177,7 +1161,7 @@ public class ContainerDetailFragment extends Fragment {
         if (container != null)
             AppUtils.setSpinnerSelectionFromValue(spinner, container.getBox64Version());
         else
-            AppUtils.setSpinnerSelectionFromValue(spinner, DefaultVersion.BOX64);
+            AppUtils.setSpinnerSelectionFromValue(spinner, (isArm64EC) ? DefaultVersion.WOWBOX64 : DefaultVersion.BOX64);
     }
 
 }
