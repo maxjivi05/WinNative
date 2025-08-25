@@ -1642,17 +1642,16 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             if (vkd3dWrapper.contains("None")) {
                 Log.d(TAG, "No VKD3D has been selected, restoring original d3d12");
                 restoreOriginalDllFiles(new String[]{"d3d12.dll", "d3d12core.dll"});
-                return;
-            }
-
-            ContentProfile vkd3dProfile = contentsManager.getProfileByEntryName(vkd3dWrapper);
-            if (vkd3dProfile != null) {
-                Log.d(TAG, "Applying user-defined VKD3D content profile: " + vkd3dWrapper);
-                contentsManager.applyContent(vkd3dProfile);
             }
             else {
-                Log.d(TAG, "Extracting fallback VKD3D .tzst archive: " + vkd3dWrapper);
-                TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "dxwrapper/" + vkd3dWrapper + ".tzst", windowsDir, onExtractFileListener);
+                ContentProfile vkd3dProfile = contentsManager.getProfileByEntryName(vkd3dWrapper);
+                if (vkd3dProfile != null) {
+                    Log.d(TAG, "Applying user-defined VKD3D content profile: " + vkd3dWrapper);
+                    contentsManager.applyContent(vkd3dProfile);
+                } else {
+                    Log.d(TAG, "Extracting fallback VKD3D .tzst archive: " + vkd3dWrapper);
+                    TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "dxwrapper/" + vkd3dWrapper + ".tzst", windowsDir, onExtractFileListener);
+                }
             }
 
             Log.d(TAG, "Extracting nglide wrapper");
@@ -1661,13 +1660,14 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             if (ddrawrapper.contains("None")) {
                 Log.d(TAG, "No DDRaw wrapper has been selected, restoring original ddraw files");
                 restoreOriginalDllFiles(new String[]{ "ddraw.dll", "d3dimm.dll" });
-                return;
             }
+            else {
+                if (ddrawrapper.equals("cnc-ddraw"))
+                    envVars.put("CNC_DDRAW_CONFIG_FILE", "C:\\windows\\syswow64\\ddraw.ini");
 
-            if (ddrawrapper.equals("cnc-ddraw")) envVars.put("CNC_DDRAW_CONFIG_FILE", "C:\\windows\\syswow64\\ddraw.ini");
-
-            Log.d(TAG, "Extracting ddrawrapper " + ddrawrapper);
-            TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "ddrawrapper/" + ddrawrapper + ".tzst", windowsDir, onExtractFileListener);
+                Log.d(TAG, "Extracting ddrawrapper " + ddrawrapper);
+                TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "ddrawrapper/" + ddrawrapper + ".tzst", windowsDir, onExtractFileListener);
+            }
 
             Log.d(TAG, "Finished extraction of DXVK wrapper files, version: " + dxwrapper);
         } else if (dxwrapper.contains("wined3d")) {
