@@ -354,32 +354,32 @@ public class ShortcutSettingsDialog extends ContentDialog {
 
                 String execArgs = etExecArgs.getText().toString();
                 shortcut.putExtra("execArgs", !execArgs.isEmpty() ? execArgs : null);
-                shortcut.putExtra("screenSize", !screenSize.equals(shortcut.container.getScreenSize()) ? screenSize : null);
-                shortcut.putExtra("graphicsDriver", !graphicsDriver.equals(shortcut.container.getGraphicsDriver()) ? graphicsDriver : null);
-                shortcut.putExtra("graphicsDriverConfig", !graphicsDriverConfig.equals(shortcut.container.getGraphicsDriverConfig()) ? graphicsDriverConfig : null);
-                shortcut.putExtra("dxwrapper", !dxwrapper.equals(shortcut.container.getDXWrapper()) ? dxwrapper : null);
-                shortcut.putExtra("dxwrapperConfig", !dxwrapperConfig.equals(shortcut.container.getDXWrapperConfig()) ? dxwrapperConfig : null);
-                shortcut.putExtra("audioDriver", !audioDriver.equals(shortcut.container.getAudioDriver()) ? audioDriver : null);
-                shortcut.putExtra("emulator", !emulator.equals(shortcut.container.getEmulator()) ? emulator : null);
-                shortcut.putExtra("midiSoundFont", !midiSoundFont.equals(shortcut.container.getMIDISoundFont()) ? midiSoundFont : null);
+                shortcut.putExtra("screenSize", screenSize);
+                shortcut.putExtra("graphicsDriver", graphicsDriver);
+                shortcut.putExtra("graphicsDriverConfig", graphicsDriverConfig);
+                shortcut.putExtra("dxwrapper", dxwrapper);
+                shortcut.putExtra("dxwrapperConfig", dxwrapperConfig);
+                shortcut.putExtra("audioDriver", audioDriver);
+                shortcut.putExtra("emulator", emulator);
+                shortcut.putExtra("midiSoundFont", midiSoundFont);
 
 
                 shortcut.putExtra("fullscreenStretched", cbFullscreenStretched.isChecked() ? "1" : null);
 
                 String wincomponents = containerDetailFragment.getWinComponents(getContentView());
-                shortcut.putExtra("wincomponents", !wincomponents.equals(shortcut.container.getWinComponents()) ? wincomponents : null);
+                shortcut.putExtra("wincomponents", wincomponents);
 
                 String envVars = envVarsView.getEnvVars();
                 shortcut.putExtra("envVars", !envVars.isEmpty() ? envVars : null);
 
                 String fexConfig = FEXCoreManager.saveFEXCoreConfig(sFEXCoreTSOPreset, sFEXCoreMultiBlock, sFEXCoreX87ReducedPrecision, sFEXCoreVersion);
-                shortcut.putExtra("fexConfig", !fexConfig.equals(shortcut.container.getFEXConfig()) ? fexConfig : null);
+                shortcut.putExtra("fexConfig", fexConfig);
 
                 String box64Preset = Box64PresetManager.getSpinnerSelectedId(sBox64Preset);
-                shortcut.putExtra("box64Preset", !box64Preset.equals(shortcut.container.getBox64Preset()) ? box64Preset : null);
+                shortcut.putExtra("box64Preset", box64Preset);
 
                 byte startupSelection = (byte)sStartupSelection.getSelectedItemPosition();
-                shortcut.putExtra("startupSelection", (startupSelection != shortcut.container.getStartupSelection()) ? String.valueOf(startupSelection) : null);
+                shortcut.putExtra("startupSelection", String.valueOf(startupSelection));
 
                 String sharpeningEffect = sSharpnessEffect.getSelectedItem().toString();
                 String sharpeningLevel = String.valueOf(sbSharpnessLevel.getProgress());
@@ -393,7 +393,7 @@ public class ShortcutSettingsDialog extends ContentDialog {
                 shortcut.putExtra("controlsProfile", controlsProfile > 0 ? String.valueOf(controlsProfile) : null);
 
                 String cpuList = cpuListView.getCheckedCPUListAsString();
-                shortcut.putExtra("cpuList", !cpuList.equals(shortcut.container.getCPUList(true)) ? cpuList : null);
+                shortcut.putExtra("cpuList", cpuList);
 
                 // Save all changes to the shortcut
                 shortcut.saveData();
