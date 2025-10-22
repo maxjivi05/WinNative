@@ -32,7 +32,7 @@ This build mimics the package name of Genshin Impact. This is specifically desig
 # Useful Tips
 
   - Here is a tutorial from the Do ZeroKimchi channel on how to use Winlator Bionic:
-    [](https://youtu.be/EJDWZUGF9sk)
+    https://youtu.be/EJDWZUGF9sk?si=e3Z-DdmMJSYKduWz
   - If you are using an `x86_64` container and experiencing performance issues, try changing the Box86/Box64 preset to **Performance** in Container Settings -\> Advanced Tab.
   - If you are using an `Arm64EC` container, try swapping between different FEXCore versions (2505,2507 etc) in the container settings for better compatibility or performance.
   - For applications that use .NET Framework, try installing Wine Mono found in Start Menu -\> System Tools.
@@ -69,5 +69,6 @@ Many thanks to [ptitseb](https://github.com/ptitSeb) (Box86/Box64), [Danylo](htt
 
 Thank you to
 all the people who believe in this project.
+
 
 
