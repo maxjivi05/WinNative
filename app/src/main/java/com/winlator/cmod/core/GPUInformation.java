@@ -2,8 +2,6 @@ package com.winlator.cmod.core;
 
 import android.content.Context;
 
-import java.util.Locale;
-
 public abstract class GPUInformation {
 
     public static boolean isAdrenoGPU(Context context) {
@@ -18,7 +16,7 @@ public abstract class GPUInformation {
 
         return !renderer.toLowerCase().contains("unknown");
     }
-    public native static String getVersion(String driverName, Context context);
+    public native static String getVulkanVersion(String driverName, Context context);
     public native static String getRenderer(String driverName, Context context);
     public native static String[] enumerateExtensions(String driverName, Context context);
 

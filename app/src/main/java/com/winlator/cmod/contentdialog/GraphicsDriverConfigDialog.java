@@ -108,13 +108,7 @@ public class GraphicsDriverConfigDialog extends ContentDialog {
     }
 
     private String[] queryAvailableExtensions(String driver, Context context) {
-        ArrayList<String> availableExtensions;
-        if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-            availableExtensions = new ArrayList<>(Arrays.asList(GPUInformation.enumerateExtensions(driver, context)));
-        else
-            availableExtensions = new ArrayList<>(Arrays.asList(GPUInformation.enumerateExtensions(null, context)));
-
-        return availableExtensions.toArray(new String[0]);
+        return GPUInformation.enumerateExtensions(driver, context);
     }
   
     public GraphicsDriverConfigDialog(View anchor, String graphicsDriver, TextView graphicsDriverVersionView) {
