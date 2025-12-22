@@ -9,9 +9,7 @@
 Winlator is an Android application that lets you run Windows (x86\_64) applications with Wine. It supports standard `x86_64` containers using Box86/Box64, as well as `Arm64EC` containers which utilize FEXCore (for 64/32-bit) or an optional WowBox64 (for 32-bit).
 
 This is a fork of the **Winlator Bionic** project by [Pipetto-crypto](https://github.com/Pipetto-crypto/winlator).
-and if you want to see my own commits go here
-(https://github.com/StevenMX-backup/Ludashi-Backup)
-
+and backup [Ludashi-backup](https://github.com/StevenMX-backup/Ludashi-Backup).
 ## APK Build Explanations
 
 ### what is Ludashi?
@@ -71,6 +69,7 @@ Many thanks to [ptitseb](https://github.com/ptitSeb) (Box86/Box64), [Danylo](htt
 
 Thank you to
 all the people who believe in this project.
+
 
 
 
