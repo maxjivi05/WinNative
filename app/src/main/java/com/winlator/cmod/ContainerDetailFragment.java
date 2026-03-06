@@ -669,6 +669,8 @@ public class ContainerDetailFragment extends Fragment {
                         if (newContainer != null) {
                             this.container = newContainer;
                             saveWineRegistryKeys(view);
+                        } else {
+                            AppUtils.showToast(context, R.string.unable_to_install_system_files);
                         }
                         preloaderDialog.close();
                         getActivity().onBackPressed();

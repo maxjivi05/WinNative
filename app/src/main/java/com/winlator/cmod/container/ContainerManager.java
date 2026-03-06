@@ -146,7 +146,7 @@ public class ContainerManager {
             maxContainerId++;
             containers.add(container);
             return container;
-        } catch (JSONException e) {
+        } catch (Exception e) {
             e.printStackTrace();
         }
         return null;
@@ -235,7 +235,8 @@ public class ContainerManager {
 
         File[] srcfiles = srcDir.listFiles(file -> file.isFile());
 
-        for (File file : srcfiles) {
+        if (srcfiles != null) {
+            for (File file : srcfiles) {
             String dllName = file.getName();
             if (dllName.equals("iexplore.exe") && wineInfo.isArm64EC() && srcName.equals("aarch64-windows"))
                 file = new File(wineInfo.path + "/lib/wine/" + "i386-windows/iexplore.exe");
@@ -248,6 +249,7 @@ public class ContainerManager {
                 if (dstFile == null) continue;
             }
             FileUtils.copy(file, dstFile);
+            }
         }
     }
 

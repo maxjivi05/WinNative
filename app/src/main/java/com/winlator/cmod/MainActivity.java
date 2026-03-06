@@ -194,7 +194,23 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
     @Override
     public void onBackPressed() {
         if (getIntent().getBooleanExtra("return_to_unified", false)) {
-            finish();
+            // Check if we're on the root containers list — only then finish.
+            // If we're on a detail fragment (creating/editing container), go back to containers list.
+            FragmentManager fm = getSupportFragmentManager();
+            List<Fragment> fragments = fm.getFragments();
+            boolean onContainersList = false;
+            for (Fragment f : fragments) {
+                if (f instanceof ContainersFragment && f.isVisible()) {
+                    onContainersList = true;
+                    break;
+                }
+            }
+            if (onContainersList) {
+                finish();
+            } else {
+                // Navigate back to containers list
+                show(new ContainersFragment(), true);
+            }
             return;
         }
 

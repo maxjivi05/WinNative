@@ -40,6 +40,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import android.content.res.Configuration
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -401,15 +403,8 @@ class UnifiedActivity : ComponentActivity() {
             return
         }
 
-        val listState = rememberLazyListState()
-
-        // Center the carousel on the middle item at launch
-        LaunchedEffect(installedApps.size) {
-            if (installedApps.isNotEmpty()) {
-                val midIndex = installedApps.size / 2
-                listState.scrollToItem(midIndex)
-            }
-        }
+        val midIndex = remember(installedApps.size) { installedApps.size / 2 }
+        val listState = rememberLazyListState(initialFirstVisibleItemIndex = midIndex)
 
         val centerIdx by remember {
             derivedStateOf {
@@ -417,7 +412,7 @@ class UnifiedActivity : ComponentActivity() {
                 val viewportCenter = layoutInfo.viewportStartOffset + layoutInfo.viewportSize.width / 2
                 layoutInfo.visibleItemsInfo.minByOrNull {
                     abs((it.offset + it.size / 2) - viewportCenter)
-                }?.index ?: 0
+                }?.index ?: midIndex
             }
         }
 
@@ -428,6 +423,11 @@ class UnifiedActivity : ComponentActivity() {
             selectedSteamAppName = selectedApp?.name ?: ""
         }
 
+        // Use half screen width for content padding so first/last item can center
+        val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
+        val itemWidth = 140.dp
+        val centerPadding = (screenWidthDp - itemWidth) / 2
+
         Column(
             modifier = Modifier.fillMaxSize().padding(top = 16.dp),
             verticalArrangement = Arrangement.Top
@@ -436,15 +436,15 @@ class UnifiedActivity : ComponentActivity() {
             // ── Horizontal carousel ──
             LazyRow(
                 state = listState,
-                modifier = Modifier.fillMaxWidth().height(250.dp),
-                contentPadding = PaddingValues(horizontal = 100.dp),
+                modifier = Modifier.fillMaxWidth().height(260.dp),
+                contentPadding = PaddingValues(horizontal = centerPadding),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 itemsIndexed(installedApps) { index, app ->
                     val isCentered = index == centerIdx
                     val targetScale by animateFloatAsState(
-                        targetValue = if (isCentered) 1.12f else 0.88f,
+                        targetValue = if (isCentered) 1.15f else 0.85f,
                         animationSpec = spring(
                             dampingRatio = Spring.DampingRatioMediumBouncy,
                             stiffness = Spring.StiffnessMedium
@@ -452,7 +452,7 @@ class UnifiedActivity : ComponentActivity() {
                         label = "capsuleScale"
                     )
                     val shadowElevation by animateFloatAsState(
-                        targetValue = if (isCentered) 20f else 4f,
+                        targetValue = if (isCentered) 24f else 2f,
                         spring(stiffness = Spring.StiffnessMedium),
                         label = "shadowElev"
                     )
@@ -465,7 +465,7 @@ class UnifiedActivity : ComponentActivity() {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
-                            .width(140.dp)
+                            .width(itemWidth)
                             .graphicsLayer {
                                 scaleX = targetScale
                                 scaleY = targetScale
@@ -475,7 +475,11 @@ class UnifiedActivity : ComponentActivity() {
                             app = app,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .shadow(shadowElevation.dp, RoundedCornerShape(12.dp), spotColor = AccentGlow.copy(alpha = if (isCentered) 0.4f else 0f))
+                                .shadow(
+                                    shadowElevation.dp,
+                                    RoundedCornerShape(12.dp),
+                                    spotColor = if (isCentered) Color.Black.copy(alpha = 0.6f) else Color.Transparent
+                                )
                         )
                     }
                 }
@@ -560,12 +564,18 @@ class UnifiedActivity : ComponentActivity() {
                     }
                 }
         ) {
-            // Artwork — extended fallback chain for maximum coverage
-            val imageUrl = app.getCapsuleUrl()
-                ?: app.getCapsuleUrl(large = true)
-                ?: app.getHeroUrl()
-                ?: app.getHeaderImageUrl()
-                ?: "https://shared.steamstatic.com/store_item_assets/steam/apps/${app.id}/library_600x900.jpg"
+            // Artwork — robust CDN fallback chain (most reliable URLs first)
+            val imageUrls = listOf(
+                app.getCapsuleUrl(),
+                app.getCapsuleUrl(large = true),
+                "https://cdn.cloudflare.steamstatic.com/steam/apps/${app.id}/library_600x900.jpg",
+                app.getHeroUrl(),
+                app.getHeaderImageUrl(),
+                "https://cdn.cloudflare.steamstatic.com/steam/apps/${app.id}/header.jpg",
+                "https://cdn.cloudflare.steamstatic.com/steam/apps/${app.id}/capsule_616x353.jpg",
+                "https://cdn.cloudflare.steamstatic.com/steam/apps/${app.id}/library_hero.jpg"
+            )
+            val imageUrl = imageUrls.firstOrNull { it != null } ?: imageUrls[2]!!
 
             AsyncImage(
                 model = ImageRequest.Builder(context)
