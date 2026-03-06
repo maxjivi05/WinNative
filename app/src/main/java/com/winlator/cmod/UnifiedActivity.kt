@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -1083,7 +1084,11 @@ class UnifiedActivity : ComponentActivity() {
                 shadowElevation = 16.dp,
                 tonalElevation = 4.dp
             ) {
-                Column(Modifier.padding(20.dp)) {
+                Column(Modifier
+                    .padding(20.dp)
+                    .heightIn(max = 450.dp)
+                    .verticalScroll(rememberScrollState())
+                ) {
                     // Header
                     Row(
                         Modifier.fillMaxWidth(),
