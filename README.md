@@ -1,76 +1,75 @@
-
-
 <p align="center">
-  <img src="logo.png" alt="Winlator Bionic" width="600">
+  <img src="logo.png" alt="WinNative" width="600">
 </p>
 
-# Winlator Bionic
+# WinNative: High-Performance Windows Emulation for Android
 
-Winlator is an Android application that lets you run Windows (x86\_64) applications with Wine. It supports standard `x86_64` containers using Box86/Box64, as well as `Arm64EC` containers which utilize FEXCore (for 64/32-bit) or an optional WowBox64 (for 32-bit).
+**WinNative** is an advanced, high-performance Windows (x86_64) emulation environment for Android. It bridges the gap between desktop gaming and mobile mobility by unifying the best technologies from **Winlator Bionic**, **Pluvia**, and **GameNative-Performance**. 
 
-This is a fork of the **Winlator Bionic** project by [Pipetto-crypto](https://github.com/Pipetto-crypto/winlator).
+Designed for enthusiasts and power users, WinNative provides a "plug-and-play" experience with a console-like interface, deep controller integration, and hardware-specific optimizations for modern Snapdragon/Adreno devices.
 
-and backup [Ludashi-backup](https://github.com/StevenMX-backup/Ludashi-Backup).
-## APK Build Explanations
+---
 
-### what is Ludashi?
+## 🚀 Key Features
 
-The Ludashi Build is functionally identical to the standard Bionic app, but the package name has been renamed to mimic Ludashi, a popular benchmark app. Some Android phones — especially Xiaomi devices — may automatically enable performance mode when such apps are detected, potentially reducing throttling and boosting performance slightly.
+### 🎮 Console-First Experience (Unified UI)
+- **Controller-Friendly Design:** Navigable entirely via gamepad, making it perfect for handhelds like the Odin 2, Retroid Pocket, or docked phones.
+- **Unified Library:** A beautiful, Compose-based library view that aggregates local shortcuts and Steam games into a single, high-fidelity grid.
+- **Pluvia Integration:** Leverages the Pluvia ecosystem for advanced library management and aesthetic "Big Picture" layouts.
 
-### Dev-Vanilla Build
+### ⚙️ Peak Performance
+- **Bionic Environment:** Uses an Ubuntu Bionic-based RootFS for lower overhead and better compatibility with modern x86_64 applications.
+- **Adreno Optimization:** Deeply integrated Turnip/Zink drivers with specialized profiles for Snapdragon 8 Gen 2/3 and 8 Elite (Adreno 7xx/8xx).
+- **Ludashi Branding:** Built with the `com.ludashi.benchmark` package name to trigger "Performance Mode" on Xiaomi and other OEM devices, reducing thermal throttling.
+- **Hybrid Emulation:** Supports Box86/Box64, FEXCore (Arm64EC), and WowBox64 to ensure maximum compatibility across different instruction sets.
 
-This is the standard, unmodified build. It uses the original package name, which allows it to be installed alongside other popular Winlator forks (like the coffincolors version) without any package conflicts.
+### 🌐 Seamless Steam Integration
+- **Account Sync:** Sign in to your Steam account to browse your library and download assets directly.
+- **SteamPipe Support:** Integrated SteamPipe DLLs for better compatibility with modern Steam games.
+- **Local Playtime Tracking:** Offline-first playtime management that persists even without an active cloud connection.
 
-### RedMagic Build
+---
 
-This build mimics the package name of Genshin Impact. This is specifically designed for RedMagic devices, as the phone's software may detect this package name to enable hardware-specific gaming enhancements, such as built-in frame generation (framegen). Using this build may unlock these features and improve performance on supported RedMagic phones.
+## 🛠️ Components & Drivers
 
-# Installation
+WinNative is built on the shoulders of giants. It includes and supports:
+- **Translators:** Box86/Box64 by [ptitSeb](https://github.com/ptitSeb), FEX-Emu.
+- **Graphics:** DXVK (up to 2.4), VKD3D (3.0b optimized for A840), D8VK, and CNC DDraw.
+- **Kernel/Environment:** PRoot environment with custom `evshim` for low-latency input.
+- **Drivers:** Optimized Turnip drivers (v1.8.8/v1.8.9) with specific fixes for UBWC v5/v6 and Adreno 8xx chips.
 
-1.  Download and install the latest APK from this repository's [Releases section](https://github.com/StevenMXZ/Winlator-Ludashi/releases) (choose your preferred build: `dev-vanilla`, `ludashi`, or `redmagic`).
-2.  Launch the app and wait for the installation process to finish.
+---
 
-# Useful Tips
+## 🗺️ Roadmap
 
-  - Here is a tutorial from ZeroKimchi channel on how to use Winlator Bionic:
-    https://youtu.be/EJDWZUGF9sk?si=e3Z-DdmMJSYKduWz
-  - If you are using an `x86_64` container and experiencing performance issues, try changing the Box86/Box64 preset to **Performance** in Container Settings -\> Advanced Tab.
-  - If you are using an `Arm64EC` container, try swapping between different FEXCore versions (2505,2507 etc) in the container settings for better compatibility or performance.
-  - For applications that use .NET Framework, try installing Wine Mono found in Start Menu -\> System Tools.
-  - If some older games don't open, try adding the environment variable MESA\_EXTENSION\_MAX\_YEAR=2003 in Container Settings -\> Environment Variables.
-  - Try running the games using the shortcut on the Winlator home screen, there you can define individual settings for each game.
-  - To speed up the installers, try changing the Box86/Box64 preset to Intermediate in Container Settings -\> Advanced Tab.
+We are committed to making WinNative the gold standard for mobile emulation.
+- [x] **Unified Interface:** Compose-based library with controller navigation.
+- [x] **Smart Power Management:** Dynamic refresh of power constraints during heavy emulation.
+- [x] **Adreno 8xx Support:** Full compatibility with Snapdragon 8 Elite.
+- [ ] **Direct Game Launching:** Deep-linking shortcuts directly from the Android home screen.
+- [ ] **Advanced DRM Handling:** Improved support for games requiring specialized file redirections.
+- [ ] **Cloud Save Sync:** Integrating local playtime and saves with community cloud solutions.
 
-# Additional Components & Updates
+---
 
-You can find updated components (known as `wcps`) to improve compatibility and performance, as well as new drivers, at the links below:
+## 📦 Installation
 
-  - **Winlator Components (FEXCore, Box64/Box86, DXVK, etc.):**
-      - [StevenMXZ's Winlator-Contents Repository](https://github.com/StevenMXZ/Winlator-Contents)
-  - **Adreno GPU Drivers (Turnip):**
-      - [Kimchi's AdrenoToolsDrivers Releases](https://www.google.com/search?q=https://github.com/K11MCH1/AdrenoToolsDrivers/releases)
+1. **Download:** Get the latest APK from the [Releases](https://github.com/maxjivi05/WinNative/releases) section.
+2. **Variants:**
+   - `Ludashi`: Best for Xiaomi/RedMagic (Performance Mode trigger).
+   - `Vanilla`: Standard package name for side-loading with other forks.
+3. **Setup:** Launch the app, allow the ImageFS to install, and start adding your games or syncing with Steam.
 
-# Credits and Third-party apps
+---
 
-  - **Original Winlator** by [brunodev85](https://github.com/brunodev85/winlator)
-  - **Original Winlator Bionic** by [Pipetto-crypto](https://github.com/Pipetto-crypto/winlator)
-  - **Winlator (coffincolors fork)** by [coffincolors](https://github.com/coffincolors/winlator)
-  - Ubuntu RootFs (Bionic Beaver): [releases.ubuntu.com/bionic](https://www.google.com/search?q=https://releases.ubuntu.com/bionic)
-  - Wine: [winehq.org](https://www.winehq.org/)
-  - Box86/Box64 by [ptitseb](https://github.com/ptitSeb)
-  - FEX-Emu by [FEX-Emu](https://github.com/FEX-Emu/FEX)
-  - PRoot: [proot-me.github.io](https://proot-me.github.io)
-  - Mesa (Turnip/Zink/VirGL): [mesa3d.org](https://www.mesa3d.org)
-  - DXVK: [github.com/doitsujin/dxvk](https://github.com/doitsujin/dxvk)
-  - VKD3D: [gitlab.winehq.org/wine/vkd3d](https://gitlab.winehq.org/wine/vkd3d)
-  - D8VK: [github.com/AlpyneDreams/d8vk](https://github.com/AlpyneDreams/d8vk)
-  - CNC DDraw: [github.com/FunkyFr3sh/cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw)
-[ptitseb](https://github.com/ptitSeb) (Box86/Box64), [Danylo](https://blogs.igalia.com/dpiliaiev/tags/mesa/) (Turnip), [alexvorxx](https://github.com/alexvorxx) (Mods/Tips) and others.
+## 🤝 Credits & Acknowledgments
 
+- **Original Winlator** by [brunodev85](https://github.com/brunodev85/winlator)
+- **Winlator Bionic** by [Pipetto-crypto](https://github.com/Pipetto-crypto/winlator)
+- **Pluvia/GameNative** features by the GameNative community.
+- **Mesa/Turnip** contributions by [Danylo](https://blogs.igalia.com/dpiliaiev/tags/mesa/) and the Mesa3D team.
 
-
-
-
-
-
-
+---
+<p align="center">
+  <i>Developed for the community, by the community.</i>
+</p>
