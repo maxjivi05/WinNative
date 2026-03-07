@@ -504,7 +504,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                     }
                 }
             }
-        }
 
             graphicsDriver = shortcut.getExtra("graphicsDriver", container.getGraphicsDriver());
             graphicsDriverConfig = shortcut.getExtra("graphicsDriverConfig", container.getGraphicsDriverConfig());
