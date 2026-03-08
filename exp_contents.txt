@@ -1,0 +1,39 @@
+./
+./home/
+./._.DS_Store
+./.DS_Store
+./home/xuser/
+./home/._.DS_Store
+./home/.DS_Store
+./home/xuser/.wine/
+./home/xuser/._.DS_Store
+./home/xuser/.DS_Store
+./home/xuser/.wine/._.DS_Store
+./home/xuser/.wine/.DS_Store
+./home/xuser/.wine/drive_c/
+./home/xuser/.wine/drive_c/._.DS_Store
+./home/xuser/.wine/drive_c/.DS_Store
+./home/xuser/.wine/drive_c/Program Files (x86)/
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/
+./home/xuser/.wine/drive_c/Program Files (x86)/._.DS_Store
+./home/xuser/.wine/drive_c/Program Files (x86)/.DS_Store
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/._GameOverlayRenderer64.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/GameOverlayRenderer64.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/._.DS_Store
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/.DS_Store
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/._extra_dlls
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/extra_dlls/
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/._steamclient_loader_x32.exe
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/steamclient_loader_x32.exe
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/._GameOverlayRenderer.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/GameOverlayRenderer.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/._steamclient64.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/steamclient64.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/._steamclient_loader_x64.exe
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/steamclient_loader_x64.exe
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/._steamclient.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/steamclient.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/extra_dlls/._.DS_Store
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/extra_dlls/.DS_Store
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/extra_dlls/._StubDRM64.dll
+./home/xuser/.wine/drive_c/Program Files (x86)/Steam/extra_dlls/StubDRM64.dll
