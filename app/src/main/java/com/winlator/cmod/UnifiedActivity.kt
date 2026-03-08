@@ -1413,11 +1413,19 @@ class UnifiedActivity : ComponentActivity() {
                 var containers = containerManager.getContainers()
                 var container = containers.firstOrNull()
                 if (container == null) {
-                    // Auto-create a default container
+                    // Auto-create a default container using the preferred wine version
                     try {
                         val data = org.json.JSONObject()
                         data.put("name", "Default")
-                        data.put("wineVersion", "proton-9.0-x86_64")
+                        // Use the wine version of the first existing container if any, 
+                        // otherwise fall back to the default
+                        val existingContainers = containerManager.containers
+                        val defaultWineVersion = if (existingContainers.isNotEmpty()) {
+                            existingContainers[0].wineVersion
+                        } else {
+                            com.winlator.cmod.core.WineInfo.MAIN_WINE_VERSION.identifier()
+                        }
+                        data.put("wineVersion", defaultWineVersion)
                         val contentsManager = com.winlator.cmod.contents.ContentsManager(context)
                         contentsManager.syncContents()
                         container = containerManager.createContainer(data, contentsManager)

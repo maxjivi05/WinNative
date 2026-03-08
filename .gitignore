@@ -30,3 +30,5 @@ __pycache__/
 # Local properties
 local.properties
 
+logcat*.txt
+*.py

@@ -31,6 +31,7 @@ public class Container {
     public static final String DEFAULT_GRAPHICS_DRIVER = "wrapper";
     public static final String DEFAULT_AUDIO_DRIVER = "alsa";
     public static final String DEFAULT_EMULATOR = "FEXCore";
+    public static final String DEFAULT_EMULATOR64 = "FEXCore";
     public static final String DEFAULT_DXWRAPPER = "dxvk+vkd3d";
     public static final String DEFAULT_DXWRAPPERCONFIG = "version=" + DefaultVersion.DXVK + ",framerate=0,async=0,asyncCache=0" + ",vkd3dVersion=" + DefaultVersion.VKD3D + ",vkd3dLevel=12_1" + ",ddrawrapper=" + Container.DEFAULT_DDRAWRAPPER + ",csmt=3" + ",gpuName=NVIDIA GeForce GTX 480" + ",videoMemorySize=2048" + ",strict_shader_math=1" + ",OffscreenRenderingMode=fbo" + ",renderer=gl";
     public static final String DEFAULT_GRAPHICSDRIVERCONFIG =
@@ -61,7 +62,7 @@ public class Container {
     private String cpuList;
     private String cpuListWoW64;
     private String desktopTheme = WineThemeManager.DEFAULT_DESKTOP_THEME;
-    private String fexcoreVersion;
+    private String fexcoreVersion = DefaultVersion.FEXCORE;
     private String fexcorePreset = FEXCorePreset.INTERMEDIATE;
     private String box64Preset = Box64Preset.COMPATIBILITY;
     private File rootDir;
@@ -71,8 +72,9 @@ public class Container {
     private String lc_all = "";
     private int primaryController = 1;
     private String controllerMapping = new String(new char[XrControllerMapping.values().length]);
-    private String box64Version;
-    private String emulator;
+    private String box64Version = DefaultVersion.BOX64;
+    private String emulator = DEFAULT_EMULATOR;
+    private String emulator64 = DEFAULT_EMULATOR64;
     private String executablePath = "";
     private String execArgs = "";
     private boolean launchRealSteam;
@@ -294,6 +296,14 @@ public class Container {
         return this.emulator;
     }
 
+    public void setEmulator64(String emulator64) {
+        this.emulator64 = emulator64;
+    }
+
+    public String getEmulator64() {
+        return this.emulator64;
+    }
+
     public File getRootDir() {
         return rootDir;
     }
@@ -418,6 +428,7 @@ public class Container {
             data.put("graphicsDriver", graphicsDriver);
             data.put("graphicsDriverConfig", graphicsDriverConfig);
             data.put("emulator", emulator);
+            data.put("emulator64", emulator64);
             data.put("executablePath", executablePath);
             data.put("execArgs", execArgs);
             data.put("dxwrapper", dxwrapper);
@@ -486,6 +497,9 @@ public class Container {
                     break;
                 case "emulator":
                     setEmulator(data.getString(key));
+                    break;
+                case "emulator64":
+                    setEmulator64(data.getString(key));
                     break;
                 case "wincomponents" :
                     setWinComponents(data.getString(key));

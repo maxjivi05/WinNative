@@ -17,6 +17,7 @@ import com.winlator.cmod.contents.ContentProfile;
 import com.winlator.cmod.contents.ContentsManager;
 import com.winlator.cmod.core.Callback;
 import com.winlator.cmod.core.EnvVars;
+import com.winlator.cmod.core.DefaultVersion;
 import com.winlator.cmod.core.FileUtils;
 import com.winlator.cmod.core.GPUInformation;
 import com.winlator.cmod.core.KeyValueSet;
@@ -74,9 +75,10 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
 
         // Fallback to default if the shared preference is not set or is empty
         String box64Version = container.getBox64Version();
+        if (box64Version == null || box64Version.isEmpty()) box64Version = DefaultVersion.BOX64;
 
         if (shortcut != null)
-            box64Version = shortcut.getExtra("box64Version", shortcut.container.getBox64Version());
+            box64Version = shortcut.getExtra("box64Version", box64Version);
 
         Log.d("GuestProgramLauncherComponent", "box64Version: " + box64Version);
 
@@ -108,8 +110,13 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         String wowbox64Version = container.getBox64Version();
         String fexcoreVersion = container.getFEXCoreVersion();
 
+        // Null-safe fallback to defaults (handles legacy containers without these fields)
+        if (wowbox64Version == null || wowbox64Version.isEmpty()) wowbox64Version = DefaultVersion.BOX64;
+        if (fexcoreVersion == null || fexcoreVersion.isEmpty()) fexcoreVersion = DefaultVersion.FEXCORE;
+
         if (shortcut != null) {
-            wowbox64Version = shortcut.getExtra("box64Version", shortcut.container.getBox64Version());
+            wowbox64Version = shortcut.getExtra("box64Version", wowbox64Version);
+            fexcoreVersion = shortcut.getExtra("fexcoreVersion", fexcoreVersion);
         }
 
         Log.d("GuestProgramLauncherComponent", "box64Version in use: " + wowbox64Version);
@@ -349,8 +356,48 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         }
 
         String emulator = container.getEmulator();
-        if (shortcut != null)
+        String emulator64 = container.getEmulator64();
+        if (shortcut != null) {
             emulator = shortcut.getExtra("emulator", container.getEmulator());
+            emulator64 = shortcut.getExtra("emulator64", container.getEmulator64());
+        }
+
+        // Force correct emulator based on architecture
+        if (wineInfo.isArm64EC()) {
+            // Arm64EC MUST use FEXCore
+            emulator = "FEXCore";
+            emulator64 = "FEXCore";
+            Log.d("GuestProgramLauncherComponent", "Arm64EC detected: forcing FEXCore for both emulators");
+        } else {
+            // x86_64 MUST use Box64
+            emulator = "Box64";
+            emulator64 = "Box64";
+            Log.d("GuestProgramLauncherComponent", "x86_64 detected: forcing Box64 for both emulators");
+        }
+
+        Log.d("GuestProgramLauncherComponent", "=== EMULATOR SELECTION ===");
+        Log.d("GuestProgramLauncherComponent", "Wine arch: " + wineInfo.getArch() + " isArm64EC: " + wineInfo.isArm64EC());
+        Log.d("GuestProgramLauncherComponent", "Emulator (32-bit): " + emulator);
+        Log.d("GuestProgramLauncherComponent", "Emulator (64-bit): " + emulator64);
+
+        // Determine which emulator to use for HODLL based on guest executable architecture
+        String selectedEmulator = emulator;
+        if (wineInfo.isArm64EC()) {
+            // Find the actual .exe file to check architecture
+            File exeFile = null;
+            if (guestExecutable.contains("\"")) {
+                int start = guestExecutable.indexOf("\"") + 1;
+                int end = guestExecutable.indexOf("\"", start);
+                if (start > 0 && end > start) {
+                    String winPath = guestExecutable.substring(start, end);
+                    exeFile = com.winlator.cmod.core.WineUtils.getNativePath(imageFs, winPath);
+                }
+            }
+            
+            if (exeFile != null && com.winlator.cmod.core.PEHelper.is64Bit(exeFile)) {
+                selectedEmulator = emulator64;
+            }
+        }
 
         // Construct the command without Box64 to the Wine executable
         String command = "";
@@ -364,7 +411,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         else {
             if (wineInfo.isArm64EC()) {
                 // HODLL is only for Arm64EC Wine with WoW64 translation DLLs
-                if (emulator.toLowerCase().equals("fexcore"))
+                if (selectedEmulator.toLowerCase().equals("fexcore"))
                     envVars.put("HODLL", "libwow64fex.dll");
                 else
                     envVars.put("HODLL", "wowbox64.dll");

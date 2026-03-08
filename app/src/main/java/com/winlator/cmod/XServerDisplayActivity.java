@@ -499,6 +499,16 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                     }
                     containerManager.activateContainer(container);
                     Log.d("XServerDisplayActivity", "Container overridden to ID: " + newContainerId);
+
+                    // RE-EVALUATE wineVersion and wineInfo after container override!
+                    wineVersion = container.getWineVersion();
+                    String shortcutWineVersion = shortcut.getExtra("wineVersion");
+                    if (shortcutWineVersion != null && !shortcutWineVersion.isEmpty()) {
+                        Log.d("XServerDisplayActivity", "Overriding wine version from shortcut: " + shortcutWineVersion);
+                        wineVersion = shortcutWineVersion;
+                    }
+                    wineInfo = WineInfo.fromIdentifier(this, contentsManager, wineVersion);
+                    imageFs.setWinePath(wineInfo.path);
                 }
             }
 
@@ -1244,7 +1254,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             guestProgramLauncherComponent.setWineInfo(this.wineInfo);
 
             String wineStartCmd = getWineStartCommand();
-            String guestExecutable = "wine explorer /desktop=shell," + xServer.screenInfo + " " + wineStartCmd;
+            String guestExecutable;
+            
+            // Use wine explorer for all containers - GuestProgramLauncherComponent handles
+            // the architecture difference (winePath for arm64ec, box64 for x86_64)
+            guestExecutable = "wine explorer /desktop=shell," + xServer.screenInfo + " " + wineStartCmd;
 
             Log.d("XServerDisplayActivity", "=== GAME LAUNCH DEBUG ===");
             Log.d("XServerDisplayActivity", "Wine start command: " + wineStartCmd);
@@ -1334,7 +1348,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         // Pass final envVars to the launcher
         guestProgramLauncherComponent.setEnvVars(envVars);
-        guestProgramLauncherComponent.setTerminationCallback((status) -> exit());
+        guestProgramLauncherComponent.setTerminationCallback((status) -> {
+            Log.d("XServerDisplayActivity", "Guest process terminated with status: " + status);
+            exit();
+        });
 
         // Add the launcher to our environment
         environment.addComponent(guestProgramLauncherComponent);
@@ -2076,13 +2093,37 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                     // Launch via steamclient_loader_x64.exe which reads ColdClientLoader.ini
                     // and injects the Goldberg steamclient DLLs for Steam auth
                     File steamDir = new File(container.getRootDir(), ".wine/drive_c/Program Files (x86)/Steam");
-                    File loaderExe = new File(steamDir, "steamclient_loader_x64.exe");
-                    
-                    if (loaderExe.exists()) {
-                        args = "\"C:\\\\Program Files (x86)\\\\Steam\\\\steamclient_loader_x64.exe\"";
+
+                    String loaderName = "steamclient_loader_x64.exe";
+                    String gameDirPath = SteamBridge.getAppDirPath(appId);
+                    Log.d("XServerDisplayActivity", "Steam game directory: " + gameDirPath);
+
+                    if (gameDirPath != null && !gameDirPath.isEmpty()) {
+                        File gameDir = new File(gameDirPath);
+                        File exeFile = findGameExe(gameDir);
+                        if (exeFile != null) {
+                            boolean is64Bit = com.winlator.cmod.core.PEHelper.is64Bit(exeFile);
+                            Log.d("XServerDisplayActivity", "Detected game exe: " + exeFile.getName() + " (64-bit: " + is64Bit + ")");
+
+                            // Only use 32-bit loader on ARM64 WoW64 where cross-architecture injection fails.
+                            // On x86_64 containers, steamclient_loader_x64.exe handles both 32/64-bit games correctly.
+                            if (!is64Bit && wineInfo != null && wineInfo.isArm64EC()) {
+                                File x32Loader = new File(steamDir, "steamclient_loader_x32.exe");
+                                if (x32Loader.exists()) {
+                                    loaderName = "steamclient_loader_x32.exe";
+                                }
+                            }
+                        } else {
+                            Log.w("XServerDisplayActivity", "Could not find game executable in " + gameDirPath);
+                        }
+                    }
+
+                    File loaderExe = new File(steamDir, loaderName);
+
+                    if (loaderExe.exists() || new File(steamDir, "steamclient_loader_x64.exe").exists()) {
+                        args = "\"C:\\\\Program Files (x86)\\\\Steam\\\\" + loaderName + "\"";
                         Log.d("XServerDisplayActivity", "Steam game launch via ColdClientLoader: " + args);
-                    } else {
-                        // Fallback: launch directly if loader is missing
+                    } else {                        // Fallback: launch directly if loader is missing
                         Log.w("XServerDisplayActivity", "steamclient_loader_x64.exe not found, falling back to direct launch");
                         String gameExeWinPath = findGameExeWinPath(appId, new File(SteamBridge.getAppDirPath(appId)));
                         if (gameExeWinPath != null) {
@@ -2155,7 +2196,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
         String command = "winhandler.exe " + args;
         Log.d("XServerDisplayActivity", "getWineStartCommand: FINAL command=" + command);
-
         return command;
     }
 

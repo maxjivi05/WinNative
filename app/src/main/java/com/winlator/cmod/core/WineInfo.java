@@ -125,6 +125,8 @@ public class WineInfo implements Parcelable {
 
         ContentProfile wineProfile = contentsManager.getProfileByEntryName(identifier);
 
+        // Preserve the original identifier for regex matching — only strip arch for content profile lookup
+        String originalIdentifier = identifier;
         if (wineProfile != null && (wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_WINE || wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON)) {
             int lastDashIndex = identifier.lastIndexOf('-');
             if (lastDashIndex > 0) {
@@ -132,13 +134,20 @@ public class WineInfo implements Parcelable {
             }
         }
 
-        Matcher matcher = pattern.matcher(identifier);
+        // Try regex on original identifier first (preserves arch like arm64ec), then fallback to stripped
+        Matcher matcher = pattern.matcher(originalIdentifier);
+        boolean matched = matcher.find();
+        if (!matched) {
+            matcher = pattern.matcher(identifier);
+            matched = matcher.find();
+        }
 
-        if (matcher.find()) {
+        if (matched) {
+            String matchedIdentifier = matcher.group(0); // The full match for path resolution
             String[] wineVersions = context.getResources().getStringArray(R.array.wine_entries);
             for (String wineVersion : wineVersions) {
-                if (wineVersion.contains(identifier)) {
-                    path = imageFs.getRootDir().getPath() + "/opt/" + identifier;
+                if (wineVersion.contains(matchedIdentifier)) {
+                    path = imageFs.getRootDir().getPath() + "/opt/" + matchedIdentifier;
                     break;
                 }
             }
@@ -146,9 +155,14 @@ public class WineInfo implements Parcelable {
             if (wineProfile != null && (wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_WINE || wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON))
                 path = contentsManager.getInstallDir(context, wineProfile).getPath();
 
-            return new WineInfo(matcher.group(1), matcher.group(2), matcher.group(4), path);
+            String arch = matcher.group(4);
+            Log.d("WineInfo", "Resolved arch=" + arch + " from identifier " + originalIdentifier);
+            return new WineInfo(matcher.group(1), matcher.group(2), arch, path);
         }
-        else return new WineInfo(MAIN_WINE_VERSION.type, MAIN_WINE_VERSION.version, MAIN_WINE_VERSION.arch, imageFs.getRootDir().getPath() + "/opt/" + MAIN_WINE_VERSION.identifier());
+        else {
+            Log.w("WineInfo", "Failed to parse identifier '" + originalIdentifier + "', falling back to MAIN_WINE_VERSION (x86_64)");
+            return new WineInfo(MAIN_WINE_VERSION.type, MAIN_WINE_VERSION.version, MAIN_WINE_VERSION.arch, imageFs.getRootDir().getPath() + "/opt/" + MAIN_WINE_VERSION.identifier());
+        }
     }
 
     public static boolean isMainWineVersion(String wineVersion) {

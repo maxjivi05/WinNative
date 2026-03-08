@@ -135,7 +135,33 @@ public class ShortcutSettingsDialog extends ContentDialog {
         final Spinner sEmulator = findViewById(R.id.SEmulator);
         AppUtils.setSpinnerSelectionFromIdentifier(sEmulator, shortcut.getExtra("emulator", shortcut.container.getEmulator()));
         final Spinner sEmulator64 = findViewById(R.id.SEmulator64);
-        sEmulator64.setEnabled(false);
+        AppUtils.setSpinnerSelectionFromIdentifier(sEmulator64, shortcut.getExtra("emulator64", shortcut.container.getEmulator64()));
+
+        final View box64Frame = findViewById(R.id.box64Frame);
+        final View fexcoreFrame = findViewById(R.id.fexcoreFrame);
+
+        final Spinner sFEXCoreVersion = findViewById(R.id.SFEXCoreVersion);
+        final Spinner sFEXCorePreset = findViewById(R.id.SFEXCorePreset);
+
+        AdapterView.OnItemSelectedListener emulatorListener = new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
+                String emulator32 = sEmulator.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator.getSelectedItem()) : "";
+                String emulator64Str = sEmulator64.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator64.getSelectedItem()) : "";
+
+                boolean useBox64 = emulator32.equalsIgnoreCase("box64") || emulator64Str.equalsIgnoreCase("box64");
+                boolean useFexcore = emulator32.equalsIgnoreCase("fexcore") || emulator64Str.equalsIgnoreCase("fexcore");
+
+                box64Frame.setVisibility(useBox64 ? View.VISIBLE : View.GONE);
+                fexcoreFrame.setVisibility(useFexcore ? View.VISIBLE : View.GONE);
+            }
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        };
+
+        sEmulator.setOnItemSelectedListener(emulatorListener);
+        sEmulator64.setOnItemSelectedListener(emulatorListener);
+
         final Spinner sMIDISoundFont = findViewById(R.id.SMIDISoundFont);
         MidiManager.loadSFSpinner(sMIDISoundFont);
         AppUtils.setSpinnerSelectionFromValue(sMIDISoundFont, shortcut.getExtra("midiSoundFont", shortcut.container.getMIDISoundFont()));
@@ -157,18 +183,25 @@ public class ShortcutSettingsDialog extends ContentDialog {
         });
 
         FrameLayout fexcoreFL = findViewById(R.id.fexcoreFrame);
-        String wineVersion = shortcut.container.getWineVersion();
-        WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersion);
+        String wineVersionStr = shortcut.getExtra("wineVersion", shortcut.container.getWineVersion());
+        WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersionStr);
         if (wineInfo.isArm64EC()) {
             fexcoreFL.setVisibility(View.VISIBLE);
-            sEmulator.setEnabled(true);
-            sEmulator64.setSelection(0);
+            // Arm64EC containers MUST use FEXCore for both 32-bit and 64-bit emulation
+            sEmulator.setSelection(0); // FEXCore
+            sEmulator64.setSelection(0); // FEXCore
+            sEmulator.setEnabled(false);
+            sEmulator64.setEnabled(false);
+            Log.d("ShortcutSettingsDialog", "Arm64EC container: forcing FEXCore for both emulators");
         }
         else {
             fexcoreFL.setVisibility(View.GONE);
+            // x86_64 containers MUST use Box64 for both 32-bit and 64-bit emulation
+            sEmulator.setSelection(1); // Box64
+            sEmulator64.setSelection(1); // Box64
             sEmulator.setEnabled(false);
-            sEmulator.setSelection(1);
-            sEmulator64.setSelection(1);
+            sEmulator64.setEnabled(false);
+            Log.d("ShortcutSettingsDialog", "x86_64 container: forcing Box64 for both emulators");
         }
 
         ContainerDetailFragment.setupDXWrapperSpinner(sDXWrapper, vDXWrapperConfig, wineInfo.isArm64EC());
@@ -233,10 +266,8 @@ public class ShortcutSettingsDialog extends ContentDialog {
         final Spinner sBox64Preset = findViewById(R.id.SBox64Preset);
         Box64PresetManager.loadSpinner("box64", sBox64Preset, shortcut.getExtra("box64Preset", shortcut.container.getBox64Preset()));
 
-        final Spinner sFEXCoreVersion = findViewById(R.id.SFEXCoreVersion);
         FEXCoreManager.loadFEXCoreVersion(context, contentsManager, sFEXCoreVersion, shortcut.getExtra("fexcoreVersion", shortcut.container.getFEXCoreVersion()));
 
-        final Spinner sFEXCorePreset = findViewById(R.id.SFEXCorePreset);
         FEXCorePresetManager.loadSpinner(sFEXCorePreset, shortcut.getExtra("fexcorePreset", shortcut.container.getFEXCorePreset()));
 
         final Spinner sControlsProfile = findViewById(R.id.SControlsProfile);
@@ -349,6 +380,7 @@ public class ShortcutSettingsDialog extends ContentDialog {
                 String dxwrapperConfig = vDXWrapperConfig.getTag() != null ? vDXWrapperConfig.getTag().toString() : "";
                 String audioDriver = sAudioDriver.getSelectedItem() != null ? StringUtils.parseIdentifier(sAudioDriver.getSelectedItem()) : "";
                 String emulator = sEmulator.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator.getSelectedItem()) : "";
+                String emulator64 = sEmulator64.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator64.getSelectedItem()) : "";
                 String lc_all = etLC_ALL.getText().toString();
                 String midiSoundFont = sMIDISoundFont.getSelectedItemPosition() == 0 ? "" : sMIDISoundFont.getSelectedItem().toString();
                 String screenSize = containerDetailFragment.getScreenSize(getContentView());
@@ -376,6 +408,7 @@ public class ShortcutSettingsDialog extends ContentDialog {
                 shortcut.putExtra("dxwrapperConfig", dxwrapperConfig);
                 shortcut.putExtra("audioDriver", audioDriver);
                 shortcut.putExtra("emulator", emulator);
+                shortcut.putExtra("emulator64", emulator64);
                 shortcut.putExtra("midiSoundFont", midiSoundFont);
                 shortcut.putExtra("lc_all", lc_all);
 

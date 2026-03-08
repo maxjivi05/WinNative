@@ -399,8 +399,26 @@ public class ContainerDetailFragment extends Fragment {
         Spinner sAudioDriver = view.findViewById(R.id.SAudioDriver);
         AppUtils.setSpinnerSelectionFromIdentifier(sAudioDriver, isShortcutMode() ? shortcut.getExtra("audioDriver", container != null ? container.getAudioDriver() : Container.DEFAULT_AUDIO_DRIVER) : (isEditMode() && container != null ? container.getAudioDriver() : Container.DEFAULT_AUDIO_DRIVER));
 
-        Spinner sEmulator = view.findViewById(R.id.SEmulator);
+        final Spinner sEmulator = view.findViewById(R.id.SEmulator);
         AppUtils.setSpinnerSelectionFromIdentifier(sEmulator, isShortcutMode() ? shortcut.getExtra("emulator", container != null ? container.getEmulator() : Container.DEFAULT_EMULATOR) : (isEditMode() && container != null ? container.getEmulator() : Container.DEFAULT_EMULATOR));
+
+        final Spinner sEmulator64 = view.findViewById(R.id.SEmulator64);
+        AppUtils.setSpinnerSelectionFromIdentifier(sEmulator64, isShortcutMode() ? shortcut.getExtra("emulator64", container != null ? container.getEmulator64() : Container.DEFAULT_EMULATOR64) : (isEditMode() && container != null ? container.getEmulator64() : Container.DEFAULT_EMULATOR64));
+
+        final View box64Frame = view.findViewById(R.id.box64Frame);
+        final View fexcoreFrame = view.findViewById(R.id.fexcoreFrame);
+
+        AdapterView.OnItemSelectedListener emulatorListener = new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
+                updateEmulatorFrames(view, sEmulator, sEmulator64);
+            }
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        };
+
+        sEmulator.setOnItemSelectedListener(emulatorListener);
+        sEmulator64.setOnItemSelectedListener(emulatorListener);
 
         Spinner sMIDISoundFont = view.findViewById(R.id.SMIDISoundFont);
         MidiManager.loadSFSpinner(sMIDISoundFont);
@@ -538,6 +556,7 @@ public class ContainerDetailFragment extends Fragment {
                 String dxwrapperConfig = vDXWrapperConfig.getTag() != null ? vDXWrapperConfig.getTag().toString() : "";
                 String audioDriver = sAudioDriver.getSelectedItem() != null ? StringUtils.parseIdentifier(sAudioDriver.getSelectedItem()) : Container.DEFAULT_AUDIO_DRIVER;
                 String emulator = sEmulator.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator.getSelectedItem()) : Container.DEFAULT_EMULATOR;
+                String emulator64 = sEmulator64.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator64.getSelectedItem()) : Container.DEFAULT_EMULATOR64;
                 String wincomponents = getWinComponents(view);
                 String drives = getDrives(view);
                 boolean showFPS = cbShowFPS.isChecked();
@@ -590,6 +609,7 @@ public class ContainerDetailFragment extends Fragment {
                     shortcut.putExtra("dxwrapperConfig", dxwrapperConfig);
                     shortcut.putExtra("audioDriver", audioDriver);
                     shortcut.putExtra("emulator", emulator);
+                    shortcut.putExtra("emulator64", emulator64);
                     shortcut.putExtra("wincomponents", wincomponents);
                     shortcut.putExtra("drives", drives);
                     shortcut.putExtra("showFPS", showFPS ? "1" : "0");
@@ -607,6 +627,7 @@ public class ContainerDetailFragment extends Fragment {
                     shortcut.putExtra("controllerMapping", controllerMapping);
                     
                     // Handle container_id override
+                    boolean saved = false;
                     if (sWineVersion.getSelectedItem() != null) {
                         String selection = sWineVersion.getSelectedItem().toString();
                         if (selection.startsWith("Container: ")) {
@@ -614,15 +635,27 @@ public class ContainerDetailFragment extends Fragment {
                             for (Container c : manager.getContainers()) {
                                 if (c.getName().equals(cname)) {
                                     shortcut.putExtra("container_id", String.valueOf(c.id));
+                                    shortcut.putExtra("wineVersion", c.getWineVersion());
+                                    shortcut.saveData();
+                                    saved = true;
+
+                                    if (c.id != shortcut.container.id) {                                        // Move the file physically to the new container's desktop
+                                        java.io.File newDesktopDir = c.getDesktopDir();
+                                        if (!newDesktopDir.exists()) newDesktopDir.mkdirs();
+                                        java.io.File newShortcutFile = new java.io.File(newDesktopDir, shortcut.file.getName());
+                                        com.winlator.cmod.core.FileUtils.copy(shortcut.file, newShortcutFile);
+                                        shortcut.file.delete();
+                                    }
                                     break;
                                 }
                             }
                         }
                     }
-                    
-                    shortcut.saveData();
-                    getActivity().onBackPressed();
-                } else if (isEditMode()) {
+                    if (!saved) {
+                        shortcut.saveData();
+                    }
+
+                    getActivity().onBackPressed();                } else if (isEditMode()) {
                     // Update existing container properties
                     container.setName(name);
                     container.setScreenSize(screenSize);
@@ -635,6 +668,7 @@ public class ContainerDetailFragment extends Fragment {
                     container.setDXWrapperConfig(dxwrapperConfig);
                     container.setAudioDriver(audioDriver);
                     container.setEmulator(emulator);
+                    container.setEmulator64(emulator64);
                     container.setWinComponents(wincomponents);
                     container.setDrives(drives);
                     container.setShowFPS(showFPS);
@@ -665,6 +699,7 @@ public class ContainerDetailFragment extends Fragment {
                     data.put("dxwrapperConfig", dxwrapperConfig);
                     data.put("audioDriver", audioDriver);
                     data.put("emulator", emulator);
+                    data.put("emulator64", emulator64);
                     data.put("wincomponents", wincomponents);
                     data.put("drives", drives);
                     data.put("showFPS", showFPS);
@@ -677,7 +712,17 @@ public class ContainerDetailFragment extends Fragment {
                     data.put("fexcorePreset", fexcorePreset);
                     data.put("desktopTheme", desktopTheme);
                     String selectedWineStr = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
+                    // Resolve container name to actual wine version
                     String finalWineVersion = selectedWineStr;
+                    if (selectedWineStr.startsWith("Container: ")) {
+                        String cname = selectedWineStr.substring("Container: ".length());
+                        for (Container c : manager.getContainers()) {
+                            if (c.getName().equals(cname)) {
+                                finalWineVersion = c.getWineVersion();
+                                break;
+                            }
+                        }
+                    }
                     data.put("wineVersion", finalWineVersion);
                     data.put("midiSoundFont", midiSoundFont);
                     data.put("lc_all", lc_all);
@@ -753,6 +798,7 @@ public class ContainerDetailFragment extends Fragment {
                     data.put("dxwrapperConfig", dxwrapperConfig);
                     data.put("audioDriver", audioDriver);
                     data.put("emulator", emulator);
+                    data.put("emulator64", emulator64);
                     data.put("wincomponents", wincomponents);
                     data.put("drives", drives);
                     data.put("showFPS", showFPS);
@@ -765,6 +811,16 @@ public class ContainerDetailFragment extends Fragment {
                     data.put("fexcorePreset", fexcorePreset);
                     data.put("desktopTheme", desktopTheme);
                     String selectedWineStr = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
+                    // Resolve container name to actual wine version
+                    if (selectedWineStr.startsWith("Container: ")) {
+                        String cname = selectedWineStr.substring("Container: ".length());
+                        for (Container c : manager.getContainers()) {
+                            if (c.getName().equals(cname)) {
+                                selectedWineStr = c.getWineVersion();
+                                break;
+                            }
+                        }
+                    }
                     data.put("wineVersion", selectedWineStr);
                     data.put("midiSoundFont", midiSoundFont);
                     data.put("lc_all", lc_all);
@@ -1208,22 +1264,52 @@ public class ContainerDetailFragment extends Fragment {
                 Spinner sEmulator64 = view.findViewById(R.id.SEmulator64);
                 Spinner sDXWrapper = view.findViewById(R.id.SDXWrapper);
                 View vDXWrapperConfig = view.findViewById(R.id.BTDXWrapperConfig);
-                sEmulator64.setEnabled(false);
+                
                 String selectedWineStr = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
+                
+                // In shortcut/per-game mode, the spinner shows "Container: Name" instead of wine version IDs.
+                // We need to resolve the actual container's wine version to correctly detect ARM64EC.
+                if (selectedWineStr.startsWith("Container: ")) {
+                    String containerName = selectedWineStr.substring("Container: ".length());
+                    for (Container c : manager.getContainers()) {
+                        if (c.getName().equals(containerName)) {
+                            selectedWineStr = c.getWineVersion();
+                            Log.d(TAG, "Resolved container '" + containerName + "' to wine version: " + selectedWineStr);
+                            break;
+                        }
+                    }
+                }
+                
                 WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, selectedWineStr);
+                
+                sEmulator.setEnabled(false);
+                sEmulator64.setEnabled(false);
+                
                 if (wineInfo.isArm64EC()) {
                     fexcoreFL.setVisibility(View.VISIBLE);
-                    sEmulator.setEnabled(true);
-                    sEmulator64.setSelection(0);
-                    if (!isEditMode()) sEmulator.setSelection(0);
+                    // Arm64EC containers MUST use FEXCore
+                    sEmulator.setSelection(0); // FEXCore
+                    sEmulator64.setSelection(0); // FEXCore
+                    Log.d(TAG, "Arm64EC wine selected: forcing FEXCore for both emulators");
                 }
                 else {
                     fexcoreFL.setVisibility(View.GONE);
-                    sEmulator.setEnabled(false);
-                    sEmulator.setSelection(1);
-                    sEmulator64.setSelection(1);
+                    // x86_64 containers MUST use Box64
+                    sEmulator.setSelection(1); // Box64
+                    sEmulator64.setSelection(1); // Box64
+                    Log.d(TAG, "x86_64 wine selected: forcing Box64 for both emulators");
                 }
+                
+                // Trigger the emulator frames update
+                updateEmulatorFrames(view, sEmulator, sEmulator64);
                 loadBox64VersionSpinner(context, container, contentsManager, sBox64Version, wineInfo.isArm64EC());
+                // Re-apply shortcut's box64Version override if in shortcut mode
+                if (isShortcutMode() && shortcut != null) {
+                    String shortcutBox64 = shortcut.getExtra("box64Version", "");
+                    if (!shortcutBox64.isEmpty()) {
+                        AppUtils.setSpinnerSelectionFromValue(sBox64Version, shortcutBox64);
+                    }
+                }
                 setupDXWrapperSpinner(sDXWrapper, vDXWrapperConfig, wineInfo.isArm64EC());
             }
             @Override
@@ -1366,6 +1452,20 @@ public class ContainerDetailFragment extends Fragment {
             AppUtils.setSpinnerSelectionFromValue(spinner, container.getBox64Version());
         else
             AppUtils.setSpinnerSelectionFromValue(spinner, (isArm64EC) ? DefaultVersion.WOWBOX64 : DefaultVersion.BOX64);
+    }
+
+    private void updateEmulatorFrames(View view, Spinner sEmulator, Spinner sEmulator64) {
+        View box64Frame = view.findViewById(R.id.box64Frame);
+        View fexcoreFrame = view.findViewById(R.id.fexcoreFrame);
+
+        String emulator32 = sEmulator.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator.getSelectedItem()) : "";
+        String emulator64 = sEmulator64.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator64.getSelectedItem()) : "";
+
+        boolean useBox64 = emulator32.equalsIgnoreCase("box64") || emulator64.equalsIgnoreCase("box64");
+        boolean useFexcore = emulator32.equalsIgnoreCase("fexcore") || emulator64.equalsIgnoreCase("fexcore");
+
+        box64Frame.setVisibility(useBox64 ? View.VISIBLE : View.GONE);
+        fexcoreFrame.setVisibility(useFexcore ? View.VISIBLE : View.GONE);
     }
 
     private void createShortcutOnContainer(Container container, JSONObject data) throws Exception {
