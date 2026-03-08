@@ -287,26 +287,68 @@ public class ContainerManager {
         Log.d("ContainerManager", "extractContainerPatternFile: wineVersion=" + wineVersion + " containerDir=" + containerDir.getAbsolutePath());
         WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersion);
         Log.d("ContainerManager", "extractContainerPatternFile: wineInfo=" + wineInfo + " path=" + (wineInfo != null ? wineInfo.path : "null"));
+
+        // Step 1: Try to extract the versioned container pattern from bundled assets
+        // e.g. "proton-9.0-x86_64_container_pattern.tzst"
         String containerPattern = wineVersion + "_container_pattern.tzst";
         Log.d("ContainerManager", "extractContainerPatternFile: trying asset: " + containerPattern);
         boolean result = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, context, containerPattern, containerDir, onExtractFileListener);
         Log.d("ContainerManager", "extractContainerPatternFile: asset extraction result=" + result);
 
+        // Step 2: If asset extraction failed, look for the prefix pack from the installed custom proton
         if (!result) {
             ContentProfile profile = contentsManager.getProfileByEntryName(wineVersion);
-            File containerPatternFile;
-            if (profile != null && profile.winePrefixPack != null && !profile.winePrefixPack.isEmpty()) {
-                containerPatternFile = new File(wineInfo.path, profile.winePrefixPack);
-            } else {
-                containerPatternFile = new File(wineInfo.path, "prefixPack.txz");
+            Log.d("ContainerManager", "extractContainerPatternFile: profile lookup for '" + wineVersion + "' => " + (profile != null ? profile.verName : "null"));
+
+            if (profile != null) {
+                // Use the ContentsManager's install dir directly — this is always correct
+                // for custom installed protons, unlike wineInfo.path which may fall back to default
+                File profileInstallDir = ContentsManager.getInstallDir(context, profile);
+                Log.d("ContainerManager", "extractContainerPatternFile: profileInstallDir=" + profileInstallDir.getAbsolutePath() + " exists=" + profileInstallDir.exists());
+
+                File containerPatternFile;
+                if (profile.winePrefixPack != null && !profile.winePrefixPack.isEmpty()) {
+                    containerPatternFile = new File(profileInstallDir, profile.winePrefixPack);
+                } else {
+                    containerPatternFile = new File(profileInstallDir, "prefixPack.txz");
+                }
+                Log.d("ContainerManager", "extractContainerPatternFile: trying profile prefix pack: " + containerPatternFile.getAbsolutePath() + " exists=" + containerPatternFile.exists());
+
+                if (containerPatternFile.exists()) {
+                    if (containerPatternFile.getName().endsWith(".tzst")) {
+                        result = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, containerPatternFile, containerDir);
+                    } else {
+                        result = TarCompressorUtils.extract(TarCompressorUtils.Type.XZ, containerPatternFile, containerDir);
+                    }
+                    Log.d("ContainerManager", "extractContainerPatternFile: profile prefix pack extraction result=" + result);
+                }
             }
-            Log.d("ContainerManager", "extractContainerPatternFile: trying file: " + containerPatternFile.getAbsolutePath() + " exists=" + containerPatternFile.exists());
-            if (containerPatternFile.getName().endsWith(".tzst")) {
-                result = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, containerPatternFile, containerDir);
-            } else {
-                result = TarCompressorUtils.extract(TarCompressorUtils.Type.XZ, containerPatternFile, containerDir);
+
+            // Also try from wineInfo.path as a secondary fallback (for bundled non-asset protons)
+            if (!result && wineInfo != null && wineInfo.path != null && !wineInfo.path.isEmpty()) {
+                File wineInfoPrefixPack;
+                if (profile != null && profile.winePrefixPack != null && !profile.winePrefixPack.isEmpty()) {
+                    wineInfoPrefixPack = new File(wineInfo.path, profile.winePrefixPack);
+                } else {
+                    wineInfoPrefixPack = new File(wineInfo.path, "prefixPack.txz");
+                }
+                Log.d("ContainerManager", "extractContainerPatternFile: trying wineInfo.path fallback: " + wineInfoPrefixPack.getAbsolutePath() + " exists=" + wineInfoPrefixPack.exists());
+                if (wineInfoPrefixPack.exists()) {
+                    if (wineInfoPrefixPack.getName().endsWith(".tzst")) {
+                        result = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, wineInfoPrefixPack, containerDir);
+                    } else {
+                        result = TarCompressorUtils.extract(TarCompressorUtils.Type.XZ, wineInfoPrefixPack, containerDir);
+                    }
+                    Log.d("ContainerManager", "extractContainerPatternFile: wineInfo.path fallback extraction result=" + result);
+                }
             }
-            Log.d("ContainerManager", "extractContainerPatternFile: file extraction result=" + result);
+        }
+
+        // Step 3: If we still don't have a container pattern, use the common one as last resort
+        if (!result) {
+            Log.d("ContainerManager", "extractContainerPatternFile: all pattern sources failed, trying container_pattern_common.tzst as last resort");
+            result = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, context, "container_pattern_common.tzst", containerDir, onExtractFileListener);
+            Log.d("ContainerManager", "extractContainerPatternFile: common pattern extraction result=" + result);
         }
 
         if (result) {
@@ -320,7 +362,8 @@ public class ContainerManager {
             }
             catch (JSONException e) {
                 Log.e("ContainerManager", "extractContainerPatternFile: extractCommonDlls failed", e);
-                return false;
+                // Don't fail the whole extraction just because of common DLLs — container is still usable
+                Log.w("ContainerManager", "extractContainerPatternFile: continuing despite extractCommonDlls failure");
             }
         }
    

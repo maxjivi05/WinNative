@@ -124,22 +124,29 @@ public class WineInfo implements Parcelable {
         if (identifier.equals(MAIN_WINE_VERSION.identifier())) return new WineInfo(MAIN_WINE_VERSION.type, MAIN_WINE_VERSION.version, MAIN_WINE_VERSION.arch, imageFs.getRootDir().getPath() + "/opt/" + MAIN_WINE_VERSION.identifier());
 
         ContentProfile wineProfile = contentsManager.getProfileByEntryName(identifier);
+        Log.d("WineInfo", "Profile lookup for '" + identifier + "' => " + (wineProfile != null ? "found (type=" + wineProfile.type + ", ver=" + wineProfile.verName + ")" : "null"));
 
-        // Preserve the original identifier for regex matching — only strip arch for content profile lookup
+        // Try regex on original identifier first (preserves arch like arm64ec), then fallback to lowercase/stripped
         String originalIdentifier = identifier;
-        if (wineProfile != null && (wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_WINE || wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON)) {
-            int lastDashIndex = identifier.lastIndexOf('-');
-            if (lastDashIndex > 0) {
-                identifier = identifier.substring(0, lastDashIndex).toLowerCase();
-            }
-        }
-
-        // Try regex on original identifier first (preserves arch like arm64ec), then fallback to stripped
-        Matcher matcher = pattern.matcher(originalIdentifier);
+        Matcher matcher = pattern.matcher(originalIdentifier.toLowerCase());
         boolean matched = matcher.find();
+        
         if (!matched) {
-            matcher = pattern.matcher(identifier);
-            matched = matcher.find();
+            // Also try stripping the version code suffix for custom protons: "Proton-9.0-1" -> "proton-9.0"
+            // and appending a default arch
+            if (wineProfile != null) {
+                String normalized;
+                if (wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON) {
+                    normalized = "proton-" + wineProfile.verName + "-x86_64";
+                } else if (wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_WINE) {
+                    normalized = "wine-" + wineProfile.verName + "-x86_64";
+                } else {
+                    normalized = originalIdentifier.toLowerCase();
+                }
+                Log.d("WineInfo", "Trying normalized identifier: " + normalized);
+                matcher = pattern.matcher(normalized);
+                matched = matcher.find();
+            }
         }
 
         if (matched) {
@@ -153,11 +160,27 @@ public class WineInfo implements Parcelable {
             }
 
             if (wineProfile != null && (wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_WINE || wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON))
-                path = contentsManager.getInstallDir(context, wineProfile).getPath();
+                path = ContentsManager.getInstallDir(context, wineProfile).getPath();
 
             String arch = matcher.group(4);
-            Log.d("WineInfo", "Resolved arch=" + arch + " from identifier " + originalIdentifier);
+            Log.d("WineInfo", "Resolved arch=" + arch + " path=" + path + " from identifier " + originalIdentifier);
             return new WineInfo(matcher.group(1), matcher.group(2), arch, path);
+        }
+        else if (wineProfile != null && (wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_WINE || wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON)) {
+            // Custom proton/wine profile that doesn't match the standard regex format
+            // Construct WineInfo directly from the profile metadata
+            String type = wineProfile.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON ? "proton" : "wine";
+            String version = wineProfile.verName;
+            String arch = "x86_64"; // Default for custom protons
+            
+            // Check if the profile's wineLibPath contains arm64ec hints
+            if (wineProfile.wineLibPath != null && wineProfile.wineLibPath.contains("arm64ec")) {
+                arch = "arm64ec";
+            }
+            
+            path = ContentsManager.getInstallDir(context, wineProfile).getPath();
+            Log.d("WineInfo", "Constructed WineInfo from profile: type=" + type + " version=" + version + " arch=" + arch + " path=" + path);
+            return new WineInfo(type, version, arch, path);
         }
         else {
             Log.w("WineInfo", "Failed to parse identifier '" + originalIdentifier + "', falling back to MAIN_WINE_VERSION (x86_64)");
