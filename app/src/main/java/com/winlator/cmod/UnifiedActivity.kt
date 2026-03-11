@@ -114,6 +114,14 @@ class UnifiedActivity : ComponentActivity() {
     // Track the currently selected game in the carousel for Game Settings button
     private var selectedSteamAppId: Int = 0
     private var selectedSteamAppName: String = ""
+    
+    // Trigger to refresh library when activity resumes from another container
+    var libraryRefreshSignal by mutableIntStateOf(0)
+
+    override fun onResume() {
+        super.onResume()
+        libraryRefreshSignal++
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -161,6 +169,12 @@ class UnifiedActivity : ComponentActivity() {
         val storeVisible = remember { mutableStateMapOf("steam" to true, "epic" to true, "gog" to true, "amazon" to true) }
         var showAddCustomGame by remember { mutableStateOf(false) }
         var libraryRefreshKey by remember { mutableIntStateOf(0) }
+        
+        val currentRefreshSignal = this@UnifiedActivity.libraryRefreshSignal
+        LaunchedEffect(currentRefreshSignal) {
+            libraryRefreshKey++
+        }
+        
         val contentFilters = remember { mutableStateMapOf("games" to true, "dlc" to false, "applications" to false, "tools" to false) }
         val tabs = remember(aioMode, storeVisible.toMap()) { buildTabs(aioMode, storeVisible) }
         var selectedIdx by rememberSaveable { mutableIntStateOf(0) }
@@ -627,8 +641,15 @@ class UnifiedActivity : ComponentActivity() {
             return
         }
 
-        val midIndex = remember(installedApps.size) { installedApps.size / 2 }
-        val listState = rememberLazyListState(initialFirstVisibleItemIndex = midIndex)
+        val listState = rememberLazyListState(initialFirstVisibleItemIndex = 0)
+
+        // When returning to library, the list re-sorts and the newly ran game moves to 0
+        // Snapping the list to 0 ensures the actively moved game is naturally highlighted
+        LaunchedEffect(installedApps) {
+            if (installedApps.isNotEmpty()) {
+                listState.scrollToItem(0)
+            }
+        }
 
         val centerIdx by remember {
             derivedStateOf {
@@ -636,7 +657,7 @@ class UnifiedActivity : ComponentActivity() {
                 val viewportCenter = layoutInfo.viewportStartOffset + layoutInfo.viewportSize.width / 2
                 layoutInfo.visibleItemsInfo.minByOrNull {
                     abs((it.offset + it.size / 2) - viewportCenter)
-                }?.index ?: midIndex
+                }?.index ?: 0
             }
         }
 

@@ -251,11 +251,10 @@ class EpicService : Service() {
                 Timber.tag("Epic").d("Updating database: marking game $appId as uninstalled")
                 instance.epicManager.uninstall(appId)
 
-                // Delete shortcuts and containers
+                // Delete game shortcuts but preserve the created containers
                 withContext(Dispatchers.IO) {
                     val containerManager = com.winlator.cmod.container.ContainerManager(context)
                     val shortcuts = containerManager.loadShortcuts()
-                    val containersToDelete = mutableSetOf<Int>()
                     
                     Timber.tag("Epic").d("Scanning ${shortcuts.size} shortcuts for game $appId")
                     shortcuts.forEach { shortcut ->
@@ -263,25 +262,9 @@ class EpicService : Service() {
                         val shortcutAppId = shortcut.getExtra("app_id")
                         
                         if (source == "EPIC" && shortcutAppId == appId.toString()) {
-                            if (shortcut.container != null) {
-                                containersToDelete.add(shortcut.container.id)
-                            }
                             Timber.tag("Epic").d("Deleting shortcut file: ${shortcut.file.absolutePath}")
                             shortcut.file.delete()
                         }
-                    }
-
-                    withContext(Dispatchers.Main) {
-                        containersToDelete.forEach { id ->
-                            val container = containerManager.getContainerById(id)
-                            if (container != null) {
-                                Timber.tag("Epic").i("Requesting deletion of container ${container.id} for game $appId")
-                                containerManager.removeContainerAsync(container) {}
-                            }
-                        }
-                        
-                        // Also try to delete the legacy named container if it exists
-                        ContainerUtils.deleteContainer(context, "EPIC_${game.id}")
                     }
                 }
 
