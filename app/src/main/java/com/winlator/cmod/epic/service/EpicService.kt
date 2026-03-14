@@ -11,6 +11,7 @@ import android.os.IBinder
 import com.winlator.cmod.BuildConfig
 import com.winlator.cmod.R
 import com.winlator.cmod.steam.data.DownloadInfo
+import com.winlator.cmod.steam.enums.DownloadPhase
 import com.winlator.cmod.epic.data.EpicCredentials
 import com.winlator.cmod.epic.data.EpicGame
 import com.winlator.cmod.steam.data.LaunchInfo
@@ -21,6 +22,7 @@ import com.winlator.cmod.steam.events.AndroidEvent
 import com.winlator.cmod.PluviaApp
 import com.winlator.cmod.steam.utils.ContainerUtils
 import com.winlator.cmod.steam.utils.PrefManager
+import com.winlator.cmod.service.DownloadService
 import com.winlator.cmod.utils.NotificationHelper
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
@@ -307,14 +309,123 @@ class EpicService : Service() {
 
             return if (downloadInfo != null) {
                 Timber.tag("EPIC").i("Cancelling download for Epic game: $appId")
-                downloadInfo.cancel()
-                instance.activeDownloads.remove(appId)
+                downloadInfo.isCancelling = true
+                downloadInfo.cancel("Cancelled by user")
+                // Delete partially downloaded files
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    downloadInfo.awaitCompletion(timeoutMs = 3000L)
+                    val game = instance.epicManager.getGameById(appId)
+                    if (game != null) {
+                        val context = DownloadService.appContext
+                        val path = if (game.installPath.isNotEmpty()) game.installPath else if (context != null) EpicConstants.getGameInstallPath(context, game.appName) else ""
+                        if (path.isNotEmpty()) {
+                            val dirFile = java.io.File(path)
+                            if (dirFile.exists() && dirFile.isDirectory) {
+                                MarkerUtils.removeMarker(path, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                                MarkerUtils.removeMarker(path, Marker.DOWNLOAD_COMPLETE_MARKER)
+                                dirFile.deleteRecursively()
+                            }
+                        }
+                    }
+                    downloadInfo.updateStatus(DownloadPhase.CANCELLED)
+                    instance.activeDownloads.remove(appId)
+                }
                 Timber.tag("EPIC").d("Download cancelled for Epic game: $appId")
                 true
             } else {
                 Timber.w("No active download found for Epic game: $appId")
                 false
             }
+        }
+
+        fun pauseDownload(appId: Int) {
+            val info = getInstance()?.activeDownloads?.get(appId) ?: return
+            val status = info.getStatusFlow().value
+            if (status == DownloadPhase.COMPLETE || status == DownloadPhase.CANCELLED) return
+
+            if (info.isActive()) {
+                info.isCancelling = false
+                info.updateStatus(DownloadPhase.PAUSED)
+                info.cancel("Paused by user")
+            } else {
+                info.updateStatus(DownloadPhase.PAUSED)
+                info.setActive(false)
+            }
+        }
+
+        fun pauseAll() {
+            getInstance()?.activeDownloads?.values?.forEach { info ->
+                val status = info.getStatusFlow().value
+                if (info.isActive()) {
+                    info.isCancelling = false
+                    info.updateStatus(DownloadPhase.PAUSED)
+                    info.cancel("Paused all")
+                } else if (status != DownloadPhase.COMPLETE && status != DownloadPhase.CANCELLED) {
+                    info.updateStatus(DownloadPhase.PAUSED)
+                    info.setActive(false)
+                }
+            }
+        }
+
+        fun resumeDownload(appId: Int) {
+            val instance = getInstance() ?: return
+            val context = DownloadService.appContext ?: return
+            val info = instance.activeDownloads[appId]
+            val status = info?.getStatusFlow()?.value
+            if (info != null && info.isActive()) return
+            if (status != null && status != DownloadPhase.PAUSED && status != DownloadPhase.QUEUED && status != DownloadPhase.FAILED) {
+                return
+            }
+            instance.activeDownloads.remove(appId)
+            val game = kotlinx.coroutines.runBlocking { instance.epicManager.getGameById(appId) }
+            if (game != null) {
+                val installPath = if (game.installPath.isNotEmpty()) {
+                    game.installPath
+                } else {
+                    EpicConstants.getGameInstallPath(context, game.appName)
+                }
+                downloadGame(context, appId, emptyList(), installPath, "")
+            }
+        }
+
+        fun resumeAll() {
+            val instance = getInstance() ?: return
+            instance.activeDownloads.keys.toList().forEach(::resumeDownload)
+        }
+
+        fun cancelAll() {
+            val instance = getInstance() ?: return
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                instance.activeDownloads.entries.toList().forEach { (appId, info) ->
+                    info.isCancelling = true
+                    info.cancel("Cancelled all")
+                    info.awaitCompletion(timeoutMs = 3000L)
+                    val game = instance.epicManager.getGameById(appId)
+                    if (game != null) {
+                        val context = DownloadService.appContext
+                        val path = if (game.installPath.isNotEmpty()) game.installPath else if (context != null) EpicConstants.getGameInstallPath(context, game.appName) else ""
+                        if (path.isNotEmpty()) {
+                            val dirFile = java.io.File(path)
+                            if (dirFile.exists() && dirFile.isDirectory) {
+                                MarkerUtils.removeMarker(path, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                                MarkerUtils.removeMarker(path, Marker.DOWNLOAD_COMPLETE_MARKER)
+                                dirFile.deleteRecursively()
+                            }
+                        }
+                    }
+                    info.updateStatus(DownloadPhase.CANCELLED)
+                    instance.activeDownloads.remove(appId)
+                }
+            }
+        }
+
+        fun clearCompletedDownloads() {
+            val instance = getInstance() ?: return
+            val toRemove = instance.activeDownloads.filterValues {
+                val status = it.getStatusFlow().value
+                status == com.winlator.cmod.steam.enums.DownloadPhase.COMPLETE || status == com.winlator.cmod.steam.enums.DownloadPhase.CANCELLED
+            }.keys
+            toRemove.forEach { instance.activeDownloads.remove(it) }
         }
 
         // ==========================================================================
@@ -419,11 +530,16 @@ class EpicService : Service() {
             val game = runBlocking { instance.epicManager.getGameById(appId) }
                 ?: return Result.failure(Exception("Game not found for appId: $appId"))
             val gameId = game.id ?: return Result.failure(Exception("Game ID not found for appId: $appId"))
+            val effectiveInstallPath = if (installPath.isNotEmpty()) installPath else EpicConstants.getGameInstallPath(context, game.appName)
 
             // Check if already downloading
-            if (instance.activeDownloads.containsKey(appId)) {
-                Timber.tag("Epic").w("Download already in progress for $appId")
-                return Result.success(instance.activeDownloads[appId]!!)
+            val existingDownload = instance.activeDownloads[appId]
+            if (existingDownload != null) {
+                if (existingDownload.isActive()) {
+                    Timber.tag("Epic").w("Download already in progress for $appId")
+                    return Result.success(existingDownload)
+                }
+                instance.activeDownloads.remove(appId)
             }
 
             // Create DownloadInfo before launching coroutine to avoid race condition
@@ -435,17 +551,19 @@ class EpicService : Service() {
 
             instance.activeDownloads[appId] = downloadInfo
             downloadInfo.setActive(true)
+            downloadInfo.isCancelling = false
+            downloadInfo.updateStatus(DownloadPhase.DOWNLOADING)
 
             // Start download in background
             val job = instance.scope.launch {
                 try {
-                    val commonRedistDir = File(installPath, "_CommonRedist")
+                    val commonRedistDir = File(effectiveInstallPath, "_CommonRedist")
                     Timber.tag("Epic").i("Starting download for game: ${game.title}, gameId: ${game.id}")
 
                     val result = instance.epicDownloadManager.downloadGame(
                         context,
                         game,
-                        installPath,
+                        effectiveInstallPath,
                         downloadInfo,
                         containerLanguage,
                         dlcGameIds,
@@ -458,24 +576,56 @@ class EpicService : Service() {
                         Timber.i("[Download] Completed successfully for game $gameId")
                         downloadInfo.setProgress(1.0f)
                         downloadInfo.setActive(false)
+                        downloadInfo.updateStatus(DownloadPhase.COMPLETE)
 
                         SnackbarManager.show("Download completed successfully!")
                     } else {
                         val error = result.exceptionOrNull()
-                        Timber.e(error, "[Download] Failed for game $gameId")
-                        downloadInfo.setProgress(-1.0f)
-                        downloadInfo.setActive(false)
-
-                        SnackbarManager.show("Download failed: ${error?.message ?: "Unknown error"}")
+                        when {
+                            downloadInfo.isCancelling -> {
+                                Timber.i("[Download] Cancelled for game $gameId")
+                                downloadInfo.setActive(false)
+                                downloadInfo.updateStatus(DownloadPhase.CANCELLED)
+                            }
+                            !downloadInfo.isActive() -> {
+                                Timber.i("[Download] Paused for game $gameId")
+                                downloadInfo.setActive(false)
+                                downloadInfo.updateStatus(DownloadPhase.PAUSED)
+                            }
+                            else -> {
+                                Timber.e(error, "[Download] Failed for game $gameId")
+                                downloadInfo.setProgress(-1.0f)
+                                downloadInfo.setActive(false)
+                                downloadInfo.updateStatus(DownloadPhase.FAILED, error?.message ?: "Unknown error")
+                                SnackbarManager.show("Download failed: ${error?.message ?: "Unknown error"}")
+                            }
+                        }
                     }
                 } catch (e: Exception) {
-                    Timber.e(e, "[Download] Exception for game $gameId")
-                    downloadInfo.setProgress(-1.0f)
-                    downloadInfo.setActive(false)
-
-                    SnackbarManager.show("Download error: ${e.message ?: "Unknown error"}")
+                    when {
+                        downloadInfo.isCancelling -> {
+                            Timber.i("[Download] Cancelled for game $gameId")
+                            downloadInfo.setActive(false)
+                            downloadInfo.updateStatus(DownloadPhase.CANCELLED)
+                        }
+                        !downloadInfo.isActive() -> {
+                            Timber.i("[Download] Paused for game $gameId")
+                            downloadInfo.setActive(false)
+                            downloadInfo.updateStatus(DownloadPhase.PAUSED)
+                        }
+                        else -> {
+                            Timber.e(e, "[Download] Exception for game $gameId")
+                            downloadInfo.setProgress(-1.0f)
+                            downloadInfo.setActive(false)
+                            downloadInfo.updateStatus(DownloadPhase.FAILED, e.message ?: "Unknown error")
+                            SnackbarManager.show("Download error: ${e.message ?: "Unknown error"}")
+                        }
+                    }
                 } finally {
-                    instance.activeDownloads.remove(appId)
+                    val finalStatus = downloadInfo.getStatusFlow().value
+                    if (finalStatus == DownloadPhase.COMPLETE || finalStatus == DownloadPhase.FAILED) {
+                        instance.activeDownloads.remove(appId)
+                    }
                     Timber.d("[Download] Finished for game $gameId, progress: ${downloadInfo.getProgress()}, active: ${downloadInfo.isActive()}")
                 }
             }

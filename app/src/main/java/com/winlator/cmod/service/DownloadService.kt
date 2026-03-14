@@ -38,6 +38,81 @@ object DownloadService {
         return list
     }
 
+    fun pauseAll() {
+        SteamService.pauseAll()
+        EpicService.pauseAll()
+        GOGService.pauseAll()
+    }
+
+    fun pauseDownload(id: String) {
+        when {
+            id.startsWith("STEAM_") -> {
+                val appId = id.removePrefix("STEAM_").toIntOrNull() ?: return
+                SteamService.pauseDownload(appId)
+            }
+            id.startsWith("EPIC_") -> {
+                val appId = id.removePrefix("EPIC_").toIntOrNull() ?: return
+                EpicService.pauseDownload(appId)
+            }
+            id.startsWith("GOG_") -> {
+                val gameId = id.removePrefix("GOG_")
+                GOGService.pauseDownload(gameId)
+            }
+        }
+    }
+
+    fun resumeAll() {
+        SteamService.resumeAll()
+        EpicService.resumeAll()
+        GOGService.resumeAll()
+    }
+
+    fun resumeDownload(id: String) {
+        when {
+            id.startsWith("STEAM_") -> {
+                val appId = id.removePrefix("STEAM_").toIntOrNull() ?: return
+                SteamService.resumeDownload(appId)
+            }
+            id.startsWith("EPIC_") -> {
+                val appId = id.removePrefix("EPIC_").toIntOrNull() ?: return
+                EpicService.resumeDownload(appId)
+            }
+            id.startsWith("GOG_") -> {
+                val gameId = id.removePrefix("GOG_")
+                GOGService.resumeDownload(gameId)
+            }
+        }
+    }
+
+    fun cancelAll() {
+        SteamService.cancelAll()
+        EpicService.cancelAll()
+        GOGService.cancelAll()
+    }
+
+    fun clearCompletedDownloads() {
+        SteamService.clearCompletedDownloads()
+        EpicService.clearCompletedDownloads()
+        GOGService.clearCompletedDownloads()
+    }
+
+    fun cancelDownload(id: String) {
+        when {
+            id.startsWith("STEAM_") -> {
+                val appId = id.removePrefix("STEAM_").toIntOrNull() ?: return
+                SteamService.cancelDownload(appId)
+            }
+            id.startsWith("EPIC_") -> {
+                val appId = id.removePrefix("EPIC_").toIntOrNull() ?: return
+                EpicService.cancelDownload(appId)
+            }
+            id.startsWith("GOG_") -> {
+                val gameId = id.removePrefix("GOG_")
+                GOGService.cancelDownload(gameId)
+            }
+        }
+    }
+
     fun getSizeFromStoreDisplay (appId: Int): String {
         val depots = SteamService.getDownloadableDepots(appId)
         val installBytes = depots.values.sumOf { it.manifests["public"]?.size ?: 0L }

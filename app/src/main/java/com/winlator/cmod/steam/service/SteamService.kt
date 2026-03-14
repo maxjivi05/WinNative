@@ -323,24 +323,91 @@ class SteamService : Service(), IChallengeUrlChanged {
         }
 
         fun pauseAll() {
-            downloadJobs.values.forEach { if (it.isActive()) it.cancel("Paused all") }
-            Unit
-        }
-
-        fun resumeAll() {
-            downloadJobs.forEach { (appId, info) ->
+            downloadJobs.values.forEach { info ->
                 val status = info.getStatusFlow().value
-                if (!info.isActive() && (status == DownloadPhase.QUEUED || status == DownloadPhase.PAUSED || status == DownloadPhase.FAILED)) {
-                    downloadApp(appId)
+                when {
+                    info.isActive() -> {
+                        info.isCancelling = false
+                        info.updateStatus(DownloadPhase.PAUSED)
+                        info.cancel("Paused all")
+                    }
+                    status == DownloadPhase.QUEUED -> {
+                        info.updateStatus(DownloadPhase.PAUSED)
+                        info.setActive(false)
+                    }
                 }
             }
             Unit
         }
 
-        fun cancelAll() {
-            downloadJobs.values.toList().forEach { it.cancel("Cancelled all") }
-            downloadJobs.clear()
+        fun pauseDownload(appId: Int) {
+            val info = downloadJobs[appId] ?: return
+            val status = info.getStatusFlow().value
+            if (status == DownloadPhase.COMPLETE || status == DownloadPhase.CANCELLED) return
+
+            if (info.isActive()) {
+                info.isCancelling = false
+                info.updateStatus(DownloadPhase.PAUSED)
+                info.cancel("Paused by user")
+            } else if (status == DownloadPhase.QUEUED) {
+                info.updateStatus(DownloadPhase.PAUSED)
+                info.setActive(false)
+            }
+        }
+
+        fun resumeAll() {
+            downloadJobs.keys.toList().forEach(::resumeDownload)
             Unit
+        }
+
+        fun resumeDownload(appId: Int) {
+            val info = downloadJobs[appId] ?: run {
+                downloadApp(appId)
+                return
+            }
+            val status = info.getStatusFlow().value
+            if (!info.isActive() && (status == DownloadPhase.QUEUED || status == DownloadPhase.PAUSED || status == DownloadPhase.FAILED)) {
+                downloadApp(appId)
+            }
+        }
+
+        fun cancelAll() {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                downloadJobs.entries.toList().forEach { (appId, info) ->
+                    info.isCancelling = true
+                    info.cancel("Cancelled all")
+                    info.awaitCompletion(timeoutMs = 3000L)
+                    // Delete partially downloaded files
+                    val appDirPath = getAppDirPath(appId)
+                    val dirFile = java.io.File(appDirPath)
+                    if (dirFile.exists() && dirFile.isDirectory) {
+                        MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                        MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                        deleteRecursivelyWithRetries(dirFile)
+                    }
+                    info.updateStatus(DownloadPhase.CANCELLED)
+                    removeDownloadJob(appId, forceRemove = true)
+                }
+            }
+            Unit
+        }
+
+        fun cancelDownload(appId: Int) {
+            val info = downloadJobs[appId] ?: return
+            info.isCancelling = true
+            info.cancel("Cancelled by user")
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                info.awaitCompletion(timeoutMs = 3000L)
+                val appDirPath = getAppDirPath(appId)
+                val dirFile = java.io.File(appDirPath)
+                if (dirFile.exists() && dirFile.isDirectory) {
+                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                    deleteRecursivelyWithRetries(dirFile)
+                }
+                info.updateStatus(DownloadPhase.CANCELLED)
+                removeDownloadJob(appId, forceRemove = true)
+            }
         }
 
         fun checkQueue() {
@@ -381,7 +448,10 @@ class SteamService : Service(), IChallengeUrlChanged {
         }
 
         fun clearCompletedDownloads() {
-            val toRemove = downloadJobs.filterValues { !it.isActive() }.keys
+            val toRemove = downloadJobs.filterValues {
+                val status = it.getStatusFlow().value
+                status == DownloadPhase.COMPLETE || status == DownloadPhase.CANCELLED
+            }.keys
             toRemove.forEach { removeDownloadJob(it, forceRemove = true) }
         }
 
@@ -2555,6 +2625,14 @@ class SteamService : Service(), IChallengeUrlChanged {
                             return@launch
                         }
 
+                        if (di.isCancelling) {
+                            Timber.d("Download cancelled by user for app $appId")
+                            di.persistProgressSnapshot(force = true)
+                            di.updateStatus(DownloadPhase.CANCELLED)
+                            di.setActive(false)
+                            throw e
+                        }
+
                         Timber.d(e, "Download paused for app $appId")
                         // Keep downloadingAppInfo on cancellation so resume does not fall into verify mode.
                         di.persistProgressSnapshot(force = true)
@@ -2602,7 +2680,12 @@ class SteamService : Service(), IChallengeUrlChanged {
                 }
                 downloadJob.invokeOnCompletion { throwable ->
                     if (throwable is CancellationException && throwable !is DownloadFailedException) {
-                        if (!di.isDeleting) {
+                        if (di.isDeleting) {
+                            // Deletion handled externally
+                        } else if (di.isCancelling) {
+                            // Keep in downloadJobs for UI visibility, but still check queue
+                            checkQueue()
+                        } else {
                             Timber.d(throwable, "Download paused for app $appId")
                             removeDownloadJob(appId)
                         }
@@ -2912,6 +2995,13 @@ class SteamService : Service(), IChallengeUrlChanged {
                 if (error is CancellationException && error !is DownloadFailedException) {
                     if (downloadInfo.isDeleting) {
                         Timber.d("Item ${item.appId} download cancelled for deletion")
+                        return
+                    }
+                    if (downloadInfo.isCancelling) {
+                        Timber.d("Item ${item.appId} download cancelled by user")
+                        downloadInfo.persistProgressSnapshot(force = true)
+                        downloadInfo.updateStatus(DownloadPhase.CANCELLED)
+                        downloadInfo.setActive(false)
                         return
                     }
                     // Treat cancellation as pause: preserve resume metadata/state.

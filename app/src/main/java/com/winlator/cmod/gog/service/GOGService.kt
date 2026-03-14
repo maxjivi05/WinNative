@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.IBinder
 import com.winlator.cmod.container.Container
 import com.winlator.cmod.steam.data.DownloadInfo
+import com.winlator.cmod.steam.enums.DownloadPhase
 import com.winlator.cmod.gog.data.GOGCredentials
 import com.winlator.cmod.gog.data.GOGGame
 import com.winlator.cmod.steam.data.LaunchInfo
@@ -15,6 +16,8 @@ import com.winlator.cmod.PluviaApp
 import com.winlator.cmod.epic.ui.util.SnackbarManager
 import com.winlator.cmod.utils.NotificationHelper
 import com.winlator.cmod.steam.utils.ContainerUtils
+import com.winlator.cmod.steam.utils.MarkerUtils
+import com.winlator.cmod.steam.enums.Marker
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -210,14 +213,119 @@ class GOGService : Service() {
 
             return if (downloadInfo != null) {
                 Timber.i("Cancelling download for game: $gameId")
-                downloadInfo.cancel()
-                instance.activeDownloads.remove(gameId)
+                downloadInfo.isCancelling = true
+                downloadInfo.cancel("Cancelled by user")
+                // Delete partially downloaded files
+                CoroutineScope(Dispatchers.IO).launch {
+                    downloadInfo.awaitCompletion(timeoutMs = 3000L)
+                    val game = instance.gogManager.getGameFromDbById(gameId)
+                    val installPath = if (game != null) {
+                        if (game.installPath.isNotEmpty()) game.installPath else instance.gogManager.getGameInstallPath(gameId, game.title)
+                    } else {
+                        ""
+                    }
+                    if (installPath.isNotEmpty()) {
+                        val dirFile = File(installPath)
+                        if (dirFile.exists() && dirFile.isDirectory) {
+                            MarkerUtils.removeMarker(installPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                            MarkerUtils.removeMarker(installPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                            dirFile.deleteRecursively()
+                        }
+                    }
+                    downloadInfo.updateStatus(DownloadPhase.CANCELLED)
+                    instance.activeDownloads.remove(gameId)
+                }
                 Timber.d("Download cancelled for game: $gameId")
                 true
             } else {
                 Timber.w("No active download found for game: $gameId")
                 false
             }
+        }
+
+        fun pauseDownload(gameId: String) {
+            val info = getInstance()?.activeDownloads?.get(gameId) ?: return
+            val status = info.getStatusFlow().value
+            if (status == DownloadPhase.COMPLETE || status == DownloadPhase.CANCELLED) return
+
+            if (info.isActive()) {
+                info.isCancelling = false
+                info.updateStatus(DownloadPhase.PAUSED)
+                info.cancel("Paused by user")
+            } else {
+                info.updateStatus(DownloadPhase.PAUSED)
+                info.setActive(false)
+            }
+        }
+
+        fun pauseAll() {
+            getInstance()?.activeDownloads?.values?.forEach { info ->
+                val status = info.getStatusFlow().value
+                if (info.isActive()) {
+                    info.isCancelling = false
+                    info.updateStatus(DownloadPhase.PAUSED)
+                    info.cancel("Paused all")
+                } else if (status != DownloadPhase.COMPLETE && status != DownloadPhase.CANCELLED) {
+                    info.updateStatus(DownloadPhase.PAUSED)
+                    info.setActive(false)
+                }
+            }
+        }
+
+        fun resumeDownload(gameId: String) {
+            val instance = getInstance() ?: return
+            val context = com.winlator.cmod.service.DownloadService.appContext ?: return
+            val info = instance.activeDownloads[gameId]
+            val status = info?.getStatusFlow()?.value
+            if (info != null && info.isActive()) return
+            if (status != null && status != DownloadPhase.PAUSED && status != DownloadPhase.QUEUED && status != DownloadPhase.FAILED) {
+                return
+            }
+            val game = runBlocking(Dispatchers.IO) { instance.gogManager.getGameFromDbById(gameId) } ?: return
+            instance.activeDownloads.remove(gameId)
+            val installPath = if (game.installPath.isNotEmpty()) game.installPath else instance.gogManager.getGameInstallPath(gameId, game.title)
+            downloadGame(context, gameId, installPath, "")
+        }
+
+        fun resumeAll() {
+            val instance = getInstance() ?: return
+            instance.activeDownloads.keys.toList().forEach(::resumeDownload)
+        }
+
+        fun cancelAll() {
+            val instance = getInstance() ?: return
+            CoroutineScope(Dispatchers.IO).launch {
+                instance.activeDownloads.entries.toList().forEach { (gameId, info) ->
+                    info.isCancelling = true
+                    info.cancel("Cancelled all")
+                    info.awaitCompletion(timeoutMs = 3000L)
+                    val game = instance.gogManager.getGameFromDbById(gameId)
+                    val installPath = if (game != null) {
+                        if (game.installPath.isNotEmpty()) game.installPath else instance.gogManager.getGameInstallPath(gameId, game.title)
+                    } else {
+                        ""
+                    }
+                    if (installPath.isNotEmpty()) {
+                        val dirFile = File(installPath)
+                        if (dirFile.exists() && dirFile.isDirectory) {
+                            MarkerUtils.removeMarker(installPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                            MarkerUtils.removeMarker(installPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                            dirFile.deleteRecursively()
+                        }
+                    }
+                    info.updateStatus(DownloadPhase.CANCELLED)
+                    instance.activeDownloads.remove(gameId)
+                }
+            }
+        }
+
+        fun clearCompletedDownloads() {
+            val instance = getInstance() ?: return
+            val toRemove = instance.activeDownloads.filterValues {
+                val status = it.getStatusFlow().value
+                status == com.winlator.cmod.steam.enums.DownloadPhase.COMPLETE || status == com.winlator.cmod.steam.enums.DownloadPhase.CANCELLED
+            }.keys
+            toRemove.forEach { instance.activeDownloads.remove(it) }
         }
 
         // ==========================================================================
@@ -300,49 +408,85 @@ class GOGService : Service() {
                 start(context)
                 return Result.failure(Exception("GOG service is starting. Please try again."))
             }
+            val game = runBlocking(Dispatchers.IO) { activeInstance.gogManager.getGameFromDbById(gameId) }
+                ?: return Result.failure(Exception("Game not found: $gameId"))
+            val effectiveInstallPath = if (installPath.isNotEmpty()) installPath else activeInstance.gogManager.getGameInstallPath(gameId, game.title)
 
             // Create DownloadInfo for progress tracking
             val downloadInfo = DownloadInfo(jobCount = 1, gameId = 0, downloadingAppIds = CopyOnWriteArrayList<Int>())
 
             // Track in activeDownloads first
             activeInstance.activeDownloads[gameId] = downloadInfo
+            downloadInfo.setActive(true)
+            downloadInfo.isCancelling = false
+            downloadInfo.updateStatus(DownloadPhase.DOWNLOADING)
 
             // Launch download in service scope so it runs independently
             val job = activeInstance.scope.launch {
                 try {
                     Timber.d("[Download] Starting download for game $gameId")
-                    val commonRedistDir = File(installPath, "_CommonRedist")
+                    val commonRedistDir = File(effectiveInstallPath, "_CommonRedist")
                     Timber.tag("GOG").d("Will install dependencies to _CommonRedist")
 
                     val result = activeInstance.gogDownloadManager.downloadGame(
-                        gameId, File(installPath),
+                        gameId, File(effectiveInstallPath),
                         downloadInfo, containerLanguage, true, commonRedistDir,
                     )
 
                     if (result.isFailure) {
                         val error = result.exceptionOrNull()
-                        Timber.e(error, "[Download] Failed for game $gameId")
-                        downloadInfo.setProgress(-1.0f)
-                        downloadInfo.setActive(false)
-
-                        SnackbarManager.show("Download failed: ${error?.message ?: "Unknown error"}")
+                        when {
+                            downloadInfo.isCancelling -> {
+                                Timber.i("[Download] Cancelled for game $gameId")
+                                downloadInfo.setActive(false)
+                                downloadInfo.updateStatus(DownloadPhase.CANCELLED)
+                            }
+                            !downloadInfo.isActive() -> {
+                                Timber.i("[Download] Paused for game $gameId")
+                                downloadInfo.setActive(false)
+                                downloadInfo.updateStatus(DownloadPhase.PAUSED)
+                            }
+                            else -> {
+                                Timber.e(error, "[Download] Failed for game $gameId")
+                                downloadInfo.setProgress(-1.0f)
+                                downloadInfo.setActive(false)
+                                downloadInfo.updateStatus(DownloadPhase.FAILED, error?.message ?: "Unknown error")
+                                SnackbarManager.show("Download failed: ${error?.message ?: "Unknown error"}")
+                            }
+                        }
                     } else {
                         Timber.i("[Download] Completed successfully for game $gameId")
                         downloadInfo.setProgress(1.0f)
                         downloadInfo.setActive(false)
+                        downloadInfo.updateStatus(DownloadPhase.COMPLETE)
 
                         SnackbarManager.show("Download completed successfully!")
                     }
                 } catch (e: Exception) {
-                    Timber.e(e, "[Download] Exception for game $gameId")
-                    downloadInfo.setProgress(-1.0f)
-                    downloadInfo.setActive(false)
-
-                    SnackbarManager.show("Download error: ${e.message ?: "Unknown error"}")
+                    when {
+                        downloadInfo.isCancelling -> {
+                            Timber.i("[Download] Cancelled for game $gameId")
+                            downloadInfo.setActive(false)
+                            downloadInfo.updateStatus(DownloadPhase.CANCELLED)
+                        }
+                        !downloadInfo.isActive() -> {
+                            Timber.i("[Download] Paused for game $gameId")
+                            downloadInfo.setActive(false)
+                            downloadInfo.updateStatus(DownloadPhase.PAUSED)
+                        }
+                        else -> {
+                            Timber.e(e, "[Download] Exception for game $gameId")
+                            downloadInfo.setProgress(-1.0f)
+                            downloadInfo.setActive(false)
+                            downloadInfo.updateStatus(DownloadPhase.FAILED, e.message ?: "Unknown error")
+                            SnackbarManager.show("Download error: ${e.message ?: "Unknown error"}")
+                        }
+                    }
                 } finally {
-                    // Remove from activeDownloads for both success and failure
-                    // so UI knows download is complete and to prevent stale entries
-                    activeInstance.activeDownloads.remove(gameId)
+                    val finalStatus = downloadInfo.getStatusFlow().value
+                    if (finalStatus == DownloadPhase.COMPLETE || finalStatus == DownloadPhase.FAILED) {
+                        activeInstance.activeDownloads.remove(gameId)
+                    }
                     Timber.d("[Download] Finished for game $gameId, progress: ${downloadInfo.getProgress()}, active: ${downloadInfo.isActive()}")
                 }
             }

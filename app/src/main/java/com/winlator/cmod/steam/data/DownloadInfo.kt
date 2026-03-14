@@ -25,6 +25,7 @@ class DownloadInfo(
     var downloadingAppIds: CopyOnWriteArrayList<Int>,
 ) {
     @Volatile var isDeleting: Boolean = false
+    @Volatile var isCancelling: Boolean = false
     private var downloadJob: Job? = null
     private val downloadProgressListeners = CopyOnWriteArrayList<((Float) -> Unit)>()
     private val progresses: Array<Float> = Array(jobCount) { 0f }

@@ -2853,6 +2853,8 @@ class UnifiedActivity : ComponentActivity() {
     @Composable
     fun DownloadsTab(selectedId: String?, onSelectDownload: (String?) -> Unit) {
         val downloads = remember { mutableStateListOf<Pair<String, DownloadInfo>>() }
+        // Tick counter forces recomposition so button labels/states refresh with status changes
+        var tick by remember { mutableIntStateOf(0) }
 
         LaunchedEffect(Unit) {
             while (true) {
@@ -2862,6 +2864,7 @@ class UnifiedActivity : ComponentActivity() {
                 if (selectedId != null && currentDownloads.none { it.first == selectedId }) {
                     onSelectDownload(null)
                 }
+                tick++
                 kotlinx.coroutines.delay(1000)
             }
         }
@@ -2870,32 +2873,60 @@ class UnifiedActivity : ComponentActivity() {
             val isController = ControllerHelper.isControllerConnected()
             val isPS = ControllerHelper.isPlayStationController()
 
+            // Read tick to ensure recomposition picks up latest status values
+            @Suppress("UNUSED_EXPRESSION")
+            tick
+
             // Global Actions row
+            val buttonHeight = 40.dp
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val selectedInfo = downloads.find { it.first == selectedId }?.second
-                val isPaused = selectedInfo?.getStatusFlow()?.value == DownloadPhase.PAUSED
-                
+                val selectedStatus = selectedInfo?.getStatusFlow()?.value
+                val isPaused = selectedStatus == DownloadPhase.PAUSED
+                val isComplete = selectedStatus == DownloadPhase.COMPLETE
+                val isCancelled = selectedStatus == DownloadPhase.CANCELLED
+                val pausableDownloads = downloads.filter {
+                    val status = it.second.getStatusFlow().value
+                    status != DownloadPhase.COMPLETE && status != DownloadPhase.CANCELLED
+                }
+                val allPausableDownloadsPaused = pausableDownloads.isNotEmpty() && pausableDownloads.all {
+                    it.second.getStatusFlow().value == DownloadPhase.PAUSED
+                }
+
                 val pauseResumeLabel = if (selectedId == null) {
-                    val anyActive = downloads.any { it.second.isActive() }
-                    if (anyActive) "Pause All" else "Resume All"
+                    if (allPausableDownloadsPaused) "Resume All" else "Pause All"
                 } else {
                     if (isPaused) "Resume" else "Pause"
                 }
-                
+
                 val cancelLabel = if (selectedId == null) "Cancel All" else "Cancel"
+
+                // Disable pause/resume for completed or cancelled downloads
+                val pauseResumeEnabled = if (selectedId != null) {
+                    !isComplete && !isCancelled
+                } else {
+                    pausableDownloads.isNotEmpty()
+                }
+
+                val cancelEnabled = if (selectedId != null) {
+                    !isComplete && !isCancelled
+                } else {
+                    pausableDownloads.isNotEmpty()
+                }
 
                 // Download Queue Size
                 var queueSize by remember { mutableIntStateOf(PrefManager.downloadQueueSize) }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
+                        .height(buttonHeight)
                         .clip(RoundedCornerShape(8.dp))
                         .background(SurfaceDark)
-                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                        .padding(horizontal = 4.dp)
                 ) {
                     IconButton(
                         onClick = { if (queueSize > 1) { queueSize--; PrefManager.downloadQueueSize = queueSize } },
@@ -2923,18 +2954,21 @@ class UnifiedActivity : ComponentActivity() {
                 Button(
                     onClick = {
                         if (selectedId == null) {
-                            val anyActive = downloads.any { it.second.isActive() }
-                            if (anyActive) SteamService.pauseAll() else SteamService.resumeAll()
+                            if (allPausableDownloadsPaused) {
+                                DownloadService.resumeAll()
+                            } else {
+                                DownloadService.pauseAll()
+                            }
                         } else {
                             if (isPaused) {
-                                val appId = selectedId.removePrefix("STEAM_").removePrefix("EPIC_").removePrefix("GOG_").toIntOrNull() ?: 0
-                                if (selectedId.startsWith("STEAM_")) SteamService.downloadApp(appId)
+                                DownloadService.resumeDownload(selectedId)
                             } else {
-                                selectedInfo?.cancel("Paused by user")
+                                DownloadService.pauseDownload(selectedId)
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(if (isController) 0.35f else 0.25f),
+                    enabled = pauseResumeEnabled,
+                    modifier = Modifier.height(buttonHeight),
                     colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -2952,13 +2986,15 @@ class UnifiedActivity : ComponentActivity() {
                 Button(
                     onClick = {
                         if (selectedId == null) {
-                            SteamService.cancelAll()
+                            DownloadService.cancelAll()
+                            onSelectDownload(null)
                         } else {
-                            selectedInfo?.cancel("Cancelled by user")
+                            DownloadService.cancelDownload(selectedId)
                             onSelectDownload(null)
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(if (isController) 0.5f else 0.33f),
+                    enabled = cancelEnabled,
+                    modifier = Modifier.height(buttonHeight),
                     colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -2969,6 +3005,26 @@ class UnifiedActivity : ComponentActivity() {
                             ControllerBadge(if (isPS) "R2" else "RT")
                         }
                     }
+                }
+
+                // Clear button - clears completed and cancelled downloads
+                val hasCompletedOrCancelled = downloads.any {
+                    val s = it.second.getStatusFlow().value
+                    s == DownloadPhase.COMPLETE || s == DownloadPhase.CANCELLED
+                }
+
+                Spacer(Modifier.width(12.dp))
+
+                Button(
+                    onClick = {
+                        DownloadService.clearCompletedDownloads()
+                    },
+                    enabled = hasCompletedOrCancelled,
+                    modifier = Modifier.height(buttonHeight),
+                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Clear", color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
 
@@ -3019,7 +3075,8 @@ class UnifiedActivity : ComponentActivity() {
     @Composable
     fun DownloadItemDeck(id: String, info: DownloadInfo, isSelected: Boolean, onClick: () -> Unit) {
         var progress by remember { mutableFloatStateOf(info.getProgress()) }
-        
+        var showDeleteDialog by remember { mutableStateOf(false) }
+
         DisposableEffect(info) {
             val listener: (Float) -> Unit = { progress = it }
             info.addProgressListener(listener)
@@ -3113,6 +3170,7 @@ class UnifiedActivity : ComponentActivity() {
                             val filePart = currentFile?.let { " [${it.take(10)}]" } ?: ""
                             "Downloading...$filePart"
                         }
+                        DownloadPhase.PAUSED -> "Paused"
                         DownloadPhase.PREPARING -> "Preparing..."
                         DownloadPhase.VERIFYING -> {
                             val filePart = currentFile?.let { " [${it.take(10)}]" } ?: ""
@@ -3120,17 +3178,23 @@ class UnifiedActivity : ComponentActivity() {
                         }
                         DownloadPhase.PATCHING -> "Patching..."
                         DownloadPhase.COMPLETE -> "Complete"
+                        DownloadPhase.CANCELLED -> "Cancelled"
                         DownloadPhase.FAILED -> "Failed: ${if (statusMessage != null && statusMessage != "null") statusMessage else "Unknown error"}"
                         else -> status.name.lowercase().replaceFirstChar { it.uppercase() }
                     }
-                    
+
                     Text("Status: $statusText", style = MaterialTheme.typography.bodySmall, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
 
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                         LinearProgressIndicator(
                             progress = { progress },
                             modifier = Modifier.weight(1f).height(8.dp).clip(CircleShape),
-                            color = if (status == DownloadPhase.FAILED) Color(0xFFFF6B6B) else Accent,
+                            color = when (status) {
+                                DownloadPhase.FAILED -> Color(0xFFFF6B6B)
+                                DownloadPhase.CANCELLED -> Color(0xFFFF6B6B)
+                                DownloadPhase.COMPLETE -> Color(0xFF4CAF50)
+                                else -> Accent
+                            },
                             trackColor = Color.Black.copy(alpha = 0.3f)
                         )
                         Spacer(Modifier.width(8.dp))
@@ -3143,14 +3207,53 @@ class UnifiedActivity : ComponentActivity() {
                     }
                 }
 
-                IconButton(onClick = { info.cancel() }) {
-                    Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color(0xFFFF6B6B))
+                IconButton(
+                    onClick = { showDeleteDialog = true },
+                    enabled = status != DownloadPhase.COMPLETE && status != DownloadPhase.CANCELLED
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Cancel Download",
+                        tint = if (status != DownloadPhase.COMPLETE && status != DownloadPhase.CANCELLED) Color(0xFFFF6B6B) else TextSecondary
+                    )
                 }
                 if (ControllerHelper.isControllerConnected()) {
                     Spacer(Modifier.width(8.dp))
                     ControllerBadge(if (ControllerHelper.isPlayStationController()) "Cross" else "A")
                 }
             }
+        }
+
+        if (showDeleteDialog) {
+            val gameName = if (id.startsWith("STEAM_")) steamApp?.name
+                else if (id.startsWith("EPIC_")) epicGame?.title
+                else if (id.startsWith("GOG_")) gogGame?.title
+                else null
+            AlertDialog(
+                onDismissRequest = { showDeleteDialog = false },
+                containerColor = SurfaceDark,
+                title = { Text("Cancel Download", color = TextPrimary) },
+                text = { Text("Cancel the download for ${gameName ?: "this game"} and delete all downloaded files?", color = TextSecondary) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showDeleteDialog = false
+                            DownloadService.cancelDownload(id)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B6B))
+                    ) {
+                        Text("Cancel Download", color = Color.White)
+                    }
+                },
+                dismissButton = {
+                    Button(
+                        onClick = { showDeleteDialog = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = CardDark)
+                    ) {
+                        Text("Cancel", color = TextPrimary)
+                    }
+                }
+            )
         }
     }
 

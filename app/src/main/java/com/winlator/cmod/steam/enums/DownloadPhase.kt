@@ -15,6 +15,7 @@ enum class DownloadPhase {
     QUEUED,
     UNPACKING,
     COMPLETE,
+    CANCELLED,
     ;
 
     companion object {
