@@ -45,6 +45,7 @@ import com.winlator.cmod.core.PreloaderDialog;
 import com.winlator.cmod.container.ContainerManager;
 import com.winlator.cmod.container.Shortcut;
 import com.winlator.cmod.core.WineThemeManager;
+import com.winlator.cmod.google.GoogleFragment;
 import com.winlator.cmod.xenvironment.ImageFsInstaller;
 
 import android.graphics.drawable.StateListDrawable;
@@ -319,6 +320,9 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
                 break;
             case R.id.main_menu_advanced:
                 fragment = new DebugFragment();
+                break;
+            case R.id.main_menu_google:
+                fragment = new GoogleFragment();
                 break;
             case R.id.main_menu_settings:
                 fragment = new PresetsFragment();

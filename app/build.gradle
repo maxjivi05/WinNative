@@ -65,9 +65,23 @@ android {
         jvmTarget = '17'
     }
 
+    signingConfigs {
+        release {
+            storeFile file("/home/max/Documents/winnative_release.jks")
+            storePassword "316402"
+            keyAlias "winnative"
+            keyPassword "316402"
+        }
+    }
+
     buildTypes {
         debug {
             minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        release {
+            minifyEnabled true
+            signingConfig signingConfigs.release
         }
     }
 
@@ -189,4 +203,8 @@ dependencies {
     // JavaSteam
     implementation 'in.dragonbra:javasteam:1.8.1-SNAPSHOT'
     implementation 'in.dragonbra:javasteam-depotdownloader:1.8.1-SNAPSHOT'
+
+    // Google Play Games Services SDK
+    implementation 'com.google.android.gms:play-services-games-v2:19.0.0'
+    implementation 'com.google.android.gms:play-services-auth:21.0.0'
 }

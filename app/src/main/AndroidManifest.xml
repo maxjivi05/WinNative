@@ -215,5 +215,12 @@
             android:name="android.allow_multiple_resumed_activities"
             android:value="true" />
 
+        <meta-data
+            android:name="com.google.android.gms.games.APP_ID"
+            android:value="@string/play_games_app_id" />
+        <meta-data
+            android:name="com.google.android.gms.games.should_auto_sign_in"
+            android:value="false" />
+
     </application>
 </manifest>

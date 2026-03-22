@@ -16,6 +16,8 @@ import com.winlator.cmod.gog.service.GOGService
 import com.winlator.cmod.steam.service.SteamService
 import com.winlator.cmod.steam.utils.PrefManager
 import com.winlator.cmod.service.DownloadService
+import com.google.android.gms.games.PlayGamesSdk
+import com.winlator.cmod.google.CloudSyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -25,6 +27,10 @@ class PluviaApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        
+        // Initialize Play Games Services SDK (v2)
+        PlayGamesSdk.initialize(this)
+
         registerRefreshRateLifecycleCallbacks()
 
         // Replace Android's limited BouncyCastle provider with the full one
@@ -75,6 +81,10 @@ class PluviaApp : Application() {
     companion object {
         lateinit var instance: PluviaApp
             private set
+
+        @Volatile
+        var currentForegroundActivity: Activity? = null
+            private set
             
         @JvmField
         val events = EventDispatcher()
@@ -89,6 +99,8 @@ class PluviaApp : Application() {
             }
 
             override fun onActivityResumed(activity: Activity) {
+                currentForegroundActivity = activity
+                CloudSyncManager.flushPendingBackup(activity)
                 if (activity !is XServerDisplayActivity) {
                     RefreshRateUtils.applyPreferredRefreshRate(activity)
                 }
@@ -96,13 +108,21 @@ class PluviaApp : Application() {
 
             override fun onActivityStarted(activity: Activity) {}
 
-            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {
+                if (currentForegroundActivity === activity) {
+                    currentForegroundActivity = null
+                }
+            }
 
             override fun onActivityStopped(activity: Activity) {}
 
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
 
-            override fun onActivityDestroyed(activity: Activity) {}
+            override fun onActivityDestroyed(activity: Activity) {
+                if (currentForegroundActivity === activity) {
+                    currentForegroundActivity = null
+                }
+            }
         })
     }
 }

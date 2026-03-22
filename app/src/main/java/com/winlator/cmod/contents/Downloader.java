@@ -24,13 +24,12 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -39,7 +38,12 @@ public class Downloader {
 
     private static final String TAG = "Downloader";
     private static final String WINNATIVE_ROOT = "https://WinNative.dev/Downloads/";
-    private static final int MAX_CRAWL_DEPTH = 6;
+    private static final int MAX_CRAWL_DEPTH = 10;
+    private static final int FILE_CONNECT_TIMEOUT_MS = 15000;
+    private static final int FILE_READ_TIMEOUT_MS = 30000;
+    private static final int STRING_CONNECT_TIMEOUT_MS = 5000;
+    private static final int STRING_READ_TIMEOUT_MS = 10000;
+    private static final Pattern HREF_PATTERN = Pattern.compile("href=\"([^\"?]+)\"");
 
     /** Returns true only if the user has enabled download logging in Debug settings. */
     private static boolean logEnabled() {
@@ -189,8 +193,7 @@ public class Downloader {
         if (html == null) return;
 
         // Parse href entries from Apache-style "Index of" listing
-        Pattern pattern = Pattern.compile("href=\"([^\"?]+)\"");
-        Matcher matcher = pattern.matcher(html);
+        Matcher matcher = HREF_PATTERN.matcher(html);
         List<String> subdirs = new ArrayList<>();
 
         while (matcher.find()) {
@@ -228,9 +231,19 @@ public class Downloader {
      */
     public static String extractFilename(String url) {
         if (url == null) return null;
-        int lastSlash = url.lastIndexOf('/');
-        if (lastSlash >= 0 && lastSlash < url.length() - 1) {
-            return url.substring(lastSlash + 1);
+        try {
+            String path = new URL(url).getPath();
+            int lastSlash = path.lastIndexOf('/');
+            if (lastSlash >= 0 && lastSlash < path.length() - 1) {
+                return path.substring(lastSlash + 1);
+            }
+        } catch (Exception ignored) {
+            int queryStart = url.indexOf('?');
+            String pathOnly = queryStart >= 0 ? url.substring(0, queryStart) : url;
+            int lastSlash = pathOnly.lastIndexOf('/');
+            if (lastSlash >= 0 && lastSlash < pathOnly.length() - 1) {
+                return pathOnly.substring(lastSlash + 1);
+            }
         }
         return null;
     }
@@ -239,42 +252,57 @@ public class Downloader {
      * Downloads a file from the given address with progress reporting.
      */
     public static boolean downloadFile(String address, File file, DownloadListener listener) {
+        HttpURLConnection connection = null;
         try {
-            URL url = new URL(address);
-            URLConnection connection = url.openConnection();
-            connection.setRequestProperty("Accept-Encoding", "identity");
-            connection.setConnectTimeout(15000);
-            connection.setReadTimeout(30000);
-            connection.connect();
-
-            InputStream input = url.openStream();
-            OutputStream output = new FileOutputStream(file.getAbsolutePath());
-
-            byte[] data = new byte[8192];
-            int count;
-            long total = 0;
-            long lengthOfFile = connection.getContentLengthLong();
-            long lastUpdateTime = 0;
-
-            while ((count = input.read(data)) != -1) {
-                total += count;
-                output.write(data, 0, count);
-                if (listener != null) {
-                    long currentTime = System.currentTimeMillis();
-                    if (currentTime - lastUpdateTime > 80 || total == lengthOfFile) {
-                        listener.onProgress(total, lengthOfFile);
-                        lastUpdateTime = currentTime;
-                    }
-                }
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                if (logEnabled()) Log.w(TAG, "Unable to create download directory: " + parent.getAbsolutePath());
+                return false;
             }
 
-            output.flush();
-            output.close();
-            input.close();
+            connection = openConnection(address, FILE_CONNECT_TIMEOUT_MS, FILE_READ_TIMEOUT_MS, true);
+            long lengthOfFile = connection.getContentLengthLong();
+            long total = 0;
+            long lastUpdateTime = 0;
+
+            if (listener != null) {
+                listener.onProgress(0, lengthOfFile);
+            }
+
+            try (InputStream input = connection.getInputStream();
+                 OutputStream output = new FileOutputStream(file)) {
+                byte[] data = new byte[8192];
+                int count;
+
+                while ((count = input.read(data)) != -1) {
+                    total += count;
+                    output.write(data, 0, count);
+                    if (listener != null) {
+                        long currentTime = System.currentTimeMillis();
+                        if (currentTime - lastUpdateTime > 80 || total == lengthOfFile) {
+                            listener.onProgress(total, lengthOfFile);
+                            lastUpdateTime = currentTime;
+                        }
+                    }
+                }
+
+                output.flush();
+            }
+
+            if (listener != null && lengthOfFile > 0 && total != lengthOfFile) {
+                listener.onProgress(total, lengthOfFile);
+            }
             return true;
         } catch (Exception e) {
-            e.printStackTrace();
+            if (logEnabled()) Log.w(TAG, "Download failed for " + address, e);
+            if (file.exists() && !file.delete() && logEnabled()) {
+                Log.w(TAG, "Unable to delete partial download: " + file.getAbsolutePath());
+            }
             return false;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 
@@ -282,25 +310,47 @@ public class Downloader {
      * Downloads a URL as a String (used for JSON fetches and directory listings).
      */
     public static String downloadString(String address) {
+        HttpURLConnection connection = null;
         try {
-            URL url = new URL(address);
-            URLConnection connection = url.openConnection();
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(10000);
-            connection.connect();
-
-            InputStream input = url.openStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(input));
+            connection = openConnection(address, STRING_CONNECT_TIMEOUT_MS, STRING_READ_TIMEOUT_MS, false);
             StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append("\n");
+            try (InputStream input = connection.getInputStream();
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line).append("\n");
+                }
             }
-            reader.close();
             return sb.toString();
         } catch (Exception e) {
-            e.printStackTrace();
+            if (logEnabled()) Log.w(TAG, "String download failed for " + address, e);
             return null;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
+    }
+
+    private static HttpURLConnection openConnection(
+            String address,
+            int connectTimeoutMs,
+            int readTimeoutMs,
+            boolean identityEncoding
+    ) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
+        connection.setInstanceFollowRedirects(true);
+        connection.setConnectTimeout(connectTimeoutMs);
+        connection.setReadTimeout(readTimeoutMs);
+        if (identityEncoding) {
+            connection.setRequestProperty("Accept-Encoding", "identity");
+        }
+        connection.connect();
+
+        int responseCode = connection.getResponseCode();
+        if (responseCode < HttpURLConnection.HTTP_OK || responseCode >= HttpURLConnection.HTTP_MULT_CHOICE) {
+            throw new IllegalStateException("HTTP " + responseCode + " for " + address);
+        }
+        return connection;
     }
 }

@@ -14,6 +14,7 @@ import com.winlator.cmod.BuildConfig
 import com.winlator.cmod.R
 import com.winlator.cmod.utils.NetworkMonitor
 import com.winlator.cmod.PluviaApp
+import com.winlator.cmod.google.CloudSyncManager
 import com.winlator.cmod.steam.utils.PrefManager
 import com.winlator.cmod.steam.data.DepotInfo
 import com.winlator.cmod.steam.data.DownloadFailedException
@@ -4739,6 +4740,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                 notificationHelper.notify("Connected")
 
                 _loginResult = LoginResult.Success
+                CloudSyncManager.queueStoreLoginBackup(this@SteamService)
             }
 
             else -> {

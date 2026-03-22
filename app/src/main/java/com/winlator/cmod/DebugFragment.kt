@@ -58,6 +58,7 @@ class DebugFragment : Fragment() {
         cbEnableWineDebug.setOnCheckedChangeListener { _, isChecked ->
             preferences.edit { putBoolean("enable_wine_debug", isChecked) }
             updateWineChannelSection(wineChannelSection, isChecked)
+            com.winlator.cmod.core.LogManager.updateLoggingState(context)
         }
 
         wineDebugChannels = preferences.getString(
@@ -73,12 +74,14 @@ class DebugFragment : Fragment() {
         cbEnableBox64Logs.isChecked = preferences.getBoolean("enable_box64_logs", false)
         cbEnableBox64Logs.setOnCheckedChangeListener { _, isChecked ->
             preferences.edit { putBoolean("enable_box64_logs", isChecked) }
+            com.winlator.cmod.core.LogManager.updateLoggingState(context)
         }
 
         cbEnableFexcoreLogs = view.findViewById(R.id.CBEnableFexcoreLogs)
         cbEnableFexcoreLogs.isChecked = preferences.getBoolean("enable_fexcore_logs", false)
         cbEnableFexcoreLogs.setOnCheckedChangeListener { _, isChecked ->
             preferences.edit { putBoolean("enable_fexcore_logs", isChecked) }
+            com.winlator.cmod.core.LogManager.updateLoggingState(context)
         }
 
         cbEnableSteamLogs = view.findViewById(R.id.CBEnableSteamLogs)
@@ -90,6 +93,7 @@ class DebugFragment : Fragment() {
             if (isChecked && timber.log.Timber.forest().isEmpty()) {
                 timber.log.Timber.plant(timber.log.Timber.DebugTree())
             }
+            com.winlator.cmod.core.LogManager.updateLoggingState(context)
         }
 
         // Input Logs toggle (off by default)
@@ -97,6 +101,7 @@ class DebugFragment : Fragment() {
         cbEnableInputLogs.isChecked = preferences.getBoolean("enable_input_logs", false)
         cbEnableInputLogs.setOnCheckedChangeListener { _, isChecked ->
             preferences.edit { putBoolean("enable_input_logs", isChecked) }
+            com.winlator.cmod.core.LogManager.updateLoggingState(context)
         }
 
         // Download Logs toggle (off by default)
@@ -104,6 +109,7 @@ class DebugFragment : Fragment() {
         cbEnableDownloadLogs.isChecked = preferences.getBoolean("enable_download_logs", false)
         cbEnableDownloadLogs.setOnCheckedChangeListener { _, isChecked ->
             preferences.edit { putBoolean("enable_download_logs", isChecked) }
+            com.winlator.cmod.core.LogManager.updateLoggingState(context)
         }
 
         // Share Logs button
@@ -115,26 +121,38 @@ class DebugFragment : Fragment() {
 
     private fun shareLogs() {
         val context = requireContext()
-        try {
-            // Capture logcat output (last 5000 lines)
-            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "5000"))
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            val logContent = reader.readText()
-            reader.close()
-            process.waitFor()
+        val logsDir = com.winlator.cmod.core.LogManager.getLogsDir(context)
+        val files = logsDir.listFiles()
+        
+        if (files == null || files.isEmpty()) {
+            AppUtils.showToast(context, "No debug logs available. Enable debugging options first and launch a game.")
+            return
+        }
 
+        try {
             // Create zip file in cache
-            val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
-                .format(java.util.Date())
+            val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
             val zipFile = File(context.cacheDir, "winnative_logs_$timestamp.zip")
             ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
-                zos.putNextEntry(ZipEntry("logcat_$timestamp.txt"))
-                zos.write(logContent.toByteArray())
-                zos.closeEntry()
+                files.forEach { file ->
+                    if (file.isFile) {
+                        zos.putNextEntry(ZipEntry(file.name))
+                        file.inputStream().use { it.copyTo(zos) }
+                        zos.closeEntry()
+                    }
+                }
             }
 
             // Store reference for auto-cleanup
             lastSharedLogFile = zipFile
+
+            // Delete shared zip after 3 minutes
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (zipFile.exists() && lastSharedLogFile == zipFile) {
+                    zipFile.delete()
+                    if (lastSharedLogFile == zipFile) lastSharedLogFile = null
+                }
+            }, 3 * 60 * 1000)
 
             // Share via Android share sheet
             val authority = "${context.packageName}.tileprovider"

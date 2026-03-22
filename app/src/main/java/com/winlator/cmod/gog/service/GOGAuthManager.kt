@@ -1,6 +1,7 @@
 package com.winlator.cmod.gog.service
 
 import android.content.Context
+import com.winlator.cmod.google.CloudSyncManager
 import com.winlator.cmod.gog.data.GOGCredentials
 import com.winlator.cmod.steam.utils.Net
 import kotlinx.coroutines.Dispatchers
@@ -145,6 +146,7 @@ object GOGAuthManager {
                 authFile.writeText(authData.toString(2))
             }
             updateLoginStatus(context)
+            CloudSyncManager.queueStoreLoginBackup(context)
             Timber.tag("GOG").i("GOG authentication successful for user: $userId")
 
             Result.success(credentials)
@@ -421,6 +423,9 @@ object GOGAuthManager {
             tokenJson.put("loginTime", System.currentTimeMillis() / 1000.0)
             authJson.put(clientId, tokenJson)
             withContext(Dispatchers.IO) { authFile.writeText(authJson.toString(2)) }
+            if (clientId == GOGConstants.GOG_CLIENT_ID) {
+                CloudSyncManager.queueStoreLoginBackup(context)
+            }
 
             Timber.tag("GOG").i("Successfully refreshed credentials for clientId: $clientId")
             Result.success(true)

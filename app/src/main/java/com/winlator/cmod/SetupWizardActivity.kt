@@ -1377,12 +1377,27 @@ class SetupWizardActivity : FragmentActivity() {
                     .fillMaxSize()
                     .padding(horizontal = 20.dp, vertical = 18.dp)
             ) {
-                Text(
-                    text = if (advanced) "Advanced Setup" else "Setup Wizard",
-                    color = Color(0xFFE6EDF3),
-                    fontFamily = SyncopateFont,
-                    fontSize = 18.sp
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (advanced) "Advanced Setup" else "Setup Wizard",
+                        color = Color(0xFFE6EDF3),
+                        fontFamily = SyncopateFont,
+                        fontSize = 18.sp
+                    )
+                    if (page == 0) {
+                        Text(
+                            text = "Required Access",
+                            color = Color(0xFFE6EDF3),
+                            fontFamily = InterFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                    }
+                }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = "Step ${page + 1} of $totalPages",
@@ -1494,15 +1509,6 @@ class SetupWizardActivity : FragmentActivity() {
 
     @Composable
     private fun PagePermissions() {
-        Text(
-            text = "Required Access",
-            color = Color(0xFFE6EDF3),
-            fontFamily = InterFont,
-            fontWeight = FontWeight.Bold,
-            fontSize = 24.sp
-        )
-        Spacer(Modifier.height(18.dp))
-
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
