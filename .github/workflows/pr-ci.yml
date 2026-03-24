@@ -31,7 +31,7 @@ jobs:
         persist-credentials: false
 
     - name: Cache LFS
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: .git/lfs
         key: lfs-${{ hashFiles('**/*.txz', '**/*.tzst') }}
@@ -41,7 +41,7 @@ jobs:
       run: git lfs pull
 
     - name: Cache NDK build outputs
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           app/.cxx
