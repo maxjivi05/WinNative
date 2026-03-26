@@ -1,6 +1,7 @@
 package com.winlator.cmod
 
 import android.app.Activity
+import android.content.Context
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,6 +60,7 @@ fun interface XServerDrawerActionListener {
 }
 
 fun buildXServerDrawerState(
+    context: Context,
     relativeMouseEnabled: Boolean,
     mouseDisabled: Boolean,
     paused: Boolean,
@@ -70,40 +73,40 @@ fun buildXServerDrawerState(
     val items = mutableListOf(
         XServerDrawerItem(
             itemId = R.id.main_menu_keyboard,
-            title = "Keyboard",
-            subtitle = "Open the software keyboard",
+            title = context.getString(R.string.session_drawer_keyboard),
+            subtitle = context.getString(R.string.session_drawer_keyboard_subtitle),
             iconRes = R.drawable.icon_keyboard,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_input_controls,
-            title = "Input Controls",
-            subtitle = "Configure or toggle on-screen controls",
+            title = context.getString(R.string.common_ui_input_controls),
+            subtitle = context.getString(R.string.session_drawer_input_controls_subtitle),
             iconRes = R.drawable.icon_input_controls,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_relative_mouse_movement,
-            title = "Relative Mouse Movement",
-            subtitle = if (relativeMouseEnabled) "Enabled" else "Disabled",
+            title = context.getString(R.string.session_drawer_relative_mouse_movement),
+            subtitle = if (relativeMouseEnabled) context.getString(R.string.common_ui_enabled) else context.getString(R.string.common_ui_disabled),
             iconRes = R.drawable.ic_input_kbd_mouse_move,
             active = relativeMouseEnabled,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_disable_mouse,
-            title = "Mouse Input",
-            subtitle = if (mouseDisabled) "Disabled" else "Enabled",
+            title = context.getString(R.string.session_drawer_mouse_input),
+            subtitle = if (mouseDisabled) context.getString(R.string.common_ui_disabled) else context.getString(R.string.common_ui_enabled),
             iconRes = R.drawable.ic_input_kbd_mouse,
             active = !mouseDisabled,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_screen_effects,
-            title = "Screen Effects",
-            subtitle = "Color, CRT, FXAA and shader options",
+            title = context.getString(R.string.session_effects_title),
+            subtitle = context.getString(R.string.session_drawer_screen_effects_subtitle),
             iconRes = R.drawable.icon_screen_effect,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_toggle_fullscreen,
-            title = "Toggle Fullscreen",
-            subtitle = "Switch fullscreen rendering",
+            title = context.getString(R.string.session_drawer_toggle_fullscreen),
+            subtitle = context.getString(R.string.session_drawer_fullscreen_subtitle),
             iconRes = R.drawable.icon_fullscreen,
         ),
         XServerDrawerItem(
@@ -115,21 +118,21 @@ fun buildXServerDrawerState(
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_pause,
-            title = if (paused) "Resume" else "Pause",
-            subtitle = if (paused) "Wine processes are paused" else "Pause all Wine processes",
+            title = if (paused) context.getString(R.string.session_drawer_resume) else context.getString(R.string.session_drawer_pause),
+            subtitle = if (paused) context.getString(R.string.session_drawer_wine_processes_paused) else context.getString(R.string.session_drawer_pause_all_wine_processes),
             iconRes = if (paused) R.drawable.icon_play else R.drawable.icon_pause,
             active = paused,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_pip_mode,
-            title = "Picture in Picture",
-            subtitle = "Shrink the game into a floating window",
+            title = context.getString(R.string.session_drawer_picture_in_picture),
+            subtitle = context.getString(R.string.session_drawer_pip_subtitle),
             iconRes = R.drawable.ic_picture_in_picture_alt,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_task_manager,
-            title = "Task Manager",
-            subtitle = "Inspect and manage running processes",
+            title = context.getString(R.string.session_task_title),
+            subtitle = context.getString(R.string.session_drawer_task_manager_subtitle),
             iconRes = R.drawable.icon_task_manager,
         ),
     )
@@ -137,8 +140,8 @@ fun buildXServerDrawerState(
     if (showMagnifier) {
         items += XServerDrawerItem(
             itemId = R.id.main_menu_magnifier,
-            title = "Magnifier",
-            subtitle = "Zoom into the display",
+            title = context.getString(R.string.session_drawer_magnifier),
+            subtitle = context.getString(R.string.session_drawer_magnifier_subtitle),
             iconRes = R.drawable.icon_magnifier,
         )
     }
@@ -146,16 +149,16 @@ fun buildXServerDrawerState(
     if (showLogs) {
         items += XServerDrawerItem(
             itemId = R.id.main_menu_logs,
-            title = "Logs",
-            subtitle = "Open Wine and Box64 logs",
+            title = context.getString(R.string.session_drawer_logs),
+            subtitle = context.getString(R.string.session_drawer_logs_subtitle),
             iconRes = R.drawable.icon_debug,
         )
     }
 
     items += XServerDrawerItem(
         itemId = R.id.main_menu_exit,
-        title = "Exit",
-        subtitle = "Close the running session",
+        title = context.getString(R.string.common_ui_exit),
+        subtitle = context.getString(R.string.session_drawer_exit_subtitle),
         iconRes = R.drawable.icon_exit,
     )
 
@@ -283,7 +286,7 @@ private fun XServerDrawerRow(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "ON",
+                    text = stringResource(R.string.common_ui_on).uppercase(),
                     color = accent,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold
