@@ -2314,9 +2314,7 @@ public class XServerDisplayActivity extends AppCompatActivity {
 
             guestProgramLauncherComponent.setGuestExecutable(guestExecutable);
 
-            envVars.putAll(container.getEnvVars());
-
-            if (shortcut != null) envVars.putAll(getShortcutSetting("envVars", container.getEnvVars()));
+            envVars.putAll(shortcut != null ? getShortcutSetting("envVars", container.getEnvVars()) : container.getEnvVars());
 
             if (!envVars.has("WINEESYNC")) {
                 envVars.put("WINEESYNC", "1");
