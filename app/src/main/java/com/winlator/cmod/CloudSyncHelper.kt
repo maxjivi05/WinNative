@@ -15,6 +15,8 @@ import timber.log.Timber
 object CloudSyncHelper {
     @JvmStatic
     fun forceDownloadOnContainerSwap(context: Context, shortcut: Shortcut): Boolean {
+        if (!CloudSaveSettings.areCloudSavesEnabled(context, shortcut)) return false
+
         val forceFlag = shortcut.getExtra("cloud_force_download")
         if (forceFlag.isEmpty()) return false
 
@@ -138,6 +140,7 @@ object CloudSyncHelper {
      */
     @JvmStatic
     fun cloudSavesDiffer(context: Context, shortcut: Shortcut): Boolean {
+        if (!CloudSaveSettings.areCloudSavesEnabled(context, shortcut)) return false
         if (!isStoreGame(shortcut) || !hasLocalCloudSaves(context, shortcut)) return false
 
         return runBlocking {
@@ -172,6 +175,8 @@ object CloudSyncHelper {
      */
     @JvmStatic
     fun downloadCloudSaves(context: Context, shortcut: Shortcut): Boolean {
+        if (!CloudSaveSettings.areCloudSavesEnabled(context, shortcut)) return false
+
         val result = runBlocking {
             when (shortcut.getExtra("game_source")) {
                 "STEAM" -> forceSteamDownload(context, shortcut)

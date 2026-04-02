@@ -44,6 +44,7 @@ import com.winlator.cmod.core.ImageUtils;
 import com.winlator.cmod.core.PreloaderDialog;
 import com.winlator.cmod.container.ContainerManager;
 import com.winlator.cmod.container.Shortcut;
+import com.winlator.cmod.google.ContainerBackupManager;
 import com.winlator.cmod.core.WineThemeManager;
 import com.winlator.cmod.google.GoogleFragment;
 import com.winlator.cmod.xenvironment.ImageFsInstaller;
@@ -410,6 +411,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             ImageUtils.save(bitmap, userWallpaperFile, Bitmap.CompressFormat.PNG, 100);
         } else if (requestCode == 4101) {
             com.winlator.cmod.google.CloudSyncManager.INSTANCE.onSavedGamesPermissionResult(this);
+        } else if (requestCode == ContainerBackupManager.REQUEST_CODE_DRIVE_AUTH) {
+            ContainerBackupManager.onDriveAuthResult(this, resultCode);
         }
     }
 

@@ -146,6 +146,10 @@ object PrefManager {
         get() = getBoolean("use_single_download_folder", true)
         set(value) { setBoolean("use_single_download_folder", value) }
 
+    var globalCloudSavesEnabled: Boolean
+        get() = getBoolean("global_cloud_saves_enabled", true)
+        set(value) { setBoolean("global_cloud_saves_enabled", value) }
+
     var defaultDownloadFolder: String
         get() = getString("default_download_folder", "")
         set(value) { setString("default_download_folder", value) }

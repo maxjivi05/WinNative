@@ -73,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.focusProperties
@@ -1841,6 +1842,253 @@ class UnifiedActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun CloudSaveToggleCard(
+        title: String,
+        subtitle: String,
+        icon: ImageVector,
+        checked: Boolean,
+        enabled: Boolean,
+        onCheckedChange: (Boolean) -> Unit,
+    ) {
+        val effectiveAlpha = if (enabled) 1f else 0.52f
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(),
+            shape = RoundedCornerShape(12.dp),
+            color = SurfaceDark.copy(alpha = effectiveAlpha),
+            border = BorderStroke(1.dp, CardBorder.copy(alpha = if (enabled) 1f else 0.55f)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(SurfaceDark.copy(alpha = effectiveAlpha)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = Accent.copy(alpha = effectiveAlpha),
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+                Spacer(Modifier.width(13.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        color = TextPrimary.copy(alpha = effectiveAlpha),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = subtitle,
+                        color = TextSecondary.copy(alpha = effectiveAlpha),
+                        fontSize = 11.sp,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = checked,
+                    onCheckedChange = onCheckedChange,
+                    enabled = enabled,
+                    modifier = Modifier.scale(0.78f),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Accent,
+                        uncheckedThumbColor = TextSecondary.copy(alpha = 0.6f),
+                        uncheckedTrackColor = SurfaceDark,
+                        uncheckedBorderColor = Color.Transparent,
+                        checkedBorderColor = Color.Transparent,
+                        disabledCheckedThumbColor = Color.White.copy(alpha = 0.75f),
+                        disabledCheckedTrackColor = Accent.copy(alpha = 0.42f),
+                        disabledUncheckedThumbColor = TextSecondary.copy(alpha = 0.45f),
+                        disabledUncheckedTrackColor = SurfaceDark.copy(alpha = 0.8f),
+                        disabledUncheckedBorderColor = Color.Transparent,
+                        disabledCheckedBorderColor = Color.Transparent,
+                    ),
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun CloudSaveControlsSection(
+        shortcut: Shortcut?,
+        gameSource: GameSaveBackupManager.GameSource,
+        gameId: String,
+        gameName: String,
+        onBack: () -> Unit,
+    ) {
+        val context = LocalContext.current
+        val scope = rememberCoroutineScope()
+
+        var isWorking by remember { mutableStateOf(false) }
+        var statusMessage by remember { mutableStateOf<String?>(null) }
+        var cloudEnabled by remember(shortcut?.file?.absolutePath) {
+            mutableStateOf(CloudSaveSettings.areCloudSavesEnabled(context, shortcut))
+        }
+        var googleEnabled by remember(shortcut?.file?.absolutePath) {
+            mutableStateOf(CloudSaveSettings.areGoogleCloudSavesEnabled(context, shortcut))
+        }
+
+        val canOverridePerGame = shortcut != null
+        val canRunGoogleActions = shortcut != null && googleEnabled && !isWorking
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (statusMessage != null) {
+                Text(
+                    text = statusMessage!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+            }
+
+            if (isWorking) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Accent,
+                    trackColor = CardBorder,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CompactActionButton(
+                    icon = Icons.Default.CloudUpload,
+                    label = stringResource(R.string.cloud_saves_backup),
+                    modifier = Modifier.weight(1f),
+                    enabled = canRunGoogleActions,
+                    onClick = {
+                        isWorking = true
+                        statusMessage = context.getString(R.string.cloud_saves_backing_up)
+                        scope.launch {
+                            val result = GameSaveBackupManager.backupToGoogle(
+                                this@UnifiedActivity,
+                                gameSource,
+                                gameId,
+                                gameName,
+                            )
+                            isWorking = false
+                            statusMessage = result.message
+                        }
+                    },
+                )
+                CompactActionButton(
+                    icon = Icons.Default.CloudDownload,
+                    label = stringResource(R.string.cloud_saves_restore),
+                    modifier = Modifier.weight(1f),
+                    enabled = canRunGoogleActions,
+                    onClick = {
+                        isWorking = true
+                        statusMessage = context.getString(R.string.cloud_saves_restoring)
+                        scope.launch {
+                            val result = GameSaveBackupManager.restoreFromGoogle(
+                                this@UnifiedActivity,
+                                gameSource,
+                                gameId,
+                                gameName,
+                            )
+                            isWorking = false
+                            statusMessage = result.message
+                        }
+                    },
+                )
+            }
+
+            if (!googleEnabled) {
+                Text(
+                    text = stringResource(R.string.cloud_saves_google_disabled_message),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+            } else if (shortcut == null) {
+                Text(
+                    text = stringResource(R.string.cloud_saves_per_game_requires_shortcut),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    CloudSaveToggleCard(
+                        title = stringResource(R.string.cloud_saves_title),
+                        subtitle = stringResource(R.string.cloud_saves_game_summary_global),
+                        icon = Icons.Default.CloudSync,
+                        checked = cloudEnabled,
+                        enabled = canOverridePerGame,
+                        onCheckedChange = { enabled ->
+                            shortcut?.let {
+                                CloudSaveSettings.setPerGameCloudSavesEnabled(context, it, enabled)
+                                cloudEnabled = CloudSaveSettings.areCloudSavesEnabled(context, it)
+                                googleEnabled = CloudSaveSettings.areGoogleCloudSavesEnabled(context, it)
+                            }
+                        },
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    CloudSaveToggleCard(
+                        title = stringResource(R.string.google_cloud_saves_title),
+                        subtitle = stringResource(R.string.google_cloud_saves_summary),
+                        icon = Icons.Default.Backup,
+                        checked = googleEnabled,
+                        enabled = canOverridePerGame && cloudEnabled,
+                        onCheckedChange = { enabled ->
+                            shortcut?.let {
+                                CloudSaveSettings.setPerGameGoogleCloudSavesEnabled(context, it, enabled)
+                                googleEnabled = CloudSaveSettings.areGoogleCloudSavesEnabled(context, it)
+                            }
+                        },
+                    )
+                }
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                color = SurfaceDark,
+                border = BorderStroke(1.dp, CardBorder),
+            ) {
+                TextButton(
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                Icon(Icons.Default.ArrowBack, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.common_ui_back), color = TextSecondary)
+                }
+            }
+        }
+    }
+
+    @Composable
     private fun GameSettingsInfoCard(
         message: String,
         accentColor: Color = Accent,
@@ -2094,6 +2342,10 @@ class UnifiedActivity : ComponentActivity() {
             }
         }
 
+        val gameShortcut = remember(app.id, app.name, isCustom, isEpic, epicId) {
+            findLibraryShortcutForGame(ContainerManager(context), app, isCustom, isEpic, epicId)
+        }
+
         GameSettingsDialogFrame(
             title = app.name,
             onDismissRequest = onDismissRequest,
@@ -2144,6 +2396,16 @@ class UnifiedActivity : ComponentActivity() {
                             },
                         ),
                         GameSettingsActionItem(
+                            title = stringResource(R.string.saves_import_export_title),
+                            icon = Icons.Default.Save,
+                            onClick = { currentTab = GameSettingsScreen.Saves },
+                        ),
+                        GameSettingsActionItem(
+                            title = stringResource(R.string.cloud_saves_title),
+                            icon = Icons.Default.CloudSync,
+                            onClick = { currentTab = GameSettingsScreen.CloudSaves },
+                        ),
+                        GameSettingsActionItem(
                             title = stringResource(R.string.common_ui_shortcut),
                             icon = Icons.Default.Home,
                             onClick = {
@@ -2173,16 +2435,6 @@ class UnifiedActivity : ComponentActivity() {
                                     ).show()
                                 }
                             },
-                        ),
-                        GameSettingsActionItem(
-                            title = stringResource(R.string.saves_import_export_title),
-                            icon = Icons.Default.Save,
-                            onClick = { currentTab = GameSettingsScreen.Saves },
-                        ),
-                        GameSettingsActionItem(
-                            title = stringResource(R.string.cloud_saves_title),
-                            icon = Icons.Default.CloudSync,
-                            onClick = { currentTab = GameSettingsScreen.CloudSaves },
                         ),
                         GameSettingsActionItem(
                             title = if (isCustom) stringResource(R.string.common_ui_remove) else stringResource(R.string.common_ui_uninstall),
@@ -2222,74 +2474,20 @@ class UnifiedActivity : ComponentActivity() {
                 }
 
                 GameSettingsScreen.CloudSaves -> {
-                    var isWorking by remember { mutableStateOf(false) }
-                    var statusMessage by remember { mutableStateOf<String?>(null) }
-
-                    if (statusMessage != null) {
-                        Text(
-                            text = statusMessage!!,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
-                        )
-                    }
-                    if (isWorking) {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                            color = Accent,
-                            trackColor = CardBorder,
-                        )
-                    }
-
                     val gameSource = when {
                         isEpic -> GameSaveBackupManager.GameSource.EPIC
                         else -> GameSaveBackupManager.GameSource.STEAM
                     }
                     val gameIdStr = if (isEpic) epicId.toString() else app.id.toString()
-
-                    GameSettingsActionGrid(
-                        actions = listOf(
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_backup),
-                                icon = Icons.Default.CloudUpload,
-                                onClick = {
-                                    if (!isWorking) {
-                                        isWorking = true
-                                        statusMessage = context.getString(R.string.cloud_saves_backing_up)
-                                        scope.launch {
-                                            val result = GameSaveBackupManager.backupToGoogle(
-                                                this@UnifiedActivity, gameSource, gameIdStr, app.name,
-                                            )
-                                            isWorking = false
-                                            statusMessage = result.message
-                                        }
-                                    }
-                                },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_restore),
-                                icon = Icons.Default.CloudDownload,
-                                onClick = {
-                                    if (!isWorking) {
-                                        isWorking = true
-                                        statusMessage = context.getString(R.string.cloud_saves_restoring)
-                                        scope.launch {
-                                            val result = GameSaveBackupManager.restoreFromGoogle(
-                                                this@UnifiedActivity, gameSource, gameIdStr, app.name,
-                                            )
-                                            isWorking = false
-                                            statusMessage = result.message
-                                        }
-                                    }
-                                },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.common_ui_back),
-                                icon = Icons.Default.ArrowBack,
-                                onClick = { currentTab = GameSettingsScreen.Menu },
-                            ),
-                        ),
-                    )
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        CloudSaveControlsSection(
+                            shortcut = gameShortcut,
+                            gameSource = gameSource,
+                            gameId = gameIdStr,
+                            gameName = app.name,
+                            onBack = { currentTab = GameSettingsScreen.Menu },
+                        )
+                    }
                 }
 
                 GameSettingsScreen.Uninstall -> {
@@ -2342,6 +2540,11 @@ class UnifiedActivity : ComponentActivity() {
         val context = LocalContext.current
         var currentTab by remember { mutableStateOf(GameSettingsScreen.Menu) }
         val scope = rememberCoroutineScope()
+        val gameShortcut = remember(app.id) {
+            ContainerManager(context).loadShortcuts().find {
+                it.getExtra("game_source") == "GOG" && it.getExtra("gog_id") == app.id
+            }
+        }
 
         GameSettingsDialogFrame(
             title = app.title,
@@ -2377,6 +2580,16 @@ class UnifiedActivity : ComponentActivity() {
                                 },
                             ),
                             GameSettingsActionItem(
+                                title = stringResource(R.string.saves_import_export_title),
+                                icon = Icons.Default.Save,
+                                onClick = { currentTab = GameSettingsScreen.Saves },
+                            ),
+                            GameSettingsActionItem(
+                                title = stringResource(R.string.cloud_saves_title),
+                                icon = Icons.Default.CloudSync,
+                                onClick = { currentTab = GameSettingsScreen.CloudSaves },
+                            ),
+                            GameSettingsActionItem(
                                 title = stringResource(R.string.common_ui_shortcut),
                                 icon = Icons.Default.Home,
                                 onClick = {
@@ -2400,16 +2613,6 @@ class UnifiedActivity : ComponentActivity() {
                                         ).show()
                                     }
                                 },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.saves_import_export_title),
-                                icon = Icons.Default.Save,
-                                onClick = { currentTab = GameSettingsScreen.Saves },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_title),
-                                icon = Icons.Default.CloudSync,
-                                onClick = { currentTab = GameSettingsScreen.CloudSaves },
                             ),
                             GameSettingsActionItem(
                                 title = stringResource(R.string.common_ui_uninstall),
@@ -2448,74 +2651,15 @@ class UnifiedActivity : ComponentActivity() {
                 }
 
                 GameSettingsScreen.CloudSaves -> {
-                    var isWorking by remember { mutableStateOf(false) }
-                    var statusMessage by remember { mutableStateOf<String?>(null) }
-
-                    if (statusMessage != null) {
-                        Text(
-                            text = statusMessage!!,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        CloudSaveControlsSection(
+                            shortcut = gameShortcut,
+                            gameSource = GameSaveBackupManager.GameSource.GOG,
+                            gameId = app.id,
+                            gameName = app.title,
+                            onBack = { currentTab = GameSettingsScreen.Menu },
                         )
                     }
-                    if (isWorking) {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                            color = Accent,
-                            trackColor = CardBorder,
-                        )
-                    }
-
-                    GameSettingsActionGrid(
-                        actions = listOf(
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_backup),
-                                icon = Icons.Default.CloudUpload,
-                                onClick = {
-                                    if (!isWorking) {
-                                        isWorking = true
-                                        statusMessage = context.getString(R.string.cloud_saves_backing_up)
-                                        scope.launch {
-                                            val result = GameSaveBackupManager.backupToGoogle(
-                                                this@UnifiedActivity,
-                                                GameSaveBackupManager.GameSource.GOG,
-                                                app.id,
-                                                app.title,
-                                            )
-                                            isWorking = false
-                                            statusMessage = result.message
-                                        }
-                                    }
-                                },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_restore),
-                                icon = Icons.Default.CloudDownload,
-                                onClick = {
-                                    if (!isWorking) {
-                                        isWorking = true
-                                        statusMessage = context.getString(R.string.cloud_saves_restoring)
-                                        scope.launch {
-                                            val result = GameSaveBackupManager.restoreFromGoogle(
-                                                this@UnifiedActivity,
-                                                GameSaveBackupManager.GameSource.GOG,
-                                                app.id,
-                                                app.title,
-                                            )
-                                            isWorking = false
-                                            statusMessage = result.message
-                                        }
-                                    }
-                                },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.common_ui_back),
-                                icon = Icons.Default.ArrowBack,
-                                onClick = { currentTab = GameSettingsScreen.Menu },
-                            ),
-                        ),
-                    )
                 }
 
                 GameSettingsScreen.Uninstall -> {
@@ -2611,6 +2755,23 @@ class UnifiedActivity : ComponentActivity() {
             isEpic -> "Epic Games"
             isCustom -> "Custom"
             else -> "Steam"
+        }
+        val detailShortcut = remember(app.id, app.name, gogGame?.id, isCustom, isEpic, epicId) {
+            val containerManager = ContainerManager(context)
+            when {
+                isGog -> containerManager.loadShortcuts().find {
+                    it.getExtra("game_source") == "GOG" && it.getExtra("gog_id") == gogGame!!.id
+                }
+                isCustom -> containerManager.loadShortcuts().find {
+                    it.getExtra("game_source") == "CUSTOM" && (it.getExtra("custom_name") == app.name || it.name == app.name)
+                }
+                isEpic -> containerManager.loadShortcuts().find {
+                    it.getExtra("game_source") == "EPIC" && it.getExtra("app_id") == epicId.toString()
+                }
+                else -> containerManager.loadShortcuts().find {
+                    it.getExtra("app_id") == app.id.toString()
+                }
+            }
         }
 
         // Install path
@@ -2991,20 +3152,17 @@ class UnifiedActivity : ComponentActivity() {
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         ) {
-                                            if (isSteam) {
-                                                CompactActionButton(
-                                                    icon = Icons.Default.Extension,
-                                                    label = "Workshop",
-                                                    modifier = Modifier.weight(1f),
-                                                    onClick = { showWorkshopDialog = true },
-                                                )
-                                            }
-
                                             CompactActionButton(
                                                 icon = Icons.Default.Save,
                                                 label = stringResource(R.string.saves_import_export_title),
                                                 modifier = Modifier.weight(1f),
                                                 onClick = { currentScreen = LibraryDetailScreen.Saves },
+                                            )
+                                            CompactActionButton(
+                                                icon = Icons.Default.CloudSync,
+                                                label = stringResource(R.string.cloud_saves_title),
+                                                modifier = Modifier.weight(1f),
+                                                onClick = { currentScreen = LibraryDetailScreen.CloudSaves },
                                             )
                                         }
 
@@ -3012,12 +3170,16 @@ class UnifiedActivity : ComponentActivity() {
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         ) {
-                                            CompactActionButton(
-                                                icon = Icons.Default.CloudSync,
-                                                label = stringResource(R.string.cloud_saves_title),
-                                                modifier = Modifier.weight(1f),
-                                                onClick = { currentScreen = LibraryDetailScreen.CloudSaves },
-                                            )
+                                            if (isSteam) {
+                                                CompactActionButton(
+                                                    icon = Icons.Default.Extension,
+                                                    label = "Workshop",
+                                                    modifier = Modifier.weight(1f),
+                                                    onClick = { showWorkshopDialog = true },
+                                                )
+                                            } else {
+                                                Spacer(modifier = Modifier.weight(1f))
+                                            }
 
                                             CompactActionButton(
                                                 icon = Icons.Default.Delete,
@@ -3117,24 +3279,6 @@ class UnifiedActivity : ComponentActivity() {
                                         letterSpacing = 1.1.sp,
                                     )
 
-                                    var isWorking by remember { mutableStateOf(false) }
-                                    var statusMessage by remember { mutableStateOf<String?>(null) }
-
-                                    if (statusMessage != null) {
-                                        Text(
-                                            text = statusMessage!!,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = TextSecondary,
-                                        )
-                                    }
-                                    if (isWorking) {
-                                        LinearProgressIndicator(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            color = Accent,
-                                            trackColor = CardBorder,
-                                        )
-                                    }
-
                                     val detailGameSource = when {
                                         isGog -> GameSaveBackupManager.GameSource.GOG
                                         isEpic -> GameSaveBackupManager.GameSource.EPIC
@@ -3146,57 +3290,13 @@ class UnifiedActivity : ComponentActivity() {
                                         else -> app.id.toString()
                                     }
 
-                                    GameSettingsActionGrid(
-                                        actions = listOf(
-                                            GameSettingsActionItem(
-                                                title = stringResource(R.string.cloud_saves_backup),
-                                                icon = Icons.Default.CloudUpload,
-                                                onClick = {
-                                                    if (!isWorking) {
-                                                        isWorking = true
-                                                        statusMessage = context.getString(R.string.cloud_saves_backing_up)
-                                                        scope.launch {
-                                                            val result = GameSaveBackupManager.backupToGoogle(
-                                                                this@UnifiedActivity,
-                                                                detailGameSource,
-                                                                detailGameId,
-                                                                app.name,
-                                                            )
-                                                            isWorking = false
-                                                            statusMessage = result.message
-                                                        }
-                                                    }
-                                                },
-                                            ),
-                                            GameSettingsActionItem(
-                                                title = stringResource(R.string.cloud_saves_restore),
-                                                icon = Icons.Default.CloudDownload,
-                                                onClick = {
-                                                    if (!isWorking) {
-                                                        isWorking = true
-                                                        statusMessage = context.getString(R.string.cloud_saves_restoring)
-                                                        scope.launch {
-                                                            val result = GameSaveBackupManager.restoreFromGoogle(
-                                                                this@UnifiedActivity,
-                                                                detailGameSource,
-                                                                detailGameId,
-                                                                app.name,
-                                                            )
-                                                            isWorking = false
-                                                            statusMessage = result.message
-                                                        }
-                                                    }
-                                                },
-                                            ),
-                                        ),
+                                    CloudSaveControlsSection(
+                                        shortcut = detailShortcut,
+                                        gameSource = detailGameSource,
+                                        gameId = detailGameId,
+                                        gameName = app.name,
+                                        onBack = { currentScreen = LibraryDetailScreen.Main },
                                     )
-
-                                    Spacer(Modifier.weight(1f))
-                                    TextButton(onClick = { currentScreen = LibraryDetailScreen.Main }) {
-                                        Icon(Icons.Default.ArrowBack, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(stringResource(R.string.common_ui_back), color = TextSecondary)
-                                    }
                                 }
                             }
 
@@ -3510,6 +3610,7 @@ class UnifiedActivity : ComponentActivity() {
         tint: Color = TextPrimary,
         bgColor: Color = SurfaceDark,
         modifier: Modifier = Modifier,
+        enabled: Boolean = true,
         height: Dp = 36.dp,
         fontSize: TextUnit = 13.sp,
         onClick: () -> Unit,
@@ -3522,10 +3623,11 @@ class UnifiedActivity : ComponentActivity() {
             label = "btnScale",
         )
         val glowAlpha by animateFloatAsState(
-            targetValue = if (isPressed) 0.18f else 0f,
+            targetValue = if (enabled && isPressed) 0.18f else 0f,
             animationSpec = tween(durationMillis = 120),
             label = "btnGlow",
         )
+        val contentAlpha = if (enabled) 1f else 0.45f
         Surface(
             modifier = modifier
                 .fillMaxWidth()
@@ -3538,6 +3640,7 @@ class UnifiedActivity : ComponentActivity() {
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,
+                    enabled = enabled,
                     onClick = onClick,
                 ),
             color = bgColor,
@@ -3549,9 +3652,9 @@ class UnifiedActivity : ComponentActivity() {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
             ) {
-                Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = tint)
+                Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = tint.copy(alpha = contentAlpha))
                 Spacer(Modifier.width(6.dp))
-                Text(label, color = tint, fontSize = fontSize, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(label, color = tint.copy(alpha = contentAlpha), fontSize = fontSize, fontWeight = FontWeight.SemiBold, maxLines = 1)
             }
         }
     }
@@ -6076,8 +6179,10 @@ class UnifiedActivity : ComponentActivity() {
 
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
             val gogAppId = "GOG_${app.id}"
-            withContext(kotlinx.coroutines.Dispatchers.IO) {
-                GOGService.syncCloudSaves(context, gogAppId)
+            if (CloudSaveSettings.areCloudSavesEnabled(context, existingShortcut)) {
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    GOGService.syncCloudSaves(context, gogAppId)
+                }
             }
 
             if (existingShortcut != null) {

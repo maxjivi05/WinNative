@@ -47,6 +47,7 @@ object GameSaveBackupManager {
 
     private const val TAG = "GameSaveBackup"
     private const val DRIVE_FOLDER_NAME = "WinNative"
+    private const val DRIVE_GAMES_FOLDER_NAME = "Games"
     private const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
     private const val PREFS_NAME = "google_store_login_sync"
     private const val KEY_GOOGLE_SYNC_ENABLED = "google_sync_enabled"
@@ -132,9 +133,9 @@ object GameSaveBackupManager {
 
         // Step 3: Upload to Google Drive
         val fileName = buildDriveFileName(gameSource, gameId, gameName)
-        val folderId = getOrCreateDriveFolder(accessToken)
+        val folderId = getOrCreateGamesDriveFolder(accessToken)
         if (folderId == null) {
-            return BackupResult(false, "Failed to create WinNative folder on Google Drive.")
+            return BackupResult(false, "Failed to create WinNative/Games folder on Google Drive.")
         }
 
         val existingFileId = findDriveFile(accessToken, folderId, fileName)
@@ -191,8 +192,8 @@ object GameSaveBackupManager {
             }
 
             val fileName = buildDriveFileName(gameSource, gameId, gameName)
-            val folderId = getOrCreateDriveFolder(accessToken)
-                ?: return@withContext BackupResult(false, "Failed to create WinNative folder on Google Drive.")
+            val folderId = getOrCreateGamesDriveFolder(accessToken)
+                ?: return@withContext BackupResult(false, "Failed to create WinNative/Games folder on Google Drive.")
 
             val existingFileId = findDriveFile(accessToken, folderId, fileName)
             val uploaded = if (existingFileId != null) {
@@ -214,7 +215,7 @@ object GameSaveBackupManager {
     }
 
     fun isAutoBackupEnabled(context: Context): Boolean =
-        prefs(context).getBoolean("cloud_sync_auto_backup", false)
+        prefs(context).getBoolean("cloud_sync_auto_backup", true)
 
     /**
      * Triggers the Google Drive account selection / authorization consent flow.
@@ -269,9 +270,9 @@ object GameSaveBackupManager {
         val fileName = buildDriveFileName(gameSource, gameId, gameName)
 
         // Step 1: Find and download from Google Drive
-        val folderId = getOrCreateDriveFolder(accessToken)
+        val folderId = getOrCreateGamesDriveFolder(accessToken)
         if (folderId == null) {
-            return BackupResult(false, "Failed to access WinNative folder on Google Drive.")
+            return BackupResult(false, "Failed to access WinNative/Games folder on Google Drive.")
         }
 
         val fileId = findDriveFile(accessToken, folderId, fileName)
@@ -601,6 +602,51 @@ object GameSaveBackupManager {
                 return folderId
             }
             Timber.tag(TAG).e("Failed to create Drive folder: %d %s", response.code, response.message)
+        }
+        return null
+    }
+
+    private fun getOrCreateGamesDriveFolder(accessToken: String): String? {
+        val winNativeFolderId = getOrCreateDriveFolder(accessToken) ?: return null
+        return getOrCreateDriveSubfolder(accessToken, winNativeFolderId, DRIVE_GAMES_FOLDER_NAME)
+    }
+
+    private fun getOrCreateDriveSubfolder(accessToken: String, parentFolderId: String, folderName: String): String? {
+        val query = "name='$folderName' and mimeType='application/vnd.google-apps.folder' and '$parentFolderId' in parents and trashed=false"
+        val searchRequest = Request.Builder()
+            .url("https://www.googleapis.com/drive/v3/files?q=${java.net.URLEncoder.encode(query, "UTF-8")}&fields=files(id,name)")
+            .addHeader("Authorization", "Bearer $accessToken")
+            .get()
+            .build()
+
+        httpClient.newCall(searchRequest).execute().use { response ->
+            if (response.isSuccessful) {
+                val json = JSONObject(response.body?.string() ?: "{}")
+                val files = json.optJSONArray("files")
+                if (files != null && files.length() > 0) {
+                    return files.getJSONObject(0).getString("id")
+                }
+            }
+        }
+
+        val metadata = JSONObject().apply {
+            put("name", folderName)
+            put("mimeType", "application/vnd.google-apps.folder")
+            put("parents", org.json.JSONArray().put(parentFolderId))
+        }
+
+        val createRequest = Request.Builder()
+            .url("https://www.googleapis.com/drive/v3/files?fields=id")
+            .addHeader("Authorization", "Bearer $accessToken")
+            .post(metadata.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        httpClient.newCall(createRequest).execute().use { response ->
+            if (response.isSuccessful) {
+                val json = JSONObject(response.body?.string() ?: "{}")
+                return json.getString("id")
+            }
+            Timber.tag(TAG).e("Failed to create Drive subfolder %s: %d %s", folderName, response.code, response.message)
         }
         return null
     }

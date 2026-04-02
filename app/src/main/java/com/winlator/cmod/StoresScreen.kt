@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -90,6 +91,7 @@ data class StoreState(
     val isSteamLoggedIn: Boolean = false,
     val isEpicLoggedIn: Boolean = false,
     val isGogLoggedIn: Boolean = false,
+    val cloudSavesEnabled: Boolean = true,
     val wifiOnly: Boolean = true,
     val sharedFolder: Boolean = true,
     val downloadSpeed: Int = 24,
@@ -120,6 +122,7 @@ fun StoresScreen(
     onEpicSignOut: () -> Unit,
     onGogSignIn: () -> Unit,
     onGogSignOut: () -> Unit,
+    onCloudSavesChanged: (Boolean) -> Unit,
     onWifiOnlyChanged: (Boolean) -> Unit,
     onSharedFolderChanged: (Boolean) -> Unit,
     onDownloadSpeedChanged: (Int) -> Unit,
@@ -175,6 +178,14 @@ fun StoresScreen(
             isComingSoon = true,
             onSignIn = {},
             onSignOut = {},
+        )
+
+        SettingsToggleCard(
+            title = stringResource(R.string.cloud_saves_title),
+            subtitle = stringResource(R.string.cloud_saves_global_summary),
+            icon = Icons.Filled.CloudSync,
+            checked = state.cloudSavesEnabled,
+            onCheckedChange = onCloudSavesChanged,
         )
 
         SectionLabel("Download Settings", modifier = Modifier.padding(top = 8.dp))

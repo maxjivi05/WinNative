@@ -1,5 +1,7 @@
 package com.winlator.cmod;
 
+import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Rect;
@@ -31,6 +33,7 @@ import com.winlator.cmod.container.Shortcut;
 import com.winlator.cmod.contentdialog.ContentDialog;
 import com.winlator.cmod.contentdialog.StorageInfoDialog;
 import com.winlator.cmod.core.PreloaderDialog;
+import com.winlator.cmod.google.ContainerBackupManager;
 import com.winlator.cmod.xenvironment.ImageFs;
 
 import java.util.ArrayList;
@@ -267,10 +270,91 @@ public class ContainersFragment extends Fragment {
                     case R.id.container_info:
                         (new StorageInfoDialog(getActivity(), container)).show();
                         break;
+                    case R.id.container_backup_restore:
+                        showBackupRestoreMenu(container);
+                        break;
                 }
                 return true;
             });
             listItemMenu.show();
+        }
+
+        private void showBackupRestoreMenu(Container container) {
+            final Activity activity = getActivity();
+            final Context context = getContext();
+            if (activity == null || context == null) return;
+
+            CharSequence[] actions = new CharSequence[]{
+                    context.getString(R.string.common_ui_backup),
+                    context.getString(R.string.common_ui_restore)
+            };
+
+            new AlertDialog.Builder(context)
+                    .setTitle(R.string.containers_list_backup_restore)
+                    .setItems(actions, (dialog, which) -> {
+                        if (which == 0) {
+                            startContainerBackup(activity, container);
+                        } else if (which == 1) {
+                            startContainerRestore(activity, container);
+                        }
+                    })
+                    .show();
+        }
+
+        private void startContainerBackup(Activity activity, Container container) {
+            preloaderDialog.show("Backing up container...");
+            ContainerBackupManager.backupContainer(activity, container, result ->
+                    activity.runOnUiThread(() -> {
+                        preloaderDialog.close();
+                        Toast.makeText(activity, result.getMessage(), Toast.LENGTH_LONG).show();
+                    }));
+        }
+
+        private void startContainerRestore(Activity activity, Container container) {
+            preloaderDialog.show("Checking container backups...");
+            ContainerBackupManager.restoreContainer(activity, container, result ->
+                    activity.runOnUiThread(() -> {
+                        preloaderDialog.close();
+                        if (result.getRequiresSelection()) {
+                            showRestoreSelectionDialog(activity, container, result.getBackups());
+                        } else {
+                            Toast.makeText(activity, result.getMessage(), Toast.LENGTH_LONG).show();
+                            if (result.getSuccess()) loadContainersList();
+                        }
+                    }));
+        }
+
+        private void showRestoreSelectionDialog(Activity activity, Container container, List<ContainerBackupManager.BackupEntry> backups) {
+            final Context context = getContext();
+            if (context == null || backups == null || backups.isEmpty()) {
+                Toast.makeText(activity, "No container backups were found.", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            CharSequence[] names = new CharSequence[backups.size()];
+            for (int i = 0; i < backups.size(); i++) {
+                names[i] = backups.get(i).getName();
+            }
+
+            new AlertDialog.Builder(context)
+                    .setTitle(R.string.containers_list_select_backup)
+                    .setItems(names, (dialog, which) -> {
+                        ContainerBackupManager.BackupEntry selected = backups.get(which);
+                        preloaderDialog.show("Restoring container...");
+                        ContainerBackupManager.restoreContainerFromBackup(
+                                activity,
+                                container,
+                                selected.getId(),
+                                selected.getName(),
+                                result -> activity.runOnUiThread(() -> {
+                                    preloaderDialog.close();
+                                    Toast.makeText(activity, result.getMessage(), Toast.LENGTH_LONG).show();
+                                    if (result.getSuccess()) loadContainersList();
+                                })
+                        );
+                    })
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
         }
     }
 }

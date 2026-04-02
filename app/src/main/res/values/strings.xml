@@ -75,12 +75,14 @@
     <string name="common_ui_apply">Apply</string>
     <string name="common_ui_save">Save</string>
     <string name="common_ui_clone">Clone</string>
+    <string name="common_ui_backup">Backup</string>
     <string name="common_ui_properties">Properties</string>
     <string name="common_ui_store">Store</string>
     <string name="common_ui_library">Library</string>
     <string name="common_ui_downloads">Downloads</string>
     <string name="common_ui_import">Import</string>
     <string name="common_ui_sync">Sync</string>
+    <string name="common_ui_restore">Restore</string>
     <string name="common_ui_sign_in">Sign In</string>
     <string name="common_ui_submit">Submit</string>
     <string name="common_ui_coming_soon">Coming Soon</string>
@@ -194,6 +196,8 @@
     <string name="containers_list_duplicating">Duplicating Container…</string>
     <string name="containers_list_confirm_remove">Do you want to remove this container?</string>
     <string name="containers_list_confirm_duplicate">Do you want to duplicate this container?</string>
+    <string name="containers_list_backup_restore">Backup &amp; Restore</string>
+    <string name="containers_list_select_backup">Select Container Backup</string>
 
     <!-- Shortcuts > List -->
     <string name="shortcuts_list_confirm_remove">Do you want to remove this shortcut?</string>
@@ -900,6 +904,13 @@ Installed path:
     <string name="cloud_saves_title">Cloud Saves</string>
     <string name="cloud_saves_backup">Backup Cloud Save</string>
     <string name="cloud_saves_restore">Restore Cloud Save</string>
+    <string name="cloud_saves_global_summary">Automatically sync cloud saves from supported game stores.</string>
+    <string name="cloud_saves_game_summary">Use the game\'s normal cloud saves.</string>
+    <string name="cloud_saves_game_summary_global">Use the game\'s normal cloud saves.</string>
+    <string name="google_cloud_saves_title">Google Backups</string>
+    <string name="google_cloud_saves_summary">Backup this game\'s cloud saves.</string>
+    <string name="cloud_saves_per_game_requires_shortcut">Create this game\'s shortcut first to save per-game cloud settings. Until then, these toggles follow the global settings.</string>
+    <string name="cloud_saves_google_disabled_message">Enable Google Cloud Saves to back up or restore this game\'s cloud save.</string>
     <string name="cloud_saves_backing_up">Backing up cloud save\u2026</string>
     <string name="cloud_saves_restoring">Restoring cloud save\u2026</string>
 

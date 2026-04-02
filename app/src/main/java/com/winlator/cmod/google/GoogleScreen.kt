@@ -87,7 +87,7 @@ fun GoogleScreen() {
         context.getSharedPreferences("google_store_login_sync", Context.MODE_PRIVATE)
     }
     var autoBackupEnabled by remember {
-        mutableStateOf(autoBackupPrefs.getBoolean("cloud_sync_auto_backup", false))
+        mutableStateOf(autoBackupPrefs.getBoolean("cloud_sync_auto_backup", true))
     }
 
     fun refreshState() {
@@ -267,7 +267,7 @@ private fun AutoBackupCard(
             Spacer(Modifier.width(4.dp))
 
             Switch(
-                checked = enabled && googleSignedIn,
+                checked = enabled,
                 onCheckedChange = { onToggle(it) },
                 enabled = !busy,
                 modifier = Modifier.scale(0.78f),

@@ -157,7 +157,7 @@ fun WorkshopManagerDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "Steam Workshop",
+                        "Workshop",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f),
@@ -186,19 +186,6 @@ fun WorkshopManagerDialog(
                         singleLine = true,
                         enabled = !isSaving && !isLoading && !fetchFailed,
                     )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Start,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val summary = when {
-                        isLoading -> "Loading workshop items"
-                        fetchFailed -> (errorText ?: "Workshop items unavailable")
-                        else -> "$selectedCount of ${workshopItems.size} selected (${StorageUtils.formatBinarySize(selectedBytes)})"
-                    }
-                    Text(summary, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
 
                 Surface(
@@ -301,14 +288,39 @@ fun WorkshopManagerDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Button(
-                        enabled = !isSaving,
-                        onClick = onDismissRequest,
-                    ) {
-                        Text("Close")
+                    val summary = when {
+                        isLoading -> "Loading workshop items"
+                        fetchFailed -> (errorText ?: "Workshop items unavailable")
+                        else -> "$selectedCount of ${workshopItems.size} selected (${StorageUtils.formatBinarySize(selectedBytes)})"
                     }
 
                     Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.Start,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Button(
+                            enabled = !isSaving,
+                            onClick = onDismissRequest,
+                        ) {
+                            Text("Close")
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            summary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {

@@ -1026,7 +1026,7 @@ public class XServerDisplayActivity extends AppCompatActivity {
                     CloudSyncHelper.forceDownloadOnContainerSwap(this, shortcut);
 
                     // Cloud save sync on every store-game launch
-                    if (CloudSyncHelper.isStoreGame(shortcut)) {
+                    if (CloudSyncHelper.isStoreGame(shortcut) && CloudSaveSettings.areCloudSavesEnabled(this, shortcut)) {
                         if (!CloudSyncHelper.hasLocalCloudSaves(this, shortcut)) {
                             // First launch — download silently
                             preloaderDialog.showOnUiThread("Downloading Cloud Saves\u2026");
@@ -1601,6 +1601,11 @@ public class XServerDisplayActivity extends AppCompatActivity {
             return;
         }
 
+        if (!CloudSaveSettings.areCloudSavesEnabled(this, shortcut)) {
+            onComplete.run();
+            return;
+        }
+
         // Wrap onComplete to chain auto backup to Google Drive after store sync finishes
         Runnable afterStoreSync = () -> runAutoBackupIfEnabled(onComplete);
 
@@ -1629,6 +1634,11 @@ public class XServerDisplayActivity extends AppCompatActivity {
      */
     private void runAutoBackupIfEnabled(Runnable onComplete) {
         if (shortcut == null) {
+            onComplete.run();
+            return;
+        }
+
+        if (!CloudSaveSettings.areGoogleCloudSavesEnabled(this, shortcut)) {
             onComplete.run();
             return;
         }
