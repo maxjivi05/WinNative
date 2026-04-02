@@ -452,6 +452,13 @@ class InputControlsFragment(private val selectedProfileId: Int) : Fragment() {
         val padBot = (10 * dp).toInt()
         root.setPadding(padH, padTop, padH, padBot)
 
+        // Prevent keyboard glitch by ensuring EditText doesn't get focus
+        dialog.findViewById<View>(R.id.EditText).apply {
+            visibility = View.GONE
+            isFocusable = false
+            isFocusableInTouchMode = false
+        }
+
         val listView = dialog.findViewById<android.widget.ListView>(R.id.ListView)
         listView.layoutParams.width = ViewGroup.LayoutParams.WRAP_CONTENT
         listView.layoutParams.height = (220 * ctx.resources.displayMetrics.density).toInt()
@@ -474,8 +481,8 @@ class InputControlsFragment(private val selectedProfileId: Int) : Fragment() {
         listView.visibility = View.VISIBLE
         listView.setOnItemClickListener { _, _, position, _ ->
             adapter.select(position)
-            onProfileSelected(profiles[position])
             dialog.dismiss()
+            onProfileSelected(profiles[position])
         }
         dialog.setTitle(R.string.input_controls_editor_select_profile)
         dialog.show()
