@@ -2220,22 +2220,11 @@ class UnifiedActivity : ComponentActivity() {
 
                 GameSettingsScreen.CloudSaves -> {
                     var isWorking by remember { mutableStateOf(false) }
-                    var statusMessage by remember { mutableStateOf<String?>(null) }
-
-                    if (statusMessage != null) {
-                        Text(
-                            text = statusMessage!!,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
-                        )
+                    val shortcut = remember(app.id, epicId, isCustom, isEpic) {
+                        findLibraryShortcutForGame(ContainerManager(context), app, isCustom, isEpic, epicId)
                     }
-                    if (isWorking) {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                            color = Accent,
-                            trackColor = CardBorder,
-                        )
+                    var cloudSyncEnabled by remember(shortcut?.file?.absolutePath) {
+                        mutableStateOf(isShortcutCloudSyncEnabled(shortcut))
                     }
 
                     val gameSource = when {
@@ -2244,48 +2233,55 @@ class UnifiedActivity : ComponentActivity() {
                     }
                     val gameIdStr = if (isEpic) epicId.toString() else app.id.toString()
 
-                    GameSettingsActionGrid(
-                        actions = listOf(
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_backup),
-                                icon = Icons.Default.CloudUpload,
-                                onClick = {
-                                    if (!isWorking) {
-                                        isWorking = true
-                                        statusMessage = context.getString(R.string.cloud_saves_backing_up)
-                                        scope.launch {
-                                            val result = GameSaveBackupManager.backupToGoogle(
-                                                this@UnifiedActivity, gameSource, gameIdStr, app.name,
-                                            )
-                                            isWorking = false
-                                            statusMessage = result.message
-                                        }
-                                    }
+                    CloudSavesContent(
+                        isWorking = isWorking,
+                        cloudSyncEnabled = cloudSyncEnabled,
+                        onCloudSyncToggle = { enabled ->
+                            cloudSyncEnabled = enabled
+                            setShortcutCloudSyncEnabled(shortcut, enabled)
+                            android.widget.Toast.makeText(
+                                context,
+                                if (enabled) {
+                                    context.getString(R.string.cloud_sync_enabled_summary)
+                                } else {
+                                    context.getString(R.string.cloud_sync_disabled_summary)
                                 },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_restore),
-                                icon = Icons.Default.CloudDownload,
-                                onClick = {
-                                    if (!isWorking) {
-                                        isWorking = true
-                                        statusMessage = context.getString(R.string.cloud_saves_restoring)
-                                        scope.launch {
-                                            val result = GameSaveBackupManager.restoreFromGoogle(
-                                                this@UnifiedActivity, gameSource, gameIdStr, app.name,
-                                            )
-                                            isWorking = false
-                                            statusMessage = result.message
-                                        }
-                                    }
-                                },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.common_ui_back),
-                                icon = Icons.Default.ArrowBack,
-                                onClick = { currentTab = GameSettingsScreen.Menu },
-                            ),
-                        ),
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                        onBackup = {
+                            if (!isWorking) {
+                                isWorking = true
+                                scope.launch {
+                                    val result = GameSaveBackupManager.backupToGoogle(
+                                        this@UnifiedActivity, gameSource, gameIdStr, app.name,
+                                    )
+                                    isWorking = false
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        result.message,
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                        onRestore = {
+                            if (!isWorking) {
+                                isWorking = true
+                                scope.launch {
+                                    val result = GameSaveBackupManager.restoreFromGoogle(
+                                        this@UnifiedActivity, gameSource, gameIdStr, app.name,
+                                    )
+                                    isWorking = false
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        result.message,
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                        onBack = { currentTab = GameSettingsScreen.Menu },
                     )
                 }
 
@@ -2446,72 +2442,70 @@ class UnifiedActivity : ComponentActivity() {
 
                 GameSettingsScreen.CloudSaves -> {
                     var isWorking by remember { mutableStateOf(false) }
-                    var statusMessage by remember { mutableStateOf<String?>(null) }
-
-                    if (statusMessage != null) {
-                        Text(
-                            text = statusMessage!!,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
-                        )
+                    val shortcut = remember(app.id) {
+                        ContainerManager(context).loadShortcuts().find {
+                            it.getExtra("game_source") == "GOG" && it.getExtra("gog_id") == app.id
+                        }
                     }
-                    if (isWorking) {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                            color = Accent,
-                            trackColor = CardBorder,
-                        )
+                    var cloudSyncEnabled by remember(shortcut?.file?.absolutePath) {
+                        mutableStateOf(isShortcutCloudSyncEnabled(shortcut))
                     }
 
-                    GameSettingsActionGrid(
-                        actions = listOf(
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_backup),
-                                icon = Icons.Default.CloudUpload,
-                                onClick = {
-                                    if (!isWorking) {
-                                        isWorking = true
-                                        statusMessage = context.getString(R.string.cloud_saves_backing_up)
-                                        scope.launch {
-                                            val result = GameSaveBackupManager.backupToGoogle(
-                                                this@UnifiedActivity,
-                                                GameSaveBackupManager.GameSource.GOG,
-                                                app.id,
-                                                app.title,
-                                            )
-                                            isWorking = false
-                                            statusMessage = result.message
-                                        }
-                                    }
+                    CloudSavesContent(
+                        isWorking = isWorking,
+                        cloudSyncEnabled = cloudSyncEnabled,
+                        onCloudSyncToggle = { enabled ->
+                            cloudSyncEnabled = enabled
+                            setShortcutCloudSyncEnabled(shortcut, enabled)
+                            android.widget.Toast.makeText(
+                                context,
+                                if (enabled) {
+                                    context.getString(R.string.cloud_sync_enabled_summary)
+                                } else {
+                                    context.getString(R.string.cloud_sync_disabled_summary)
                                 },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.cloud_saves_restore),
-                                icon = Icons.Default.CloudDownload,
-                                onClick = {
-                                    if (!isWorking) {
-                                        isWorking = true
-                                        statusMessage = context.getString(R.string.cloud_saves_restoring)
-                                        scope.launch {
-                                            val result = GameSaveBackupManager.restoreFromGoogle(
-                                                this@UnifiedActivity,
-                                                GameSaveBackupManager.GameSource.GOG,
-                                                app.id,
-                                                app.title,
-                                            )
-                                            isWorking = false
-                                            statusMessage = result.message
-                                        }
-                                    }
-                                },
-                            ),
-                            GameSettingsActionItem(
-                                title = stringResource(R.string.common_ui_back),
-                                icon = Icons.Default.ArrowBack,
-                                onClick = { currentTab = GameSettingsScreen.Menu },
-                            ),
-                        ),
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                        onBackup = {
+                            if (!isWorking) {
+                                isWorking = true
+                                scope.launch {
+                                    val result = GameSaveBackupManager.backupToGoogle(
+                                        this@UnifiedActivity,
+                                        GameSaveBackupManager.GameSource.GOG,
+                                        app.id,
+                                        app.title,
+                                    )
+                                    isWorking = false
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        result.message,
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                        onRestore = {
+                            if (!isWorking) {
+                                isWorking = true
+                                scope.launch {
+                                    val result = GameSaveBackupManager.restoreFromGoogle(
+                                        this@UnifiedActivity,
+                                        GameSaveBackupManager.GameSource.GOG,
+                                        app.id,
+                                        app.title,
+                                    )
+                                    isWorking = false
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        result.message,
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                        onBack = { currentTab = GameSettingsScreen.Menu },
                     )
                 }
 
@@ -3089,101 +3083,87 @@ class UnifiedActivity : ComponentActivity() {
                             }
 
                             LibraryDetailScreen.CloudSaves -> {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(horizontal = 24.dp, vertical = 20.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                                ) {
-                                    Text(
-                                        stringResource(R.string.cloud_saves_title),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = TextSecondary,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 1.1.sp,
-                                    )
+                                var isWorking by remember { mutableStateOf(false) }
 
-                                    var isWorking by remember { mutableStateOf(false) }
-                                    var statusMessage by remember { mutableStateOf<String?>(null) }
-
-                                    if (statusMessage != null) {
-                                        Text(
-                                            text = statusMessage!!,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = TextSecondary,
-                                        )
-                                    }
-                                    if (isWorking) {
-                                        LinearProgressIndicator(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            color = Accent,
-                                            trackColor = CardBorder,
-                                        )
-                                    }
-
-                                    val detailGameSource = when {
-                                        isGog -> GameSaveBackupManager.GameSource.GOG
-                                        isEpic -> GameSaveBackupManager.GameSource.EPIC
-                                        else -> GameSaveBackupManager.GameSource.STEAM
-                                    }
-                                    val detailGameId = when {
-                                        isGog -> gogGame!!.id
-                                        isEpic -> epicId.toString()
-                                        else -> app.id.toString()
-                                    }
-
-                                    GameSettingsActionGrid(
-                                        actions = listOf(
-                                            GameSettingsActionItem(
-                                                title = stringResource(R.string.cloud_saves_backup),
-                                                icon = Icons.Default.CloudUpload,
-                                                onClick = {
-                                                    if (!isWorking) {
-                                                        isWorking = true
-                                                        statusMessage = context.getString(R.string.cloud_saves_backing_up)
-                                                        scope.launch {
-                                                            val result = GameSaveBackupManager.backupToGoogle(
-                                                                this@UnifiedActivity,
-                                                                detailGameSource,
-                                                                detailGameId,
-                                                                app.name,
-                                                            )
-                                                            isWorking = false
-                                                            statusMessage = result.message
-                                                        }
-                                                    }
-                                                },
-                                            ),
-                                            GameSettingsActionItem(
-                                                title = stringResource(R.string.cloud_saves_restore),
-                                                icon = Icons.Default.CloudDownload,
-                                                onClick = {
-                                                    if (!isWorking) {
-                                                        isWorking = true
-                                                        statusMessage = context.getString(R.string.cloud_saves_restoring)
-                                                        scope.launch {
-                                                            val result = GameSaveBackupManager.restoreFromGoogle(
-                                                                this@UnifiedActivity,
-                                                                detailGameSource,
-                                                                detailGameId,
-                                                                app.name,
-                                                            )
-                                                            isWorking = false
-                                                            statusMessage = result.message
-                                                        }
-                                                    }
-                                                },
-                                            ),
-                                        ),
-                                    )
-
-                                    Spacer(Modifier.weight(1f))
-                                    TextButton(onClick = { currentScreen = LibraryDetailScreen.Main }) {
-                                        Icon(Icons.Default.ArrowBack, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(stringResource(R.string.common_ui_back), color = TextSecondary)
+                                val detailGameSource = when {
+                                    isGog -> GameSaveBackupManager.GameSource.GOG
+                                    isEpic -> GameSaveBackupManager.GameSource.EPIC
+                                    else -> GameSaveBackupManager.GameSource.STEAM
+                                }
+                                val detailGameId = when {
+                                    isGog -> gogGame!!.id
+                                    isEpic -> epicId.toString()
+                                    else -> app.id.toString()
+                                }
+                                val detailShortcut = remember(app.id, gogGame?.id, epicId, isGog, isEpic, isCustom) {
+                                    val containerManager = ContainerManager(context)
+                                    when {
+                                        isGog -> containerManager.loadShortcuts().find {
+                                            it.getExtra("game_source") == "GOG" && it.getExtra("gog_id") == gogGame!!.id
+                                        }
+                                        else -> findLibraryShortcutForGame(containerManager, app, isCustom, isEpic, epicId)
                                     }
                                 }
+                                var cloudSyncEnabled by remember(detailShortcut?.file?.absolutePath) {
+                                    mutableStateOf(isShortcutCloudSyncEnabled(detailShortcut))
+                                }
+
+                                CloudSavesContent(
+                                    isWorking = isWorking,
+                                    cloudSyncEnabled = cloudSyncEnabled,
+                                    onCloudSyncToggle = { enabled ->
+                                        cloudSyncEnabled = enabled
+                                        setShortcutCloudSyncEnabled(detailShortcut, enabled)
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            if (enabled) {
+                                                context.getString(R.string.cloud_sync_enabled_summary)
+                                            } else {
+                                                context.getString(R.string.cloud_sync_disabled_summary)
+                                            },
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    },
+                                    onBackup = {
+                                        if (!isWorking) {
+                                            isWorking = true
+                                            scope.launch {
+                                                val result = GameSaveBackupManager.backupToGoogle(
+                                                    this@UnifiedActivity,
+                                                    detailGameSource,
+                                                    detailGameId,
+                                                    app.name,
+                                                )
+                                                isWorking = false
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    result.message,
+                                                    android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
+                                        }
+                                    },
+                                    onRestore = {
+                                        if (!isWorking) {
+                                            isWorking = true
+                                            scope.launch {
+                                                val result = GameSaveBackupManager.restoreFromGoogle(
+                                                    this@UnifiedActivity,
+                                                    detailGameSource,
+                                                    detailGameId,
+                                                    app.name,
+                                                )
+                                                isWorking = false
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    result.message,
+                                                    android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
+                                        }
+                                    },
+                                    onBack = { currentScreen = LibraryDetailScreen.Main },
+                                )
                             }
 
                             LibraryDetailScreen.Uninstall -> {
@@ -5488,6 +5468,120 @@ class UnifiedActivity : ComponentActivity() {
             }
             else -> shortcuts.find {
                 it.getExtra("app_id") == app.id.toString()
+            }
+        }
+    }
+
+    private fun isShortcutCloudSyncEnabled(shortcut: Shortcut?): Boolean {
+        return shortcut == null || shortcut.getExtra("cloud_sync_disabled", "0") != "1"
+    }
+
+    private fun setShortcutCloudSyncEnabled(shortcut: Shortcut?, enabled: Boolean) {
+        if (shortcut == null) return
+        shortcut.putExtra("cloud_sync_disabled", if (enabled) null else "1")
+        if (enabled) {
+            shortcut.putExtra("cloud_force_download", null)
+        }
+        shortcut.saveData()
+    }
+
+    @Composable
+    private fun CloudSavesContent(
+        isWorking: Boolean,
+        cloudSyncEnabled: Boolean,
+        onCloudSyncToggle: (Boolean) -> Unit,
+        onBackup: () -> Unit,
+        onRestore: () -> Unit,
+        onBack: () -> Unit,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                stringResource(R.string.cloud_saves_title),
+                style = MaterialTheme.typography.labelMedium,
+                color = TextSecondary,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.1.sp,
+            )
+
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = SurfaceDark,
+                border = BorderStroke(1.dp, CardBorder),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.cloud_sync_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            stringResource(
+                                if (cloudSyncEnabled) R.string.cloud_sync_enabled_summary
+                                else R.string.cloud_sync_disabled_summary
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                        )
+                    }
+                    Switch(
+                        checked = cloudSyncEnabled,
+                        onCheckedChange = onCloudSyncToggle,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = TextPrimary,
+                            checkedTrackColor = Accent,
+                            uncheckedThumbColor = TextPrimary,
+                            uncheckedTrackColor = TextSecondary.copy(alpha = 0.5f),
+                        )
+                    )
+                }
+            }
+
+            if (isWorking) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Accent,
+                    trackColor = CardBorder,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CompactActionButton(
+                    icon = Icons.Default.CloudUpload,
+                    label = stringResource(R.string.cloud_saves_backup),
+                    modifier = Modifier.weight(1f),
+                    onClick = onBackup,
+                )
+                CompactActionButton(
+                    icon = Icons.Default.CloudDownload,
+                    label = stringResource(R.string.cloud_saves_restore),
+                    modifier = Modifier.weight(1f),
+                    onClick = onRestore,
+                )
+            }
+
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.common_ui_back), color = TextSecondary)
             }
         }
     }
