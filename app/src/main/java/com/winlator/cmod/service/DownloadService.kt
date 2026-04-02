@@ -5,6 +5,7 @@ import android.os.Environment
 import android.os.storage.StorageManager
 import com.winlator.cmod.utils.StorageUtils
 import com.winlator.cmod.steam.service.SteamService
+import com.winlator.cmod.steam.workshop.WorkshopDownloadRegistry
 import com.winlator.cmod.epic.service.EpicService
 import com.winlator.cmod.gog.service.GOGService
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,7 @@ object DownloadService {
     fun getAllDownloads(): List<Pair<String, com.winlator.cmod.steam.data.DownloadInfo>> {
         val list = mutableListOf<Pair<String, com.winlator.cmod.steam.data.DownloadInfo>>()
         SteamService.getAllDownloads().forEach { (id, info) -> list.add("STEAM_$id" to info) }
+        WorkshopDownloadRegistry.getAllDownloads().forEach { (id, info) -> list.add("WORKSHOP_$id" to info) }
         EpicService.getAllDownloads().forEach { (id, info) -> list.add("EPIC_$id" to info) }
         GOGService.getAllDownloads().forEach { (id, info) -> list.add("GOG_$id" to info) }
         return list
@@ -52,6 +54,7 @@ object DownloadService {
 
     fun pauseAll() {
         SteamService.pauseAll()
+        WorkshopDownloadRegistry.pauseAll()
         EpicService.pauseAll()
         GOGService.pauseAll()
     }
@@ -61,6 +64,10 @@ object DownloadService {
             id.startsWith("STEAM_") -> {
                 val appId = id.removePrefix("STEAM_").toIntOrNull() ?: return
                 SteamService.pauseDownload(appId)
+            }
+            id.startsWith("WORKSHOP_") -> {
+                val appId = id.removePrefix("WORKSHOP_").toIntOrNull() ?: return
+                WorkshopDownloadRegistry.pauseDownload(appId)
             }
             id.startsWith("EPIC_") -> {
                 val appId = id.removePrefix("EPIC_").toIntOrNull() ?: return
@@ -75,6 +82,7 @@ object DownloadService {
 
     fun resumeAll() {
         SteamService.resumeAll()
+        WorkshopDownloadRegistry.resumeAll()
         EpicService.resumeAll()
         GOGService.resumeAll()
     }
@@ -84,6 +92,10 @@ object DownloadService {
             id.startsWith("STEAM_") -> {
                 val appId = id.removePrefix("STEAM_").toIntOrNull() ?: return
                 SteamService.resumeDownload(appId)
+            }
+            id.startsWith("WORKSHOP_") -> {
+                val appId = id.removePrefix("WORKSHOP_").toIntOrNull() ?: return
+                WorkshopDownloadRegistry.resumeDownload(appId)
             }
             id.startsWith("EPIC_") -> {
                 val appId = id.removePrefix("EPIC_").toIntOrNull() ?: return
@@ -98,12 +110,14 @@ object DownloadService {
 
     fun cancelAll() {
         SteamService.cancelAll()
+        WorkshopDownloadRegistry.cancelAll()
         EpicService.cancelAll()
         GOGService.cancelAll()
     }
 
     fun clearCompletedDownloads() {
         SteamService.clearCompletedDownloads()
+        WorkshopDownloadRegistry.clearCompletedDownloads()
         EpicService.clearCompletedDownloads()
         GOGService.clearCompletedDownloads()
     }
@@ -113,6 +127,10 @@ object DownloadService {
             id.startsWith("STEAM_") -> {
                 val appId = id.removePrefix("STEAM_").toIntOrNull() ?: return
                 SteamService.cancelDownload(appId)
+            }
+            id.startsWith("WORKSHOP_") -> {
+                val appId = id.removePrefix("WORKSHOP_").toIntOrNull() ?: return
+                WorkshopDownloadRegistry.cancelDownload(appId)
             }
             id.startsWith("EPIC_") -> {
                 val appId = id.removePrefix("EPIC_").toIntOrNull() ?: return
