@@ -370,7 +370,7 @@ public class ControlElement {
         int primaryColor = customColor != -1 ? customColor : inputControlsView.getPrimaryColor();
         int fillColor = ColorUtils.setAlphaComponent(primaryColor, 70);
 
-        paint.setColor(selected ? inputControlsView.getSecondaryColor() : primaryColor);
+        paint.setColor((selected && customColor == -1) ? inputControlsView.getSecondaryColor() : primaryColor);
         paint.setStyle(Paint.Style.STROKE);
         float strokeWidth = snappingSize * 0.25f;
         paint.setStrokeWidth(strokeWidth);
@@ -405,7 +405,7 @@ public class ControlElement {
                 }
 
                 paint.setStyle(Paint.Style.STROKE);
-                paint.setColor(selected ? inputControlsView.getSecondaryColor() : primaryColor);
+                paint.setColor((selected && customColor == -1) ? inputControlsView.getSecondaryColor() : primaryColor);
                 paint.setStrokeWidth(strokeWidth);
 
                 switch (shape) {
