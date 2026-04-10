@@ -1107,23 +1107,20 @@ public class XServerDisplayActivity extends AppCompatActivity {
                                 // Cloud differs from local — ask the user what to do
                                 final CountDownLatch dialogLatch = new CountDownLatch(1);
                                 final boolean[] useCloud = {false};
+                                final CloudSyncConflictTimestamps timestamps = CloudSyncHelper.getConflictTimestamps(this, shortcut);
                                 runOnUiThread(() -> {
-                                    new android.app.AlertDialog.Builder(XServerDisplayActivity.this, com.google.android.material.R.style.ThemeOverlay_Material3_MaterialAlertDialog)
-                                        .setTitle("Cloud Save Sync")
-                                        .setMessage("A newer cloud save was detected for this title.\n\n" +
-                                                "Would you like to sync the latest data from the cloud " +
-                                                "(this will replace your local save), or continue with " +
-                                                "your current local data?")
-                                        .setPositiveButton("Sync from Cloud", (dialog, which) -> {
+                                    CloudSyncConflictDialog.show(
+                                        XServerDisplayActivity.this,
+                                        timestamps,
+                                        () -> {
                                             useCloud[0] = true;
                                             dialogLatch.countDown();
-                                        })
-                                        .setNegativeButton("Keep Local Save", (dialog, which) -> {
+                                        },
+                                        () -> {
                                             useCloud[0] = false;
                                             dialogLatch.countDown();
-                                        })
-                                        .setCancelable(false)
-                                        .show();
+                                        }
+                                    );
                                 });
                                 try {
                                     dialogLatch.await();
@@ -2320,8 +2317,19 @@ public class XServerDisplayActivity extends AppCompatActivity {
 
         if (launchRealSteamSetup || isSteamGame) {
             Log.d("XServerDisplayActivity", "Ensuring Steam client is ready (isSteamGame=" + isSteamGame + ")...");
-            boolean steamReady = SteamBridge.ensureSteamReady(this);
-            Log.d("XServerDisplayActivity", "Steam client ready: " + steamReady);
+            boolean steamReady = false;
+            while (!steamReady) {
+                steamReady = SteamBridge.ensureSteamReady(this);
+                Log.d("XServerDisplayActivity", "Steam client ready: " + steamReady);
+                if (!steamReady) {
+                    boolean shouldRetry = promptSteamClientDownloadRetry();
+                    if (!shouldRetry) {
+                        closeLaunchAttemptToUnified();
+                        return;
+                    }
+                    preloaderDialog.showOnUiThread("Retrying Steam client download...");
+                }
+            }
 
             // Download and extract the experimental-drm file to provide steamclient_loader_x64.exe
             if (isSteamGame && !launchRealSteamSetup) {
@@ -3220,6 +3228,50 @@ public class XServerDisplayActivity extends AppCompatActivity {
         SetupWizardActivity.promptToInstallWineOrCreateContainer(this, wineVersion);
         finish();
         return false;
+    }
+
+    private boolean promptSteamClientDownloadRetry() {
+        final CountDownLatch dialogLatch = new CountDownLatch(1);
+        final boolean[] retry = {false};
+
+        runOnUiThread(() -> {
+            if (preloaderDialog != null && preloaderDialog.isShowing()) {
+                preloaderDialog.close();
+            }
+            SteamClientDownloadFailureDialog.show(
+                    this,
+                    "Steam Client Download Failed",
+                    "WinNative couldn't download the Steam client files needed for this launch.\n\nRetry will try the download again. Close will cancel this launch and return to your library.",
+                    () -> {
+                        retry[0] = true;
+                        dialogLatch.countDown();
+                    },
+                    () -> {
+                        retry[0] = false;
+                        dialogLatch.countDown();
+                    }
+            );
+        });
+
+        try {
+            dialogLatch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        return retry[0];
+    }
+
+    private void closeLaunchAttemptToUnified() {
+        runOnUiThread(() -> {
+            if (preloaderDialog != null && preloaderDialog.isShowing()) {
+                preloaderDialog.close();
+            }
+            Intent intent = new Intent(this, UnifiedActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(intent);
+            finish();
+        });
     }
 
     private void showInputControlsDialog() {

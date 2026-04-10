@@ -294,7 +294,50 @@ public class ContentsManager {
             callback.onFailed(InstallFailedReason.ERROR_UNKNOWN, null);
         }
 
+        repairInstalledContentPermissions(profile);
         callback.onSucceed(profile);
+    }
+
+    public void repairInstalledContentPermissions(ContentProfile profile) {
+        repairInstalledContentPermissions(context, profile);
+    }
+
+    public static void repairInstalledContentPermissions(Context context, ContentProfile profile) {
+        if (context == null || profile == null) return;
+
+        File installDir = getInstallDir(context, profile);
+        if (!installDir.isDirectory()) return;
+
+        switch (profile.type) {
+            case CONTENT_TYPE_WINE:
+            case CONTENT_TYPE_PROTON:
+                repairWineRuntimePermissions(installDir, profile);
+                break;
+            case CONTENT_TYPE_BOX64:
+                chmodIfRegularFile(new File(installDir, "box64"), 0755);
+                break;
+            default:
+                break;
+        }
+    }
+
+    public static void repairWineRuntimePermissions(File installDir, ContentProfile profile) {
+        if (installDir == null || profile == null) return;
+
+        File binDir = new File(installDir, profile.wineBinPath);
+        if (!binDir.isDirectory()) return;
+
+        File[] binaries = binDir.listFiles();
+        if (binaries == null) return;
+
+        for (File file : binaries) {
+            chmodIfRegularFile(file, 0755);
+        }
+    }
+
+    private static void chmodIfRegularFile(File file, int mode) {
+        if (file == null || !file.isFile()) return;
+        FileUtils.chmod(file, mode);
     }
 
     public ContentProfile readProfile(File file) {

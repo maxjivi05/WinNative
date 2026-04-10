@@ -686,6 +686,8 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
             }
         }
 
+        repairRuntimeExecutablePermissions(context, imageFs);
+
         String command = "";
         String overriddenCommand = envVars.get("GUEST_PROGRAM_LAUNCHER_COMMAND");
         if (overriddenCommand.isEmpty()) {
@@ -750,6 +752,26 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         envVars.put("BOX64_NORCFILES", "1");
         ImageFs imageFs = ImageFs.find(environment.getContext());
         envVars.put("BOX64_RCFILE", imageFs.getRootDir().getPath() + "/etc/config.box64rc");
+    }
+
+    private void repairRuntimeExecutablePermissions(Context context, ImageFs imageFs) {
+        try {
+            if (wineProfile != null) {
+                ContentsManager.repairInstalledContentPermissions(context, wineProfile);
+            } else {
+                File wineBinDir = new File(imageFs.getWinePath(), "bin");
+                if (wineBinDir.isDirectory()) {
+                    File[] binaries = wineBinDir.listFiles();
+                    if (binaries != null) {
+                        for (File file : binaries) {
+                            if (file.isFile()) FileUtils.chmod(file, 0755);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w("GuestProgramLauncherComponent", "Failed to repair runtime executable permissions", e);
+        }
     }
 
     public void suspendProcess() {
