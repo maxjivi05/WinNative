@@ -303,6 +303,11 @@ class InputControlsFragment : Fragment() {
             labelResId = R.string.input_controls_editor_export_profile,
             action = ACTION_EXPORT
         )
+        rows += ControlRow.ActionCard(
+            iconRes = R.drawable.ic_content_download,
+            labelResId = R.string.common_ui_download,
+            action = ACTION_DOWNLOAD
+        )
 
         // External Controllers
         rows += ControlRow.SectionHeader(R.string.session_gamepad_external_controllers)
@@ -449,13 +454,6 @@ class InputControlsFragment : Fragment() {
         val padBot = (10 * dp).toInt()
         root.setPadding(padH, padTop, padH, padBot)
 
-        // Prevent keyboard glitch by ensuring EditText doesn't get focus
-        dialog.findViewById<View>(R.id.EditText).apply {
-            visibility = View.GONE
-            isFocusable = false
-            isFocusableInTouchMode = false
-        }
-
         val listView = dialog.findViewById<android.widget.ListView>(R.id.ListView)
         listView.layoutParams.width = ViewGroup.LayoutParams.WRAP_CONTENT
         listView.layoutParams.height = (220 * ctx.resources.displayMetrics.density).toInt()
@@ -511,13 +509,17 @@ class InputControlsFragment : Fragment() {
             activity.runOnUiThread {
                 preloader.close()
                 if (content != null) {
-                    val items = content.split("\n").toTypedArray()
-                    ContentDialog.showMultipleChoiceList(activity, R.string.input_controls_editor_import_profile, items) { positions ->
-                        if (positions.isNotEmpty()) {
-                            ContentDialog.confirm(activity, R.string.input_controls_editor_confirm_download_profiles) {
-                                downloadSelectedProfiles(items, positions)
+                    val items = content.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.toTypedArray()
+                    if (items.isNotEmpty()) {
+                        ContentDialog.showMultipleChoiceList(activity, R.string.input_controls_editor_import_profile, items) { positions ->
+                            if (positions.isNotEmpty()) {
+                                ContentDialog.confirm(activity, R.string.input_controls_editor_confirm_download_profiles) {
+                                    downloadSelectedProfiles(items, positions)
+                                }
                             }
                         }
+                    } else {
+                        AppUtils.showToast(activity, R.string.input_controls_editor_unable_to_load_list)
                     }
                 } else {
                     AppUtils.showToast(activity, R.string.input_controls_editor_unable_to_load_list)
@@ -535,7 +537,8 @@ class InputControlsFragment : Fragment() {
         val processedCount = AtomicInteger()
 
         for (position in positions) {
-            HttpUtils.download(String.format(INPUT_CONTROLS_URL, items[position])) { content ->
+            val encodedItem = android.net.Uri.encode(items[position].trim())
+            HttpUtils.download(String.format(INPUT_CONTROLS_URL, encodedItem)) { content ->
                 try {
                     if (content != null) manager.importProfile(JSONObject(content))
                 } catch (_: JSONException) {
@@ -1364,6 +1367,7 @@ class InputControlsFragment : Fragment() {
                     ACTION_CALIBRATE_GYRO -> showGyroConfigDialog()
                     ACTION_IMPORT -> importProfile()
                     ACTION_EXPORT -> exportProfile()
+                    ACTION_DOWNLOAD -> downloadProfileList()
                 }
             }
         }
@@ -1573,7 +1577,7 @@ class InputControlsFragment : Fragment() {
         private const val ARG_SELECTED_PROFILE_ID = "selectedProfileId"
         private const val OPEN_FILE_REQUEST_CODE = 2
         private const val INPUT_CONTROLS_URL =
-            "https://raw.githubusercontent.com/brunodev85/winlator/main/input_controls/%s"
+            "https://raw.githubusercontent.com/Xnick417x/Winlator-Bionic-Nightly-wcp/main/Profiles/%s"
 
         fun newInstance(profileId: Int = 0): InputControlsFragment {
             return InputControlsFragment().apply {
@@ -1594,6 +1598,7 @@ class InputControlsFragment : Fragment() {
         private const val ACTION_CALIBRATE_GYRO = "calibrate_gyro"
         private const val ACTION_IMPORT = "import"
         private const val ACTION_EXPORT = "export"
+        private const val ACTION_DOWNLOAD = "download"
         private const val PREF_SELECTED_PROFILE_ID = "input_controls_selected_profile_id"
 
         private val DiffCallback = object : DiffUtil.ItemCallback<ControlRow>() {
