@@ -16,6 +16,7 @@ import com.winlator.cmod.shared.io.TarCompressorUtils;
 import com.winlator.cmod.shared.util.Callback;
 import com.winlator.cmod.shared.util.OnExtractFileListener;
 import java.io.File;
+import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -400,6 +401,45 @@ public class ContainerManager {
         }
         FileUtils.copy(file, dstFile);
       }
+    }
+
+    if (wineInfo.isArm64EC() && "aarch64-windows".equals(srcName)) {
+      File dstDir = new File(containerDir, ".wine/drive_c/windows/" + dstName);
+      assertArm64PEMachine(dstDir, "xinput1_4.dll");
+      assertArm64PEMachine(dstDir, "dinput8.dll");
+    }
+  }
+
+  /**
+   * Reads the PE <code>Machine</code> field and logs a loud warning if it is not ARM64
+   * ({@code 0xAA64}) or ARM64EC ({@code 0xA641}). Missing files are treated as non-fatal.
+   *
+   * <p>Guardrail against mis-packaged tzsts like the Mar-2026 <code>xinput_virtual_arm64ec.tzst</code>,
+   * which carried AMD64 PE binaries under an arm64ec filename. Silent mismatch manifested as
+   * joy.cpl failing to load xinput and "Game Controllers" disappearing from the Start Menu.
+   */
+  private static void assertArm64PEMachine(File dir, String dllName) {
+    File f = new File(dir, dllName);
+    if (!f.isFile()) return;
+    try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
+      if (raf.length() < 0x40) return;
+      raf.seek(0x3c);
+      int peOffset = Integer.reverseBytes(raf.readInt());
+      if (peOffset < 0 || peOffset + 6 > raf.length()) return;
+      raf.seek(peOffset);
+      if (raf.readByte() != 'P' || raf.readByte() != 'E'
+          || raf.readByte() != 0 || raf.readByte() != 0) return;
+      int machine = Short.toUnsignedInt(Short.reverseBytes(raf.readShort()));
+      if (machine != 0xAA64 && machine != 0xA641) {
+        Log.e(
+            "ContainerManager",
+            String.format(
+                "PE-machine mismatch: %s in %s is 0x%04X (expected 0xAA64 ARM64 or 0xA641 ARM64EC)."
+                    + " Controller support (joy.cpl/xinput) will not load. Source tzst is mis-packaged.",
+                dllName, dir.getAbsolutePath(), machine));
+      }
+    } catch (Exception e) {
+      Log.w("ContainerManager", "assertArm64PEMachine: " + f.getAbsolutePath() + ": " + e);
     }
   }
 
