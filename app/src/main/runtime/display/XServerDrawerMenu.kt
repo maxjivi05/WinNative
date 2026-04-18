@@ -263,6 +263,16 @@ fun buildXServerDrawerState(
             ),
         )
 
+    // items.add(
+    //     3,
+    //     XServerDrawerItem(
+    //         itemId = R.id.main_menu_controller_manager,
+    //         title = context.getString(R.string.session_gamepad_controller_manager),
+    //         subtitle = context.getString(R.string.session_gamepad_external_controllers),
+    //         icon = Icons.Outlined.SportsEsports,
+    //     ),
+    // )
+
     if (showMagnifier) {
         items +=
             XServerDrawerItem(

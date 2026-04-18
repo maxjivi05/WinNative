@@ -1,13 +1,19 @@
 package com.winlator.cmod.runtime.display.winhandler;
 
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.hardware.input.InputManager;
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import androidx.preference.PreferenceManager;
 import com.winlator.cmod.runtime.display.XServerDisplayActivity;
 import com.winlator.cmod.runtime.display.xserver.XServer;
+import com.winlator.cmod.runtime.input.controls.ControllerManager;
 import com.winlator.cmod.runtime.input.controls.ControlsProfile;
 import com.winlator.cmod.runtime.input.controls.ExternalController;
 import com.winlator.cmod.runtime.input.controls.FakeInputWriter;
@@ -24,6 +30,8 @@ import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -67,12 +75,17 @@ public class WinHandler {
   private final Map<Integer, ExternalController> controllers = new HashMap();
   private byte inputType = 4;
   private final List<Integer> gamepadClients = new CopyOnWriteArrayList();
-  private FakeInputWriter[] writers = new FakeInputWriter[4];
+  private FakeInputWriter[] writers = new FakeInputWriter[MAX_CONTROLLERS];
   private Map<Integer, Integer> deviceToSlot = new HashMap();
   private Map<String, Integer> descriptorToSlot = new HashMap<>(); // physical device → slot
   private Map<Integer, String> deviceToDescriptor = new HashMap<>(); // deviceId → descriptor
   private Set<Integer> usedSlots = new HashSet();
   private boolean xinputDisabledInitialized = false;
+  private LocalServerSocket vibrationServer;
+  private volatile boolean vibrationRunning = false;
+  private final boolean[] vibrationEnabledSlots = new boolean[MAX_CONTROLLERS];
+  private boolean globalVibrationEnabled = true;
+  private int fallbackSlot = -1;
   private ExternalController currentController;
   private final GamepadState outputGamepadState = new GamepadState();
   private int lastGamepadSource = 0;
@@ -87,7 +100,9 @@ public class WinHandler {
   private final InputManager.InputDeviceListener inputDeviceListener =
       new InputManager.InputDeviceListener() {
         @Override
-        public void onInputDeviceAdded(int deviceId) {}
+        public void onInputDeviceAdded(int deviceId) {
+          WinHandler.this.assignConnectedDeviceIfPossible(deviceId, "hotplug");
+        }
 
         @Override
         public void onInputDeviceRemoved(int deviceId) {
@@ -100,9 +115,102 @@ public class WinHandler {
 
   public WinHandler(XServerDisplayActivity activity) {
     this.activity = activity;
-    this.inputManager = (InputManager) activity.getSystemService("input");
+    this.inputManager = (InputManager) activity.getSystemService(Context.INPUT_SERVICE);
     this.inputManager.registerInputDeviceListener(this.inputDeviceListener, null);
     this.preferences = PreferenceManager.getDefaultSharedPreferences(activity.getBaseContext());
+    for (int i = 0; i < MAX_CONTROLLERS; i++) {
+      String key = "vibration_slot_" + i;
+      String legacyKey = "vibrate_slot_" + i;
+      if (this.preferences.contains(key)) {
+        this.vibrationEnabledSlots[i] = this.preferences.getBoolean(key, true);
+      } else {
+        this.vibrationEnabledSlots[i] = this.preferences.getBoolean(legacyKey, true);
+      }
+    }
+    this.globalVibrationEnabled =
+        this.preferences.getBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, true);
+  }
+
+  public int preAssignConnectedControllers() {
+    if (this.fakeInputBasePath == null || this.fakeInputBasePath.isEmpty()) {
+      Log.w("WinHandler", "Skipping pre-assignment: fake input path is not set yet.");
+      return 0;
+    }
+
+    int assignedCount = 0;
+    for (int deviceId : getConnectedGamepadDeviceIds()) {
+      if (this.usedSlots.size() >= MAX_CONTROLLERS) {
+        break;
+      }
+      if (assignConnectedDeviceIfPossible(deviceId, "startup-scan")) {
+        assignedCount++;
+      }
+    }
+
+    Log.d("WinHandler", "Pre-assigned " + assignedCount + " controller(s) before Wine startup.");
+    return assignedCount;
+  }
+
+  private int[] getConnectedGamepadDeviceIds() {
+    int[] deviceIds = android.view.InputDevice.getDeviceIds();
+    Integer[] sortedIds = new Integer[deviceIds.length];
+    for (int i = 0; i < deviceIds.length; i++) {
+      sortedIds[i] = deviceIds[i];
+    }
+
+    Arrays.sort(
+        sortedIds,
+        Comparator.comparing(
+                (Integer id) -> {
+                  android.view.InputDevice device = android.view.InputDevice.getDevice(id);
+                  if (device == null) {
+                    return "";
+                  }
+                  String physicalId = ExternalController.getPhysicalDeviceIdentifier(device);
+                  if (physicalId != null && !physicalId.isEmpty()) {
+                    return physicalId;
+                  }
+                  String descriptor = device.getDescriptor();
+                  return descriptor != null ? descriptor : "";
+                })
+            .thenComparingInt(Integer::intValue));
+
+    int[] result = new int[sortedIds.length];
+    for (int i = 0; i < sortedIds.length; i++) {
+      result[i] = sortedIds[i];
+    }
+    return result;
+  }
+
+  private boolean assignConnectedDeviceIfPossible(int deviceId, String source) {
+    if (this.deviceToSlot.containsKey(deviceId)) {
+      return false;
+    }
+
+    if (this.usedSlots.size() >= MAX_CONTROLLERS) {
+      Log.d(
+          "WinHandler", "Ignoring device " + deviceId + " from " + source + ": slot limit reached.");
+      return false;
+    }
+
+    android.view.InputDevice device = android.view.InputDevice.getDevice(deviceId);
+    if (!ExternalController.isGameController(device)) {
+      return false;
+    }
+
+    ExternalController controller = getController(deviceId);
+    if (controller == null) {
+      return false;
+    }
+
+    int slot = assignSlot(deviceId);
+    if (slot >= 0) {
+      Log.d(
+          "WinHandler",
+          "Auto-assigned device " + deviceId + " to slot " + slot + " via " + source + ".");
+      return true;
+    }
+    return false;
   }
 
   public DatagramSocket getSocket() {
@@ -486,10 +594,121 @@ public class WinHandler {
     }
   }
 
+  private void ensureWriterForSlot(int slot) {
+    if (slot < 0 || slot >= MAX_CONTROLLERS || this.fakeInputBasePath == null) {
+      return;
+    }
+    if (this.writers[slot] == null) {
+      this.writers[slot] = new FakeInputWriter(this.fakeInputBasePath, slot);
+      this.writers[slot].open();
+    }
+  }
+
+  private boolean isPhysicalSlotOccupied(int slot) {
+    for (Map.Entry<Integer, Integer> entry : this.deviceToSlot.entrySet()) {
+      if (entry.getKey() != OSC_DEVICE_ID && entry.getValue() == slot) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private int getHighestPhysicalSlot() {
+    int highestSlot = -1;
+    for (Map.Entry<Integer, Integer> entry : this.deviceToSlot.entrySet()) {
+      if (entry.getKey() != OSC_DEVICE_ID) {
+        highestSlot = Math.max(highestSlot, entry.getValue());
+      }
+    }
+    return highestSlot;
+  }
+
+  private int findLowestAvailablePhysicalSlot() {
+    for (int slot = 0; slot < MAX_CONTROLLERS; slot++) {
+      if (!isPhysicalSlotOccupied(slot)) {
+        return slot;
+      }
+    }
+    return -1;
+  }
+
+  private int findPreferredVirtualSlot(Integer currentSlot) {
+    int minSlot = getHighestPhysicalSlot() + 1;
+    for (int slot = minSlot; slot < MAX_CONTROLLERS; slot++) {
+      if ((currentSlot != null && currentSlot == slot) || !this.usedSlots.contains(slot)) {
+        return slot;
+      }
+    }
+    return -1;
+  }
+
+  private void bindDeviceToSlot(int deviceId, String descriptor, int slot) {
+    this.usedSlots.add(slot);
+    this.deviceToSlot.put(deviceId, slot);
+    if (descriptor != null) {
+      this.descriptorToSlot.put(descriptor, slot);
+      this.deviceToDescriptor.put(deviceId, descriptor);
+    }
+    ensureWriterForSlot(slot);
+  }
+
+  private boolean moveVirtualGamepadToSlot(int targetSlot) {
+    Integer currentSlot = this.deviceToSlot.get(OSC_DEVICE_ID);
+    if (currentSlot == null) {
+      return false;
+    }
+    if (targetSlot == currentSlot) {
+      return true;
+    }
+    if (targetSlot < 0 || targetSlot >= MAX_CONTROLLERS) {
+      releaseSlot(OSC_DEVICE_ID);
+      return false;
+    }
+
+    ensureWriterForSlot(targetSlot);
+    if (this.writers[currentSlot] != null) {
+      this.writers[currentSlot].reset();
+    }
+
+    this.deviceToSlot.put(OSC_DEVICE_ID, targetSlot);
+    this.usedSlots.remove(currentSlot);
+    this.usedSlots.add(targetSlot);
+    if (this.fallbackSlot == currentSlot) {
+      this.fallbackSlot = -1;
+    }
+
+    Log.d(
+        "WinHandler",
+        "Moved virtual gamepad from slot " + currentSlot + " to slot " + targetSlot + ".");
+    return true;
+  }
+
+  private void rebalanceVirtualGamepadSlot() {
+    Integer virtualSlot = this.deviceToSlot.get(OSC_DEVICE_ID);
+    if (virtualSlot == null) {
+      return;
+    }
+
+    int preferredVirtualSlot = findPreferredVirtualSlot(virtualSlot);
+    if (preferredVirtualSlot == -1) {
+      releaseSlot(OSC_DEVICE_ID);
+    } else if (preferredVirtualSlot != virtualSlot) {
+      moveVirtualGamepadToSlot(preferredVirtualSlot);
+    }
+  }
+
   private int assignSlot(int deviceId) {
     // Fast path: already assigned
     Integer existing = this.deviceToSlot.get(deviceId);
     if (existing != null) {
+      if (deviceId == OSC_DEVICE_ID) {
+        int preferredVirtualSlot = findPreferredVirtualSlot(existing);
+        if (preferredVirtualSlot != -1 && preferredVirtualSlot != existing) {
+          moveVirtualGamepadToSlot(preferredVirtualSlot);
+          Integer updatedSlot = this.deviceToSlot.get(deviceId);
+          return updatedSlot != null ? updatedSlot : -1;
+        }
+      }
       return existing;
     }
 
@@ -520,33 +739,40 @@ public class WinHandler {
       }
     }
 
-    // Assign a new slot
-    for (int slot = 0; slot < 4; slot++) {
-      if (!this.usedSlots.contains(slot)) {
-        this.usedSlots.add(slot);
-        this.deviceToSlot.put(deviceId, slot);
-        if (descriptor != null) {
-          this.descriptorToSlot.put(descriptor, slot);
-          this.deviceToDescriptor.put(deviceId, descriptor);
-        }
-        if (this.fakeInputBasePath != null && this.writers[slot] == null) {
-          this.writers[slot] = new FakeInputWriter(this.fakeInputBasePath, slot);
-          this.writers[slot].open();
-          Log.d(
-              "WinHandler",
-              "Assigned device "
-                  + deviceId
-                  + " to slot "
-                  + slot
-                  + " (descriptor: "
-                  + descriptor
-                  + ")");
-        }
-        return slot;
+    if (deviceId == OSC_DEVICE_ID) {
+      int virtualSlot = findPreferredVirtualSlot(null);
+      if (virtualSlot >= 0) {
+        bindDeviceToSlot(deviceId, null, virtualSlot);
+        Log.d("WinHandler", "Assigned virtual gamepad to slot " + virtualSlot + ".");
+        return virtualSlot;
       }
+      Log.w("WinHandler", "No slots available for virtual gamepad.");
+      return -1;
     }
-    Log.w("WinHandler", "No slots available for device " + deviceId);
-    return -1;
+
+    int preferredPhysicalSlot = findLowestAvailablePhysicalSlot();
+    if (preferredPhysicalSlot < 0) {
+      Log.w("WinHandler", "No slots available for device " + deviceId);
+      return -1;
+    }
+
+    Integer virtualSlot = this.deviceToSlot.get(OSC_DEVICE_ID);
+    if (virtualSlot != null && virtualSlot == preferredPhysicalSlot) {
+      int relocatedVirtualSlot = findPreferredVirtualSlot(null);
+      moveVirtualGamepadToSlot(relocatedVirtualSlot);
+    }
+
+    bindDeviceToSlot(deviceId, descriptor, preferredPhysicalSlot);
+    Log.d(
+        "WinHandler",
+        "Assigned device "
+            + deviceId
+            + " to slot "
+            + preferredPhysicalSlot
+            + " (descriptor: "
+            + descriptor
+            + ")");
+    return preferredPhysicalSlot;
   }
 
   private void releaseSlot(int deviceId) {
@@ -569,8 +795,14 @@ public class WinHandler {
       }
 
       if (!slotStillInUse) {
+        if (this.fallbackSlot == slot) {
+          this.fallbackSlot = -1;
+        }
         if (this.writers[slot] != null) {
-          this.writers[slot].softRelease();
+          // Fake evdev nodes are regular files; preserving them across release keeps old events
+          // readable on the next open and can replay stale input.
+          this.writers[slot].destroy();
+          this.writers[slot] = null;
         }
         this.usedSlots.remove(slot);
         Log.d("WinHandler", "Device " + deviceId + " disconnected. Slot " + slot + " released.");
@@ -584,6 +816,9 @@ public class WinHandler {
                 + " still used by sibling sub-device.");
       }
       this.controllers.remove(deviceId);
+      if (deviceId != OSC_DEVICE_ID) {
+        rebalanceVirtualGamepadSlot();
+      }
     }
   }
 
@@ -597,14 +832,151 @@ public class WinHandler {
     if (fakeInputPath != null && !fakeInputPath.isEmpty()) {
       this.fakeInputBasePath = fakeInputPath;
       Log.d("WinHandler", "FakeInputWriter base path set: " + fakeInputPath);
+      startVibrationListener();
     }
+  }
+
+  public void startVibrationListener() {
+    if (this.vibrationRunning) {
+      return;
+    }
+    this.vibrationRunning = true;
+
+    Executors.newSingleThreadExecutor()
+        .execute(
+            () -> {
+              try {
+                this.vibrationServer = new LocalServerSocket("winlator_vibration");
+                Log.d(
+                    "WinHandler",
+                    "Vibration listener started on abstract socket: winlator_vibration");
+
+                while (this.vibrationRunning) {
+                  LocalSocket client = this.vibrationServer.accept();
+                  try {
+                    java.io.InputStream is = client.getInputStream();
+                    byte[] buffer = new byte[8];
+                    int read = is.read(buffer);
+                    if (read == 8) {
+                      int strong = (buffer[0] & 255) | ((buffer[1] & 255) << 8);
+                      int weak = (buffer[2] & 255) | ((buffer[3] & 255) << 8);
+                      int durationMs = (buffer[4] & 255) | ((buffer[5] & 255) << 8);
+                      int slot = (buffer[6] & 255) | ((buffer[7] & 255) << 8);
+                      triggerVibration(strong, weak, durationMs, slot);
+                    }
+                    client.close();
+                  } catch (IOException e) {
+                    Log.e("WinHandler", "Vibration client error: " + e.getMessage());
+                  }
+                }
+              } catch (IOException e) {
+                if (this.vibrationRunning) {
+                  Log.e("WinHandler", "Vibration listener error: " + e.getMessage());
+                }
+              }
+            });
+  }
+
+  private void triggerVibration(int strong, int weak, int durationMs, int slot) {
+    if (!this.globalVibrationEnabled) {
+      return;
+    }
+    if (slot >= 0 && slot < MAX_CONTROLLERS && !this.vibrationEnabledSlots[slot]) {
+      return;
+    }
+
+    Vibrator vibrator = null;
+    Integer slotOwner = null;
+    for (Map.Entry<Integer, Integer> entry : this.deviceToSlot.entrySet()) {
+      if (entry.getValue() == slot) {
+        if (entry.getKey() == OSC_DEVICE_ID) {
+          slotOwner = entry.getKey();
+          break;
+        }
+        if (slotOwner == null) {
+          slotOwner = entry.getKey();
+        }
+      }
+    }
+
+    if (slotOwner != null && slotOwner == OSC_DEVICE_ID) {
+      vibrator = (Vibrator) this.activity.getSystemService(Context.VIBRATOR_SERVICE);
+    } else if (slotOwner != null) {
+      for (Map.Entry<Integer, Integer> entry : this.deviceToSlot.entrySet()) {
+        if (entry.getValue() != slot || entry.getKey() == OSC_DEVICE_ID) {
+          continue;
+        }
+        android.view.InputDevice device = android.view.InputDevice.getDevice(entry.getKey());
+        if (device == null) {
+          continue;
+        }
+        Vibrator candidate = device.getVibrator();
+        if (candidate != null && candidate.hasVibrator()) {
+          vibrator = candidate;
+          break;
+        }
+      }
+
+      if ((vibrator == null || !vibrator.hasVibrator())
+          && !this.deviceToSlot.containsKey(OSC_DEVICE_ID)
+          && (this.fallbackSlot == -1 || this.fallbackSlot == slot)) {
+        vibrator = (Vibrator) this.activity.getSystemService(Context.VIBRATOR_SERVICE);
+        this.fallbackSlot = slot;
+      }
+    }
+
+    if (vibrator == null || !vibrator.hasVibrator()) {
+      return;
+    }
+
+    if (strong > 0 || weak > 0) {
+      int intensity = Math.max(strong, weak);
+      int amplitude = Math.min(255, Math.max(1, (int) ((intensity / 65535.0f) * 255.0f)));
+      int duration = Math.max(1, durationMs);
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        vibrator.vibrate(VibrationEffect.createOneShot(duration, amplitude));
+      } else {
+        vibrator.vibrate(duration);
+      }
+    } else {
+      vibrator.cancel();
+    }
+  }
+
+  public boolean isVibrationEnabledForSlot(int slot) {
+    return slot >= 0 && slot < MAX_CONTROLLERS && this.vibrationEnabledSlots[slot];
+  }
+
+  public void setVibrationEnabledForSlot(int slot, boolean enabled) {
+    if (slot < 0 || slot >= MAX_CONTROLLERS) {
+      return;
+    }
+    this.vibrationEnabledSlots[slot] = enabled;
+    this.preferences
+        .edit()
+        .putBoolean("vibration_slot_" + slot, enabled)
+        .putBoolean("vibrate_slot_" + slot, enabled)
+        .apply();
+  }
+
+  public boolean isGlobalVibrationEnabled() {
+    return this.globalVibrationEnabled;
+  }
+
+  public void setGlobalVibrationEnabled(boolean enabled) {
+    this.globalVibrationEnabled = enabled;
+    this.preferences.edit().putBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, enabled).apply();
+  }
+
+  public int getMaxControllers() {
+    return MAX_CONTROLLERS;
   }
 
   public void closeFakeInputWriter() {
     if (this.inputManager != null && this.inputDeviceListener != null) {
       this.inputManager.unregisterInputDeviceListener(this.inputDeviceListener);
     }
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < MAX_CONTROLLERS; i++) {
       if (this.writers[i] != null) {
         this.writers[i].destroy();
         this.writers[i] = null;
@@ -615,6 +987,15 @@ public class WinHandler {
     this.deviceToDescriptor.clear();
     this.usedSlots.clear();
     this.controllers.clear();
+    this.fallbackSlot = -1;
+    this.vibrationRunning = false;
+    if (this.vibrationServer != null) {
+      try {
+        this.vibrationServer.close();
+      } catch (IOException ignored) {
+      }
+      this.vibrationServer = null;
+    }
     this.currentController = null;
     this.lastGamepadSource = GAMEPAD_SOURCE_NONE;
     this.smoothedGyroX = 0.0f;

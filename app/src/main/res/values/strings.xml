@@ -225,6 +225,7 @@
     <string name="shortcuts_properties_exec_arguments">Exec Arguments</string>
     <string name="shortcuts_properties_target_path">Target Path</string>
     <string name="shortcuts_properties_disable_xinput">Disable Xinput (For Exclusive M/KB Control)</string>
+    <string name="num_controllers">Number of Controllers</string>
     <string name="shortcuts_properties_exclusive_input">Exclusive Input</string>
     <string name="shortcuts_properties_custom_game_settings">Custom Game Settings</string>
     <string name="shortcuts_properties_use_cold_client">Use ColdClient Launcher</string>
@@ -626,6 +627,7 @@ E.g. <b>META</b> for <i>META key</i>, \n
     <string name="session_gamepad_left_stick">Left Stick</string>
     <string name="session_gamepad_right_stick">Right Stick</string>
     <string name="session_gamepad_controller_manager">Controller Manager</string>
+    <string name="session_gamepad_enable_vibration">Enable Vibration</string>
     <string name="session_gamepad_player_1">Player 1</string>
     <string name="session_gamepad_player_2">Player 2</string>
     <string name="session_gamepad_player_3">Player 3</string>
