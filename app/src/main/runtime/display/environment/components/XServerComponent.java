@@ -23,6 +23,7 @@ public class XServerComponent extends EnvironmentComponent {
     connector =
         new XConnectorEpoll(
             socketConfig, new XClientConnectionHandler(xServer), new XClientRequestHandler());
+    connector.setMultithreadedClients(true);
     connector.setInitialInputBufferCapacity(262144);
     connector.setCanReceiveAncillaryMessages(true);
     connector.start();

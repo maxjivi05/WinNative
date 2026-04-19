@@ -19,8 +19,10 @@ public class XClient implements XResourceManager.OnResourceLifecycleListener {
   private final XOutputStream outputStream;
   private final ArrayMap<Window, EventListener> eventListeners = new ArrayMap<>();
   private final ArrayList<XResource> resources = new ArrayList<>();
+  private long nextFrameTime = 0;
 
   public XClient(XServer xServer, XInputStream inputStream, XOutputStream outputStream) {
+
     this.xServer = xServer;
     this.inputStream = inputStream;
     this.outputStream = outputStream;
@@ -151,5 +153,35 @@ public class XClient implements XResourceManager.OnResourceLifecycleListener {
 
   public boolean isValidResourceId(int id) {
     return xServer.resourceIDs.isInInterval(id, resourceIDBase);
+  }
+
+  public void enforceAbsoluteFramerate() {
+    com.winlator.cmod.runtime.display.renderer.GLRenderer renderer = xServer.getRenderer();
+    if (renderer == null) return;
+
+    int targetFps = renderer.getFpsLimit();
+    if (targetFps <= 0) {
+      nextFrameTime = 0L;
+      return;
+    }
+
+    long targetFrameTime = 1000000000L / targetFps;
+    long now = System.nanoTime();
+
+    if (nextFrameTime == 0 || now > nextFrameTime) nextFrameTime = now;
+
+    long sleepTime = nextFrameTime - now;
+    if (sleepTime > 0) {
+      long sleepMs = (sleepTime - 1500000L) / 1000000L;
+      if (sleepMs > 0) {
+        try {
+          Thread.sleep(sleepMs);
+        } catch (InterruptedException e) {
+        }
+      }
+      while (System.nanoTime() < nextFrameTime) {
+      }
+    }
+    nextFrameTime += targetFrameTime;
   }
 }

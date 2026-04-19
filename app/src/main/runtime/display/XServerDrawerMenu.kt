@@ -15,6 +15,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -142,6 +143,7 @@ data class XServerDrawerState(
     val hudElements: BooleanArray = booleanArrayOf(true, true, true, true, true, true),
     val dualSeriesBatteryEnabled: Boolean = false,
     val hudCardExpanded: Boolean = false,
+    val fpsLimit: Int = 0,
 )
 
 class XServerDrawerStateHolder(
@@ -165,6 +167,8 @@ interface XServerDrawerActionListener {
     fun onDualSeriesBatteryChanged(enabled: Boolean)
 
     fun onHUDCardExpandedChanged(expanded: Boolean)
+
+    fun onFPSLimitChanged(limit: Int)
 }
 
 fun buildXServerDrawerState(
@@ -183,6 +187,7 @@ fun buildXServerDrawerState(
     hudElements: BooleanArray = booleanArrayOf(true, true, true, true, true, true),
     dualSeriesBatteryEnabled: Boolean = false,
     hudCardExpanded: Boolean = false,
+    fpsLimit: Int = 0,
 ): XServerDrawerState {
     val items =
         mutableListOf(
@@ -320,6 +325,7 @@ fun buildXServerDrawerState(
         hudElements = hudElements,
         dualSeriesBatteryEnabled = dualSeriesBatteryEnabled,
         hudCardExpanded = hudCardExpanded,
+        fpsLimit = fpsLimit,
     )
 }
 
@@ -700,6 +706,11 @@ private fun XServerHUDSettingsExpanded(
                 title = stringResource(R.string.session_drawer_dual_series_battery),
                 checked = state.dualSeriesBatteryEnabled,
                 onCheckedChange = listener::onDualSeriesBatteryChanged,
+            )
+
+            FPSLimiterSelection(
+                currentLimit = state.fpsLimit,
+                onLimitSelected = listener::onFPSLimitChanged
             )
         }
     }
@@ -1216,5 +1227,39 @@ private fun DrawerStatusPill(
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.6.sp,
         )
+    }
+}
+
+@Composable
+private fun FPSLimiterSelection(
+    currentLimit: Int,
+    onLimitSelected: (Int) -> Unit,
+) {
+    val limits = listOf(0, 30, 45, 60, 90, 120)
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "FPS Limiter",
+            color = WinNativeTextSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 0.3.sp,
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            limits.forEach { limit ->
+                val label = if (limit == 0) "None" else "$limit"
+                HUDToggleChip(
+                    label = label,
+                    checked = currentLimit == limit,
+                    onClick = { onLimitSelected(limit) }
+                )
+            }
+        }
     }
 }

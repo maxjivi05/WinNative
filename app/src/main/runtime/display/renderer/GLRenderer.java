@@ -54,6 +54,7 @@ public class GLRenderer
   private boolean cpuSaverMode = false;
   private int currentFpsLimit = 0;
   private boolean wasDirectMode = false;
+  private long nextFrameTime = 0;
 
   public GLRenderer(XServerView xServerView, XServer xServer) {
     this.xServerView = xServerView;
@@ -446,11 +447,6 @@ public class GLRenderer
     if (cpuSaverMode != enable) {
       cpuSaverMode = enable;
       viewportNeedsUpdate = true;
-      final String msg = enable ? "Direct Rendering+ Enabled" : "Direct Rendering+ Disabled";
-      xServerView.post(
-          () ->
-              AppUtils.showToast(xServerView.getContext(), msg, android.widget.Toast.LENGTH_SHORT));
-      xServerView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
       xServerView.requestRender();
     }
   }
@@ -601,5 +597,39 @@ public class GLRenderer
 
   public void setUnviewableWMClasses(String... unviewableWMNames) {
     this.unviewableWMClasses = unviewableWMNames;
+  }
+
+  @Override
+  public void onFramePresented(com.winlator.cmod.runtime.display.xserver.Window window) {
+    xServerView.requestRender();
+  }
+
+  private void enforceAbsoluteFramerate() {
+    int targetFps = currentFpsLimit;
+    if (targetFps <= 0) {
+      nextFrameTime = 0L;
+      return;
+    }
+
+    long targetFrameTime = 1000000000L / targetFps;
+    long now = System.nanoTime();
+
+    if (nextFrameTime == 0 || now > nextFrameTime) {
+      nextFrameTime = now;
+    }
+
+    long sleepTime = nextFrameTime - now;
+    if (sleepTime > 0) {
+      long sleepMs = (sleepTime - 1500000L) / 1000000L;
+      if (sleepMs > 0) {
+        try {
+          Thread.sleep(sleepMs);
+        } catch (InterruptedException e) {
+        }
+      }
+      while (System.nanoTime() < nextFrameTime) {
+      }
+    }
+    nextFrameTime += targetFrameTime;
   }
 }

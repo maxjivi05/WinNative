@@ -208,6 +208,7 @@ public class PresentExtension implements Extension {
             client.xServer.lock(XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.PIXMAP_MANAGER)) {
           presentPixmap(client, inputStream, outputStream);
         }
+        client.enforceAbsoluteFramerate();
         break;
       case ClientOpcodes.SELECT_INPUT:
         try (XLock lock = client.xServer.lock(XServer.Lockable.WINDOW_MANAGER)) {

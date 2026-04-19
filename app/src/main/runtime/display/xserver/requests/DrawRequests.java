@@ -79,6 +79,7 @@ public abstract class DrawRequests {
     if (window != null) {
       client.xServer.windowManager.triggerOnFramePresented(window);
     }
+    client.enforceAbsoluteFramerate();
   }
 
   public static void getImage(XClient client, XInputStream inputStream, XOutputStream outputStream)
