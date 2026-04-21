@@ -6039,7 +6039,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             return;
         }
 
-        String key = "ubisoft_connect_" + appId;
+        // v2 key: bumped from "ubisoft_connect_" to force re-probe on containers that
+        // cached a stuck marker under the earlier symlink-only implementation.
+        String key = "ubisoft_connect_v2_" + appId;
         if ("true".equals(container.getExtra(key, "false"))) {
             Log.d("XServerDisplayActivity", "Ubisoft Connect for appId=" + appId
                     + " already processed in container " + container.id + ", skipping");
@@ -6058,17 +6060,12 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             if (candidate.isFile()) { installer = candidate; break; }
             File atRoot = new File(gameInstallPath, name);
             if (atRoot.isFile()) {
-                try {
-                    ubisoftDir.mkdirs();
-                    java.nio.file.Files.createSymbolicLink(candidate.toPath(), atRoot.toPath());
+                if (relocateUbisoftInstaller(atRoot, candidate, ubisoftDir)) {
                     installer = candidate;
                     break;
-                } catch (Exception e) {
-                    // Symlinks can fail on Android external/FUSE-backed storage.
-                    // Don't cache "done" in that case — retry on next launch.
-                    Log.w("XServerDisplayActivity", "Ubisoft Connect symlink failed", e);
-                    placementFailed = true;
                 }
+                placementFailed = true;
+                // Keep looping — the sibling filename may already sit at the target path.
             }
         }
 
@@ -6101,6 +6098,56 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         } catch (Exception e) {
             Log.w("XServerDisplayActivity", "Ubisoft Connect install failed", e);
         }
+    }
+
+    /**
+     * Places a Ubisoft Connect installer found at the game root into _CommonRedist/UbisoftConnect/
+     * (the installer refuses to run from the game root). Cascades symlink → hard link → file copy
+     * so this works on Android external/FUSE-backed storage where symlinks are blocked.
+     * Returns true on first successful strategy, false if all three fail.
+     */
+    private boolean relocateUbisoftInstaller(File from, File to, File parentDir) {
+        try {
+            parentDir.mkdirs();
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Failed to create _CommonRedist/UbisoftConnect dir", e);
+            return false;
+        }
+
+        // 1. Symlink — zero disk cost.
+        try {
+            java.nio.file.Files.createSymbolicLink(to.toPath(), from.toPath());
+            if (to.exists()) {
+                Log.d("XServerDisplayActivity", "Ubisoft installer placed via symlink: " + to.getAbsolutePath());
+                return true;
+            }
+        } catch (Exception e) {
+            Log.d("XServerDisplayActivity", "Ubisoft symlink failed, trying hard link: " + e.getMessage());
+        }
+
+        // 2. Hard link — same inode, same filesystem; often works where symlinks don't.
+        try {
+            java.nio.file.Files.createLink(to.toPath(), from.toPath());
+            if (to.exists()) {
+                Log.d("XServerDisplayActivity", "Ubisoft installer placed via hard link: " + to.getAbsolutePath());
+                return true;
+            }
+        } catch (Exception e) {
+            Log.d("XServerDisplayActivity", "Ubisoft hard link failed, trying copy: " + e.getMessage());
+        }
+
+        // 3. Full copy — bulletproof one-time fallback (~50-100 MB for a typical installer).
+        try {
+            java.nio.file.Files.copy(from.toPath(), to.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            if (to.exists() && to.length() > 0) {
+                Log.d("XServerDisplayActivity", "Ubisoft installer placed via copy: " + to.getAbsolutePath());
+                return true;
+            }
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Ubisoft installer copy failed", e);
+        }
+        return false;
     }
 
     /**
