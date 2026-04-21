@@ -5764,6 +5764,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         // Step 2: Install redistributables for this game if not already done in this container
         installRedistributablesIfNeeded(launcher);
 
+        // Step 2b: Install Ubisoft Connect into the prefix when the game bundles its installer.
+        // No-op when the game doesn't ship a Ubisoft Connect installer.
+        installUbisoftConnectIfNeeded(launcher);
+
         // Step 3: Run Steamless DRM stripping.
         // Runtime DRM Patcher (extra_dlls) handles most games automatically when
         // enabled, but Steamless is needed as a fallback for stubborn SteamStub
@@ -6012,6 +6016,82 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         // Mark as done for this game+container combo
         container.putExtra(redistKey, "true");
         container.saveData();
+    }
+
+    /**
+     * Installs Ubisoft Connect into the Wine prefix when the game bundles the installer.
+     * Only runs when UbisoftConnectInstaller.exe or UplayInstaller.exe is present under
+     * <gameInstallPath>/_CommonRedist/UbisoftConnect/ (or loose at the game root — in which
+     * case we symlink it into _CommonRedist/UbisoftConnect/ first, since the installer
+     * refuses to run from the game root).
+     *
+     * Tracked per game+container via container extra "ubisoft_connect_<appId>" so we don't
+     * re-probe every launch. Best-effort silent install via /S — the user still signs in to
+     * Ubisoft Connect manually once per Wine prefix.
+     */
+    private void installUbisoftConnectIfNeeded(GuestProgramLauncherComponent launcher) {
+        if (shortcut == null || !"STEAM".equals(shortcut.getExtra("game_source"))) return;
+
+        int appId;
+        try {
+            appId = Integer.parseInt(shortcut.getExtra("app_id"));
+        } catch (Exception e) {
+            return;
+        }
+
+        String key = "ubisoft_connect_" + appId;
+        if ("true".equals(container.getExtra(key, "false"))) {
+            Log.d("XServerDisplayActivity", "Ubisoft Connect for appId=" + appId
+                    + " already processed in container " + container.id + ", skipping");
+            return;
+        }
+
+        String gameInstallPath = resolveSteamGameInstallPath(appId);
+        if (gameInstallPath == null || gameInstallPath.isEmpty()) return;
+
+        File ubisoftDir = new File(gameInstallPath, "_CommonRedist/UbisoftConnect");
+        String[] names = { "UbisoftConnectInstaller.exe", "UplayInstaller.exe" };
+        File installer = null;
+        for (String name : names) {
+            File candidate = new File(ubisoftDir, name);
+            if (candidate.isFile()) { installer = candidate; break; }
+            File atRoot = new File(gameInstallPath, name);
+            if (atRoot.isFile()) {
+                try {
+                    ubisoftDir.mkdirs();
+                    java.nio.file.Files.createSymbolicLink(candidate.toPath(), atRoot.toPath());
+                    installer = candidate;
+                    break;
+                } catch (Exception e) {
+                    Log.w("XServerDisplayActivity", "Ubisoft Connect symlink failed", e);
+                }
+            }
+        }
+
+        if (installer == null) {
+            Log.d("XServerDisplayActivity", "No Ubisoft Connect installer for appId=" + appId
+                    + " — marking done so we don't re-probe");
+            container.putExtra(key, "true");
+            container.saveData();
+            return;
+        }
+
+        try {
+            String winPath = WineUtils.getWindowsPath(container, installer.getAbsolutePath());
+            Log.d("XServerDisplayActivity", "Installing Ubisoft Connect (silent): " + winPath);
+            launcher.execShellCommand("wine \"" + winPath + "\" /S");
+            try {
+                launcher.execShellCommand("wineserver -k");
+            } catch (Exception e) {
+                Log.w("XServerDisplayActivity", "wineserver -k failed after Ubisoft Connect install", e);
+            }
+            container.putExtra(key, "true");
+            container.saveData();
+            Log.d("XServerDisplayActivity", "Ubisoft Connect install attempted for appId=" + appId
+                    + " in container " + container.id);
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Ubisoft Connect install failed", e);
+        }
     }
 
     /**
