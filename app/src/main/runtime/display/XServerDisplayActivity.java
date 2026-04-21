@@ -6052,6 +6052,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         File ubisoftDir = new File(gameInstallPath, "_CommonRedist/UbisoftConnect");
         String[] names = { "UbisoftConnectInstaller.exe", "UplayInstaller.exe" };
         File installer = null;
+        boolean placementFailed = false;
         for (String name : names) {
             File candidate = new File(ubisoftDir, name);
             if (candidate.isFile()) { installer = candidate; break; }
@@ -6063,12 +6064,20 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     installer = candidate;
                     break;
                 } catch (Exception e) {
+                    // Symlinks can fail on Android external/FUSE-backed storage.
+                    // Don't cache "done" in that case — retry on next launch.
                     Log.w("XServerDisplayActivity", "Ubisoft Connect symlink failed", e);
+                    placementFailed = true;
                 }
             }
         }
 
         if (installer == null) {
+            if (placementFailed) {
+                Log.w("XServerDisplayActivity", "Ubisoft Connect installer present at game root but symlink failed for appId="
+                        + appId + " — will retry next launch");
+                return;
+            }
             Log.d("XServerDisplayActivity", "No Ubisoft Connect installer for appId=" + appId
                     + " — marking done so we don't re-probe");
             container.putExtra(key, "true");
