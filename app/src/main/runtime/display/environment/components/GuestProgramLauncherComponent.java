@@ -431,6 +431,63 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     if (containerDataChanged) container.saveData();
   }
 
+  private ContentProfile getPreferredInstalledProfile(ContentProfile.ContentType type) {
+    if (contentsManager == null) return null;
+    java.util.List<ContentProfile> profiles = contentsManager.getProfiles(type);
+    if (profiles == null) return null;
+
+    ContentProfile selected = null;
+    for (ContentProfile profile : profiles) {
+      if (profile == null || !profile.isInstalled || profile.fileList == null) continue;
+      if (selected == null || profile.verCode > selected.verCode) selected = profile;
+    }
+    return selected;
+  }
+
+  private boolean extractWowBox64Dll() {
+    File rootDir = environment.getImageFs().getRootDir();
+    File system32dir = new File(rootDir + "/home/xuser/.wine/drive_c/windows/system32");
+    File wowbox64Dll = new File(system32dir, "wowbox64.dll");
+
+    ContentProfile profile =
+        getPreferredInstalledProfile(ContentProfile.ContentType.CONTENT_TYPE_WOWBOX64);
+    String selectedVersion = profile != null ? profile.verName + "-" + profile.verCode : "";
+    String loadedVersion = container.getExtra("wowbox64Version");
+    boolean missing = !wowbox64Dll.exists();
+
+    if (missing) {
+      Log.w("GuestProgramLauncherComponent", "wowbox64.dll missing from system32");
+    }
+
+    if (profile != null && (missing || !selectedVersion.equals(loadedVersion))) {
+      Log.i(
+          "GuestProgramLauncherComponent",
+          "Loading WowBox64 DLL for x86_64 WoW64: version=" + selectedVersion);
+      contentsManager.applyContent(profile);
+      container.putExtra("wowbox64Version", selectedVersion);
+      container.saveData();
+    } else if (profile == null && missing) {
+      Log.w(
+          "GuestProgramLauncherComponent",
+          "No installed WowBox64 content profile; x86_64 32-bit apps may fall back to Wine's experimental WoW64 handler");
+    }
+
+    return wowbox64Dll.exists();
+  }
+
+  private String getEffectiveEmulator32() {
+    String emulator = container != null ? container.getEmulator() : "";
+    if (shortcut != null && container != null) {
+      emulator = shortcut.getSettingExtra("emulator", container.getEmulator());
+    }
+    return emulator != null ? emulator.toLowerCase() : "";
+  }
+
+  private boolean usesBox64For32Bit() {
+    String emulator = getEffectiveEmulator32();
+    return emulator.equals("box64") || emulator.equals("wowbox64");
+  }
+
   public GuestProgramLauncherComponent(
       ContentsManager contentsManager, ContentProfile wineProfile, Shortcut shortcut) {
     this.contentsManager = contentsManager;
@@ -443,7 +500,10 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     synchronized (lock) {
       if (wineInfo.isArm64EC()) {
         extractEmulatorsDlls();
-      } else extractBox64Files();
+      } else {
+        extractBox64Files();
+        if (usesBox64For32Bit()) extractWowBox64Dll();
+      }
       copyDefaultBox64RCFile();
       checkDependencies();
 
@@ -808,14 +868,14 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     String emulator = container.getEmulator();
     String emulator64 = container.getEmulator64();
     if (shortcut != null) {
-      emulator = shortcut.getExtra("emulator", container.getEmulator());
-      emulator64 = shortcut.getExtra("emulator64", container.getEmulator64());
+      emulator = shortcut.getSettingExtra("emulator", container.getEmulator());
+      emulator64 = shortcut.getSettingExtra("emulator64", container.getEmulator64());
     }
 
     if (wineInfo.isArm64EC()) {
       emulator64 = container.getEmulator64();
       if (shortcut != null) {
-        emulator64 = shortcut.getExtra("emulator64", container.getEmulator64());
+        emulator64 = shortcut.getSettingExtra("emulator64", container.getEmulator64());
       }
     }
 
@@ -832,6 +892,11 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
           envVars.put("HODLL", "wowbox64.dll");
         }
       } else {
+        File wowbox64Dll =
+            new File(rootDir, "home/xuser/.wine/drive_c/windows/system32/wowbox64.dll");
+        if (usesBox64For32Bit() && wowbox64Dll.exists()) {
+          envVars.put("HODLL", "wowbox64.dll");
+        }
         command = imageFs.getBinDir() + "/box64 " + guestExecutable;
       }
     } else {
