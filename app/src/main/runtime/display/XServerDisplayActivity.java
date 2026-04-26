@@ -435,8 +435,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     }
 
     private String getShortcutWineVersionOverride() {
-        if (shortcut == null || shortcutUsesContainerDefaults()) return "";
-        return shortcut.getExtra("wineVersion");
+        // Shortcut settings no longer expose Wine version selection. Ignore
+        // legacy per-shortcut values so container architecture controls the
+        // runtime and matching emulator selection.
+        return "";
     }
 
     private void applyPreferredRefreshRate() {

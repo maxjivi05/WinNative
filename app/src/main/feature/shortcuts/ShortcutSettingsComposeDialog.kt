@@ -490,10 +490,7 @@ class ShortcutSettingsComposeDialog private constructor(
             context.resources.getStringArray(R.array.emulator_entries).toList()
         state.emulatorEntries.value = emulatorArr
 
-        val wineVersionStr = if (shortcut.usesContainerDefaults())
-            container.getWineVersion()
-        else shortcut.getExtra("wineVersion", container.getWineVersion())
-        val wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersionStr)
+        val wineInfo = getContainerWineInfo(container)
         isArm64EC = wineInfo.isArm64EC
         state.wineVersionDisplay.value = formatWineVersionDisplay(wineInfo)
 
@@ -600,11 +597,7 @@ class ShortcutSettingsComposeDialog private constructor(
 
     private fun populateContentsDependentData() {
         val container = shortcut.container
-        val wineVersionStr = if (shortcut.usesContainerDefaults())
-            container.getWineVersion()
-        else shortcut.getExtra("wineVersion", container.getWineVersion())
-
-        val wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersionStr)
+        val wineInfo = getContainerWineInfo(container)
         val archChanged = isArm64EC != wineInfo.isArm64EC
         isArm64EC = wineInfo.isArm64EC
         state.wineVersionDisplay.value = formatWineVersionDisplay(wineInfo)
@@ -818,6 +811,9 @@ class ShortcutSettingsComposeDialog private constructor(
         return if (archLabel.isNotEmpty()) "$base ($archLabel)" else base
     }
 
+    private fun getContainerWineInfo(container: Container): WineInfo =
+        WineInfo.fromIdentifier(context, contentsManager, container.getWineVersion())
+
     // ARM64EC → 64=FEXCore, 32=FEXCore|Wowbox64. x86_64 → 64=Box64, 32=Box64.
     private fun rebuildEmulatorLists() {
         val fullList = state.emulatorEntries.value
@@ -950,6 +946,9 @@ class ShortcutSettingsComposeDialog private constructor(
 
         if (true) {
             var hasContainerOverride = false
+            // Shortcut settings do not expose Wine version selection. Keep
+            // emulator choices tied to the selected container's Wine arch.
+            shortcut.putExtra("wineVersion", null)
 
             // Screen size
             val screenSize = getScreenSizeFromState()
