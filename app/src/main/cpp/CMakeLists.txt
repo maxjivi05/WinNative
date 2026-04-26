@@ -65,3 +65,11 @@ add_library(evshim SHARED
 )
 target_compile_options(evshim PRIVATE -Wall -Wextra -fvisibility=hidden)
 target_link_libraries(evshim log dl)
+
+# Preload shim for ARM64EC Wine on Android noexec mounts. It keeps executable
+# PE sections at their original VA when mprotect(PROT_EXEC) is rejected.
+add_library(winnative_execmemfix SHARED
+        winlator/winnative_execmemfix.c
+)
+target_compile_options(winnative_execmemfix PRIVATE -Wall -Wextra -fvisibility=hidden)
+target_link_libraries(winnative_execmemfix log dl)

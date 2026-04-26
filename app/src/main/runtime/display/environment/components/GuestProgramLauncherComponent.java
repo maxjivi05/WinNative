@@ -48,6 +48,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
   private File workingDir;
   private String steamType = Container.STEAM_TYPE_NORMAL;
   private Runnable preUnpackCallback;
+  private static final String EXECMEMFIX_LIBRARY = "libwinnative_execmemfix.so";
 
   public static File ensureImageFsNativeLibrary(
       Context context, ImageFs imageFs, String libraryName) {
@@ -128,6 +129,15 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
 
   public void setWineInfo(WineInfo wineInfo) {
     this.wineInfo = wineInfo;
+  }
+
+  private static String appendPreload(String preload, String path) {
+    if (path == null || path.isEmpty()) return preload == null ? "" : preload;
+    if (preload == null || preload.isEmpty()) return path;
+    if (preload.equals(path) || preload.contains(path + ":") || preload.contains(":" + path)) {
+      return preload;
+    }
+    return preload + ":" + path;
   }
 
   public WineInfo getWineInfo() {
@@ -217,23 +227,28 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     envVars.put("SteamGameId", "0");
 
     File libDir = imageFs.getLibDir();
+    File execMemFix = ensureImageFsNativeLibrary(context, imageFs, EXECMEMFIX_LIBRARY);
     File sysvshm64 = ensureImageFsNativeLibrary(context, imageFs, "libandroid-sysvshm.so");
     File libredirect64 = new File(libDir, "libredirect.so");
     Log.d(
         "GuestLauncher",
         "execShellCommand LD_PRELOAD setup: sysvshm="
             + (sysvshm64 != null)
+            + " execmemfix="
+            + (execMemFix != null)
             + " libredirect="
             + libredirect64.exists());
-    if ((sysvshm64 != null && sysvshm64.exists()) || libredirect64.exists()) {
-      StringBuilder ldPreload = new StringBuilder();
-      if (libredirect64.exists()) ldPreload.append(libredirect64.getPath());
-      if (sysvshm64 != null && sysvshm64.exists()) {
-        if (ldPreload.length() > 0) ldPreload.append(" ");
-        ldPreload.append(sysvshm64.getPath());
-      }
-      envVars.put("LD_PRELOAD", ldPreload.toString());
-      Log.d("GuestLauncher", "execShellCommand LD_PRELOAD=" + ldPreload.toString());
+    if ((execMemFix != null && execMemFix.exists())
+        || (sysvshm64 != null && sysvshm64.exists())
+        || libredirect64.exists()) {
+      String ldPreload = "";
+      if (execMemFix != null && execMemFix.exists())
+        ldPreload = appendPreload(ldPreload, execMemFix.getPath());
+      if (libredirect64.exists()) ldPreload = appendPreload(ldPreload, libredirect64.getPath());
+      if (sysvshm64 != null && sysvshm64.exists())
+        ldPreload = appendPreload(ldPreload, sysvshm64.getPath());
+      envVars.put("LD_PRELOAD", ldPreload);
+      Log.d("GuestLauncher", "execShellCommand LD_PRELOAD=" + ldPreload);
     }
     envVars.put("WINEESYNC_WINLATOR", "1");
     mergeExternalEnvVars(envVars, envVars.get("LD_PRELOAD"), envVars.get("FAKE_EVDEV_DIR"));
@@ -716,6 +731,14 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     } else {
       ld_preload = imageFs.getLibDir() + "/libandroid-sysvshm.so";
     }
+    File execMemFix = ensureImageFsNativeLibrary(context, imageFs, EXECMEMFIX_LIBRARY);
+    if (execMemFix != null && execMemFix.exists()) {
+      ld_preload = appendPreload("", execMemFix.getAbsolutePath());
+      File sysvshm = new File(imageFs.getLibDir(), "libandroid-sysvshm.so");
+      if (sysvshm.exists()) {
+        ld_preload = appendPreload(ld_preload, sysvshm.getAbsolutePath());
+      }
+    }
     File fakeinputDest = new File(imageFs.getLibDir(), "libfakeinput.so");
     String nativeLibDir = environment.getContext().getApplicationInfo().nativeLibraryDir;
     File fakeinputSrc = new File(nativeLibDir, "libfakeinput.so");
@@ -804,6 +827,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     // Preserve the launcher-owned preload/input paths while restoring the
     // full env built upstream in XServerDisplayActivity (driver, DXVK, Vulkan, etc).
     mergeExternalEnvVars(envVars, envVars.get("LD_PRELOAD"), envVars.get("FAKE_EVDEV_DIR"));
+    applyAndroidStabilityDefaults(envVars);
 
     String emulator = container.getEmulator();
     String emulator64 = container.getEmulator64();
@@ -901,6 +925,12 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     envVars.put("BOX64_NORCFILES", "1");
     ImageFs imageFs = ImageFs.find(environment.getContext());
     envVars.put("BOX64_RCFILE", imageFs.getRootDir().getPath() + "/etc/config.box64rc");
+  }
+
+  private void applyAndroidStabilityDefaults(EnvVars envVars) {
+    if (!envVars.has("DXVK_NUM_COMPILER_THREADS")) {
+      envVars.put("DXVK_NUM_COMPILER_THREADS", "4");
+    }
   }
 
   private void repairRuntimeExecutablePermissions(Context context, ImageFs imageFs) {
