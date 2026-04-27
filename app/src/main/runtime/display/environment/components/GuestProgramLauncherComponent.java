@@ -702,7 +702,6 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     envVars.put("PROTON_AUDIO_CONVERT", "0");
     envVars.put("PROTON_VIDEO_CONVERT", "0");
     envVars.put("PROTON_DEMUX", "0");
-    envVars.put("WINNATIVE_ESYNC_DEADLOCK_WATCHDOG", "1");
 
     String winePath = imageFs.getWinePath() + "/bin";
 
@@ -828,7 +827,6 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     // Preserve the launcher-owned preload/input paths while restoring the
     // full env built upstream in XServerDisplayActivity (driver, DXVK, Vulkan, etc).
     mergeExternalEnvVars(envVars, envVars.get("LD_PRELOAD"), envVars.get("FAKE_EVDEV_DIR"));
-    envVars.put("WINNATIVE_ESYNC_DEADLOCK_WATCHDOG", "1");
     applyAndroidStabilityDefaults(envVars);
 
     String emulator = container.getEmulator();

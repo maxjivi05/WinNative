@@ -7,10 +7,8 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -28,11 +26,6 @@
 
 static __thread void *replacement_altstack;
 static __thread size_t replacement_altstack_size;
-
-struct thread_start_args {
-  void *(*start_routine)(void *);
-  void *arg;
-};
 
 static uintptr_t page_align_down(uintptr_t value, size_t page_size) {
   return value & ~((uintptr_t)page_size - 1);
@@ -63,78 +56,6 @@ static int create_memfd(const char *name) {
   errno = ENOSYS;
   return -1;
 #endif
-}
-
-static int signal_should_use_altstack(int signum) {
-  return signum == SIGSEGV || signum == SIGBUS || signum == SIGILL ||
-         signum == SIGFPE || signum == SIGTRAP;
-}
-
-static int ensure_signal_altstack(void) {
-  stack_t current;
-  if (syscall(SYS_sigaltstack, NULL, &current) != 0) {
-    return -1;
-  }
-
-  if (!(current.ss_flags & SS_DISABLE) && current.ss_size >= MIN_SIGNAL_STACK_SIZE) {
-    return 0;
-  }
-
-  void *stack =
-      sys_mmap(NULL, MIN_SIGNAL_STACK_SIZE, PROT_READ | PROT_WRITE,
-               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (stack == MAP_FAILED) {
-    return -1;
-  }
-
-  stack_t enlarged;
-  enlarged.ss_sp = stack;
-  enlarged.ss_size = MIN_SIGNAL_STACK_SIZE;
-  enlarged.ss_flags = 0;
-
-  if (syscall(SYS_sigaltstack, &enlarged, NULL) != 0) {
-    int saved_errno = errno;
-    sys_munmap(stack, MIN_SIGNAL_STACK_SIZE);
-    errno = saved_errno;
-    return -1;
-  }
-
-  if (replacement_altstack) {
-    sys_munmap(replacement_altstack, replacement_altstack_size);
-  }
-  replacement_altstack = stack;
-  replacement_altstack_size = MIN_SIGNAL_STACK_SIZE;
-
-  __android_log_print(
-      ANDROID_LOG_WARN, LOG_TAG,
-      "installed %u byte signal altstack for thread", MIN_SIGNAL_STACK_SIZE);
-  return 0;
-}
-
-static void ensure_process_stack_limit(void) {
-  struct rlimit limit;
-  if (getrlimit(RLIMIT_STACK, &limit) != 0) {
-    return;
-  }
-
-  if (limit.rlim_cur >= MIN_PTHREAD_STACK_SIZE) {
-    return;
-  }
-
-  rlim_t wanted = MIN_PTHREAD_STACK_SIZE;
-  if (limit.rlim_max != RLIM_INFINITY && wanted > limit.rlim_max) {
-    wanted = limit.rlim_max;
-  }
-
-  if (wanted > limit.rlim_cur) {
-    limit.rlim_cur = wanted;
-    if (setrlimit(RLIMIT_STACK, &limit) == 0) {
-      __android_log_print(
-          ANDROID_LOG_WARN, LOG_TAG,
-          "raised process RLIMIT_STACK to %llu bytes",
-          (unsigned long long)wanted);
-    }
-  }
 }
 
 static int copy_to_fixed_mapping(
@@ -316,30 +237,6 @@ __attribute__((visibility("default"))) int sigaltstack(const stack_t *ss, stack_
   return (int)syscall(SYS_sigaltstack, ss, old_ss);
 }
 
-__attribute__((visibility("default"))) int sigaction(
-    int signum, const struct sigaction *act, struct sigaction *oldact) {
-  static int (*real_sigaction)(int, const struct sigaction *, struct sigaction *);
-  if (!real_sigaction) {
-    real_sigaction = dlsym(RTLD_NEXT, "sigaction");
-  }
-  if (!real_sigaction) {
-    errno = ENOSYS;
-    return -1;
-  }
-
-  if (act && signal_should_use_altstack(signum)) {
-    struct sigaction patched = *act;
-    patched.sa_flags |= SA_ONSTACK;
-    ensure_signal_altstack();
-    __android_log_print(
-        ANDROID_LOG_WARN, LOG_TAG,
-        "forcing SA_ONSTACK for signal %d handler", signum);
-    return real_sigaction(signum, &patched, oldact);
-  }
-
-  return real_sigaction(signum, act, oldact);
-}
-
 __attribute__((visibility("default"))) int pthread_attr_setstacksize(
     pthread_attr_t *attr, size_t stacksize) {
   static int (*real_pthread_attr_setstacksize)(pthread_attr_t *, size_t);
@@ -355,75 +252,4 @@ __attribute__((visibility("default"))) int pthread_attr_setstacksize(
     stacksize = MIN_PTHREAD_STACK_SIZE;
   }
   return real_pthread_attr_setstacksize(attr, stacksize);
-}
-
-__attribute__((visibility("default"))) int pthread_attr_setstack(
-    pthread_attr_t *attr, void *stackaddr, size_t stacksize) {
-  static int (*real_pthread_attr_setstack)(pthread_attr_t *, void *, size_t);
-  if (!real_pthread_attr_setstack) {
-    real_pthread_attr_setstack = dlsym(RTLD_NEXT, "pthread_attr_setstack");
-  }
-  if (!real_pthread_attr_setstack) {
-    errno = ENOSYS;
-    return -1;
-  }
-  if (stacksize && stacksize < MIN_PTHREAD_STACK_SIZE) {
-    __android_log_print(
-        ANDROID_LOG_WARN, LOG_TAG,
-        "accepting caller-provided pthread stack below ARM64 floor: %zu bytes",
-        stacksize);
-  }
-  return real_pthread_attr_setstack(attr, stackaddr, stacksize);
-}
-
-static void *thread_start_wrapper(void *arg) {
-  struct thread_start_args start = *(struct thread_start_args *)arg;
-  free(arg);
-  ensure_signal_altstack();
-  return start.start_routine(start.arg);
-}
-
-__attribute__((visibility("default"))) int pthread_create(
-    pthread_t *thread, const pthread_attr_t *attr,
-    void *(*start_routine)(void *), void *arg) {
-  static int (*real_pthread_create)(
-      pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
-  if (!real_pthread_create) {
-    real_pthread_create = dlsym(RTLD_NEXT, "pthread_create");
-  }
-  if (!real_pthread_create) {
-    errno = ENOSYS;
-    return -1;
-  }
-
-  pthread_attr_t enlarged_attr;
-  const pthread_attr_t *effective_attr = attr;
-  if (attr) {
-    size_t stack_size = 0;
-    if (pthread_attr_getstacksize(attr, &stack_size) == 0 &&
-        stack_size > 0 && stack_size < MIN_PTHREAD_STACK_SIZE) {
-      enlarged_attr = *attr;
-      pthread_attr_setstacksize(&enlarged_attr, MIN_PTHREAD_STACK_SIZE);
-      effective_attr = &enlarged_attr;
-    }
-  }
-
-  struct thread_start_args *wrapped =
-      malloc(sizeof(struct thread_start_args));
-  if (!wrapped) {
-    return real_pthread_create(thread, effective_attr, start_routine, arg);
-  }
-  wrapped->start_routine = start_routine;
-  wrapped->arg = arg;
-
-  int ret = real_pthread_create(thread, effective_attr, thread_start_wrapper, wrapped);
-  if (ret != 0) {
-    free(wrapped);
-  }
-  return ret;
-}
-
-__attribute__((constructor)) static void winnative_execmemfix_init(void) {
-  ensure_process_stack_limit();
-  ensure_signal_altstack();
 }

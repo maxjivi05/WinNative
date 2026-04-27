@@ -14,9 +14,6 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 public abstract class ProcessHelper {
   private static final String TAG = "ProcessHelper";
@@ -47,9 +44,6 @@ public abstract class ProcessHelper {
   private static final byte SIGSTOP = 19;
   private static final byte SIGTERM = 15;
   private static final byte SIGKILL = 9;
-  private static final String ESYNC_DEADLOCK_WATCHDOG_ENV = "WINNATIVE_ESYNC_DEADLOCK_WATCHDOG=1";
-  private static final int ESYNC_DEADLOCK_MAX_RETRIES = 3;
-  private static final long ESYNC_DEADLOCK_RETRY_WINDOW_MS = 50_000;
 
   static {
     try {
@@ -216,18 +210,15 @@ public abstract class ProcessHelper {
       ProcessBuilder pb = new ProcessBuilder(splitCommand);
       pb.directory(workingDir);
       pb.environment().putAll(EnvironmentManager.getEnvVars());
-      boolean enableDeadlockWatchdog = hasEnv(envp, ESYNC_DEADLOCK_WATCHDOG_ENV);
-      if (debugCallbacks.isEmpty() && !enableDeadlockWatchdog) {
+      if (debugCallbacks.isEmpty()) {
         File nullFile = new File("/dev/null");
         pb.redirectError(nullFile);
         pb.redirectOutput(nullFile);
       }
       java.lang.Process process = pb.start();
-      if (!debugCallbacks.isEmpty() || enableDeadlockWatchdog) {
-        DeadlockMonitor deadlockMonitor =
-            enableDeadlockWatchdog ? new DeadlockMonitor(process) : null;
-        createDebugThread(process.getInputStream(), deadlockMonitor);
-        createDebugThread(process.getErrorStream(), deadlockMonitor);
+      if (!debugCallbacks.isEmpty()) {
+        createDebugThread(process.getInputStream());
+        createDebugThread(process.getErrorStream());
       }
 
       // Accessing hidden field
@@ -247,17 +238,11 @@ public abstract class ProcessHelper {
   }
 
   private static void createDebugThread(final InputStream inputStream) {
-    createDebugThread(inputStream, null);
-  }
-
-  private static void createDebugThread(
-      final InputStream inputStream, final Callback<String> lineMonitor) {
     new Thread(
             () -> {
               try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                  if (lineMonitor != null) lineMonitor.call(line);
                   synchronized (debugCallbacks) {
                     if (!debugCallbacks.isEmpty()) {
                       if (PRINT_DEBUG) System.out.println(line);
@@ -271,80 +256,6 @@ public abstract class ProcessHelper {
             },
             "ProcessDebugReader")
         .start();
-  }
-
-  private static boolean hasEnv(String[] envp, String exactEntry) {
-    if (envp == null) return false;
-    for (String entry : envp) {
-      if (exactEntry.equals(entry)) return true;
-    }
-    return false;
-  }
-
-  private static boolean isCriticalSectionTimeoutRetry(String line) {
-    return line != null
-        && line.contains("RtlpWaitForCriticalSection")
-        && line.contains("retrying (60 sec)");
-  }
-
-  private static final class DeadlockMonitor implements Callback<String> {
-    private final java.lang.Process process;
-    private final AtomicInteger retries = new AtomicInteger(0);
-    private final AtomicLong lastRetryAt = new AtomicLong(0);
-    private final AtomicBoolean terminating = new AtomicBoolean(false);
-
-    DeadlockMonitor(java.lang.Process process) {
-      this.process = process;
-    }
-
-    @Override
-    public void call(String line) {
-      if (!isCriticalSectionTimeoutRetry(line)) return;
-
-      long now = System.currentTimeMillis();
-      long previous = lastRetryAt.get();
-      if (previous != 0 && now - previous < ESYNC_DEADLOCK_RETRY_WINDOW_MS) {
-        return;
-      }
-      if (!lastRetryAt.compareAndSet(previous, now)) {
-        return;
-      }
-
-      int count = retries.incrementAndGet();
-      Log.w(
-          TAG,
-          "Wine critical-section timeout retry "
-              + count
-              + "/"
-              + ESYNC_DEADLOCK_MAX_RETRIES
-              + ": "
-              + line);
-
-      if (count < ESYNC_DEADLOCK_MAX_RETRIES || !terminating.compareAndSet(false, true)) {
-        return;
-      }
-
-      Log.e(TAG, "Wine esync deadlock threshold reached; terminating guest session");
-      try {
-        process.destroy();
-      } catch (Exception e) {
-        Log.w(TAG, "Failed to send SIGTERM to guest process", e);
-      }
-
-      new Thread(
-              () -> {
-                try {
-                  Thread.sleep(2000);
-                } catch (InterruptedException e) {
-                  Thread.currentThread().interrupt();
-                }
-                forceKillAllWineProcesses();
-                drainDeadChildren("esync deadlock watchdog");
-                scheduleDeadChildReapSweep("esync deadlock watchdog", 4000, 200);
-              },
-              "EsyncDeadlockTerminator")
-          .start();
-    }
   }
 
   private static void createWaitForThread(
