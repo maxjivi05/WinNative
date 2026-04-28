@@ -333,6 +333,15 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private final AtomicBoolean activityDestroyed = new AtomicBoolean(false);
     private final AtomicBoolean sessionCleanupStarted = new AtomicBoolean(false);
     private final AtomicBoolean switchLaunchInProgress = new AtomicBoolean(false);
+    // True while the activity is in the background (between onPause and onResume).
+    // Used to defer exit() requests that arrive while the user can't see the screen
+    // — e.g. the wine launcher's waitFor returning during a long screen-lock window
+    // when the OS reaped a transient launcher process. We re-evaluate on resume.
+    private final AtomicBoolean activityBackgrounded = new AtomicBoolean(false);
+    // Holds an exit reason captured while the activity was backgrounded.
+    // Cleared on resume after deciding whether to honor it.
+    private final java.util.concurrent.atomic.AtomicReference<String> pendingBackgroundedExit =
+            new java.util.concurrent.atomic.AtomicReference<>(null);
 
     private boolean isDarkMode;
     private boolean enableLogsMenu;
@@ -1625,6 +1634,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     @Override
     public void onResume() {
         super.onResume();
+        activityBackgrounded.set(false);
         applyPreferredRefreshRate();
         boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
@@ -1638,6 +1648,26 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         if (!cleaningUp && environment != null) {
             xServerView.onResume();
             environment.onResume();
+        }
+
+        // If an async exit was deferred while we were backgrounded (launcher
+        // waitFor returned during screen lock, or steam exit watch decided to
+        // drain), reconcile it now that we can see the real process state.
+        // If wine session processes are still alive the trigger was spurious
+        // and we leave the session intact; otherwise honor the original exit.
+        String deferred = pendingBackgroundedExit.getAndSet(null);
+        if (deferred != null && !cleaningUp) {
+            ArrayList<String> alive = ProcessHelper.listRunningWineProcesses();
+            if (alive.isEmpty()) {
+                Log.i("XServerDisplayActivity",
+                        "Honoring deferred exit (" + deferred + "); no wine processes remain on resume");
+                exit();
+                return;
+            }
+            Log.w("XServerDisplayActivity",
+                    "Dropping spurious background exit (" + deferred + "); "
+                            + alive.size() + " wine process(es) still alive: "
+                            + ProcessHelper.listRunningWineProcessDetails());
         }
         if (inputControlsView != null && touchpadView != null) {
             ControlsProfile activeProfile = inputControlsView.getProfile();
@@ -1655,6 +1685,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     @Override
     public void onPause() {
         super.onPause();
+        activityBackgrounded.set(true);
         boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
         if (gyroEnabled) {
@@ -1896,6 +1927,20 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         runOnUiThread(() -> {
             if (activityDestroyed.get() || isFinishing() || isDestroyed()) {
                 Log.d("XServerDisplayActivity", "Skipping exit request after teardown: " + reason);
+                return;
+            }
+            // Defer if the user can't see the screen. The steam exit watch
+            // polls via WinHandler IPC, which times out while wine processes
+            // are SIGSTOP'd by onPause — that can be misread as "drained" and
+            // fire a false-positive exit. The resume-side reconciliation in
+            // onResume() rechecks via /proc and drops spurious triggers.
+            if (activityBackgrounded.get()
+                    && !exitRequested.get()
+                    && !sessionCleanupStarted.get()) {
+                if (pendingBackgroundedExit.compareAndSet(null, reason)) {
+                    Log.w("XServerDisplayActivity",
+                            "Deferring exit until resume — " + reason);
+                }
                 return;
             }
             exit();
@@ -3797,6 +3842,25 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             // Removed MoveSteamExe cleanup hook from termination callback.
 
             if (shouldWatchSteamTermination(status)) {
+                return;
+            }
+
+            // The activity may be backgrounded (screen locked, app minimized).
+            // If so, defer the exit until onResume can re-check whether the
+            // wine session truly ended. Locking the phone shouldn't tear the
+            // container down; if the launcher waitFor returned spuriously
+            // (e.g. because the OS reaped a transient outer process while
+            // wine itself was still alive), the resume-side reconciliation
+            // will see live processes and keep the session running.
+            if (activityBackgrounded.get()
+                    && !exitRequested.get()
+                    && !sessionCleanupStarted.get()
+                    && !activityDestroyed.get()) {
+                String reason = "guest launcher terminated (status=" + status + ") while backgrounded";
+                if (pendingBackgroundedExit.compareAndSet(null, reason)) {
+                    Log.w("XServerDisplayActivity",
+                            "Deferring exit until resume — " + reason);
+                }
                 return;
             }
 
