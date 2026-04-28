@@ -1646,8 +1646,12 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         boolean cleaningUp = exitRequested.get() || sessionCleanupStarted.get() || activityDestroyed.get();
 
         if (!cleaningUp && environment != null) {
+            // Resume GL rendering for the foreground X surface. We intentionally
+            // do NOT auto-resume wine processes here: we no longer auto-pause
+            // them on background, so there is nothing to flip back. The drawer
+            // "Pause all Wine processes" toggle remains the user-controlled
+            // path for explicit suspend/resume.
             xServerView.onResume();
-            environment.onResume();
         }
 
         // If an async exit was deferred while we were backgrounded (launcher
@@ -1677,9 +1681,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
         startTime = System.currentTimeMillis();
         handler.postDelayed(savePlaytimeRunnable, SAVE_INTERVAL_MS);
-        if (!cleaningUp) {
-            ProcessHelper.resumeAllWineProcesses();
-        }
     }
 
     @Override
@@ -1697,9 +1698,15 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         boolean cleaningUp = exitRequested.get() || sessionCleanupStarted.get() || activityDestroyed.get();
 
         if (!cleaningUp && !isInPictureInPictureMode()) {
-            // Only pause environment and xServerView if not in PiP mode
+            // Pause GL rendering only — do NOT SIGSTOP wine on backgrounding.
+            // Auto-stopping wine across long screen-locked windows let the OS
+            // reap the suspended children (OOM killer prefers stopped procs,
+            // and the freezer can target them), which manifested as the
+            // container closing on unlock. Leaving wine running and trusting
+            // the keep-alive foreground service keeps the container intact.
+            // The drawer "Pause all Wine processes" toggle is still available
+            // for the user to manually suspend the session for battery.
             if (environment != null) {
-                environment.onPause();
                 xServerView.onPause();
             }
         }
@@ -1713,9 +1720,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         savePlaytimeData();
         handler.removeCallbacks(savePlaytimeRunnable);
-        if (!cleaningUp) {
-            ProcessHelper.pauseAllWineProcesses();
-        }
     }
 
 
