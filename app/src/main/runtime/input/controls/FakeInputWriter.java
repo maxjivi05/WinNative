@@ -250,7 +250,20 @@ public class FakeInputWriter {
     // back up the fake-evdev queue with redundant micro-movements from the
     // touchscreen. Button transitions always go through immediately so input
     // latency on press/release stays unaffected.
-    if (!buttonChanged) {
+    //
+    // Exception: if the new state is "fully neutral" (all axes/triggers at
+    // zero) and the previous state had any non-zero axis, this is the user
+    // releasing a virtual joystick. Touchscreens emit only a single terminal
+    // (0, 0) update on release, so dropping it leaves the stick stuck at its
+    // last position from the game's perspective. Always let releases through.
+    boolean returningToNeutral =
+        lx == 0 && ly == 0 && rx == 0 && ry == 0 && tl == 0 && tr == 0
+            && hatX == 0 && hatY == 0
+            && (this.prevThumbLX != 0 || this.prevThumbLY != 0
+                || this.prevThumbRX != 0 || this.prevThumbRY != 0
+                || this.prevTriggerL != 0 || this.prevTriggerR != 0
+                || this.prevHatX != 0 || this.prevHatY != 0);
+    if (!buttonChanged && !returningToNeutral) {
       long now = System.nanoTime();
       if (now - this.lastWriteNs < MIN_AXIS_WRITE_INTERVAL_NS) {
         return;
