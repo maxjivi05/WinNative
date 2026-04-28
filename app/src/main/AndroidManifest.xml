@@ -105,6 +105,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- Keeps the app process alive while a wine session is paused in the
+             background or while a component download/install is in flight, so
+             screen lock does not kill the container or interrupt the install.
+             stopWithTask=false lets us see onTaskRemoved on user swipe-away,
+             which is the only path that should tear the session down. -->
+        <service
+            android:name="com.winlator.cmod.runtime.system.SessionKeepAliveService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
         <service
             android:name="com.winlator.cmod.feature.stores.steam.service.SteamService"
             android:enabled="true"

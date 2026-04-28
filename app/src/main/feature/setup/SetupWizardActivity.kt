@@ -694,6 +694,11 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         val imageFs = ImageFs.find(this)
         val rootDir = imageFs.rootDir
 
+        // Keep the process alive while the imagefs extraction runs; the user
+        // can lock the screen during this multi-minute step without losing it.
+        val keepAliveTag = "imagefs_install"
+        com.winlator.cmod.runtime.system.SessionKeepAliveService.startDownload(this, keepAliveTag)
+
         Executors.newSingleThreadExecutor().execute {
             try {
                 clearRootDir(rootDir)
@@ -779,6 +784,11 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                     imageFsInstalling.value = false
                     wizardError.value = "ImageFS install failed: ${e.message}"
                 }
+            } finally {
+                com.winlator.cmod.runtime.system.SessionKeepAliveService.stopDownload(
+                    applicationContext,
+                    keepAliveTag,
+                )
             }
         }
     }
@@ -1283,8 +1293,11 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 .filter { isRecommendedSpec(it) && it.verName !in advancedInstalledSet }
         if (pending.isEmpty()) return
 
+        val keepAliveTag = "install_recommended_${System.currentTimeMillis()}"
+        com.winlator.cmod.runtime.system.SessionKeepAliveService.startDownload(this, keepAliveTag)
         lifecycleScope.launch {
             wizardError.value = null
+            try {
             for ((index, spec) in pending.withIndex()) {
                 val profile =
                     withContext(Dispatchers.IO) {
@@ -1344,11 +1357,19 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             transferState.value = null
             refreshAdvancedInstalledSet()
             refreshWizardState()
+            } finally {
+                com.winlator.cmod.runtime.system.SessionKeepAliveService.stopDownload(
+                    applicationContext,
+                    keepAliveTag,
+                )
+            }
         }
     }
 
     private fun installAdvancedComponent(spec: RemotePackageSpec) {
         if (transferState.value != null) return
+        val keepAliveTag = "install_advanced_${spec.remoteUrl}"
+        com.winlator.cmod.runtime.system.SessionKeepAliveService.startDownload(this, keepAliveTag)
         lifecycleScope.launch {
             wizardError.value = null
             val profile =
@@ -1408,6 +1429,10 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 refreshAdvancedInstalledSet()
                 refreshWizardState()
             }
+            com.winlator.cmod.runtime.system.SessionKeepAliveService.stopDownload(
+                applicationContext,
+                keepAliveTag,
+            )
         }
     }
 

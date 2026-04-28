@@ -529,6 +529,11 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         super.onCreate(savedInstanceState);
         AppUtils.hideSystemUI(this);
         AppUtils.keepScreenOn(this);
+        // Promote the app to a foreground service so the OS does not reap our
+        // process while the screen is locked or the activity is backgrounded.
+        // Without this, locking the phone while wine processes are paused can
+        // tear down the whole container. The service stops on session exit.
+        com.winlator.cmod.runtime.system.SessionKeepAliveService.startGameSession(this);
         // Clean up any shared debug logs and prepare for fresh session logging
         DebugFragment.Companion.cleanupSharedLogs();
         com.winlator.cmod.runtime.system.LogManager.prepareForNewSession(this);
@@ -2063,6 +2068,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
         Log.d("XServerLeakCheck", "Forced cleanup final process snapshot: "
                 + ProcessHelper.listRunningWineProcessDetails());
+        com.winlator.cmod.runtime.system.SessionKeepAliveService.stopGameSession(getApplicationContext());
     }
 
     private void exit() {
@@ -2118,6 +2124,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     xServer = null;
                     xServerView = null;
                     if (preloaderDialog != null && preloaderDialog.isShowing()) preloaderDialog.closeOnUiThread();
+                    com.winlator.cmod.runtime.system.SessionKeepAliveService.stopGameSession(getApplicationContext());
                     closeAfterSessionExit();
                 }
             }, 1000);
