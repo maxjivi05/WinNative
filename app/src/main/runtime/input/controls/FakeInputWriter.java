@@ -28,6 +28,10 @@ public class FakeInputWriter {
   public static final short MSC_SCAN = 4;
   public static final short SYN_REPORT = 0;
   private static final String TAG = "FakeInputWriter";
+  // Cap pure-axis writes to ~200 Hz to match Wine's fake-evdev poll cadence
+  // and avoid the touch-driven event flood that progressively backs up the
+  // fake-evdev queue and starves Wine's input thread.
+  private static final long MIN_AXIS_WRITE_INTERVAL_NS = 5_000_000L;
   private FileChannel channel;
   private final File eventFile;
   private int prevHatX;
@@ -56,6 +60,7 @@ public class FakeInputWriter {
   private volatile boolean destroyed = false;
   private final boolean[] prevButtonStates = new boolean[12];
   private boolean hasChanges = false;
+  private long lastWriteNs = 0L;
   private final ByteBuffer buffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
 
   public FakeInputWriter(String fakeInputPath, int slot) {
@@ -207,23 +212,57 @@ public class FakeInputWriter {
   }
 
   public void writeGamepadState(GamepadState state) throws IOException {
-    int hatX;
     if (!this.isOpen && !open()) {
       return;
     }
-    this.buffer.clear();
-    this.hasChanges = false;
-    for (int i = 0; i < 10; i++) {
-      writeButton(i, state.isPressed((byte) i));
-    }
+
     int lx = (int) (state.thumbLX * 32767.0f);
     int ly = (int) (state.thumbLY * 32767.0f);
     int rx = (int) (state.thumbRX * 32767.0f);
     int ry = (int) (state.thumbRY * 32767.0f);
     int tl = (int) (state.triggerL * 255.0f);
     int tr = (int) (state.triggerR * 255.0f);
+    int hatX = state.dpad[3] ? -1 : (state.dpad[1] ? 1 : 0);
+    int hatY = state.dpad[0] ? -1 : (state.dpad[2] ? 1 : 0);
 
-    // The fake evdev file is effectively a queue, so unchanged axes must stay silent.
+    boolean buttonChanged = false;
+    for (int i = 0; i < 10; i++) {
+      if (this.prevButtonStates[i] != state.isPressed((byte) i)) {
+        buttonChanged = true;
+        break;
+      }
+    }
+    boolean axisChanged =
+        lx != this.prevThumbLX
+            || ly != this.prevThumbLY
+            || rx != this.prevThumbRX
+            || ry != this.prevThumbRY
+            || tl != this.prevTriggerL
+            || tr != this.prevTriggerR
+            || hatX != this.prevHatX
+            || hatY != this.prevHatY;
+
+    if (!buttonChanged && !axisChanged) {
+      return;
+    }
+
+    // Throttle pure-axis updates so we don't outrun Wine's poll cadence and
+    // back up the fake-evdev queue with redundant micro-movements from the
+    // touchscreen. Button transitions always go through immediately so input
+    // latency on press/release stays unaffected.
+    if (!buttonChanged) {
+      long now = System.nanoTime();
+      if (now - this.lastWriteNs < MIN_AXIS_WRITE_INTERVAL_NS) {
+        return;
+      }
+    }
+
+    this.buffer.clear();
+    this.hasChanges = false;
+    for (int i = 0; i < 10; i++) {
+      writeButton(i, state.isPressed((byte) i));
+    }
+
     if (lx != this.prevThumbLX) {
       this.prevThumbLX = lx;
       writeEvent((short) 3, (short) 0, lx);
@@ -248,18 +287,6 @@ public class FakeInputWriter {
       this.prevTriggerR = tr;
       writeEvent((short) 3, (short) 9, tr);
     }
-
-    int hatY = 1;
-    if (state.dpad[3]) {
-      hatX = -1;
-    } else {
-      hatX = state.dpad[1] ? 1 : 0;
-    }
-    if (state.dpad[0]) {
-      hatY = -1;
-    } else if (!state.dpad[2]) {
-      hatY = 0;
-    }
     if (hatX != this.prevHatX) {
       this.prevHatX = hatX;
       writeEvent((short) 3, (short) 16, hatX);
@@ -268,10 +295,12 @@ public class FakeInputWriter {
       this.prevHatY = hatY;
       writeEvent((short) 3, (short) 17, hatY);
     }
+
     if (this.hasChanges) {
       writeEvent((short) 0, (short) 0, 0);
       this.buffer.flip();
       this.channel.write(this.buffer);
+      this.lastWriteNs = System.nanoTime();
     }
   }
 }

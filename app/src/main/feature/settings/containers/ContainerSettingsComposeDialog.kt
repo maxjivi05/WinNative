@@ -900,14 +900,24 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
 
         if (isArm64EC) {
             state.emulator64Entries.value = listOfNotNull(entryById("fexcore"))
+            // 32-bit on ARM64EC: wowbox64 listed first so the dropdown's
+            // default selection (index 0) gives the more stable WoW64 path.
+            // FEXCore is still selectable for users who want it.
             state.emulator32Entries.value =
                 listOfNotNull(
-                    entryById("fexcore"),
-                    if (hasWowbox64) entryById("wowbox64") else null
+                    if (hasWowbox64) entryById("wowbox64") else null,
+                    entryById("fexcore")
                 )
         } else {
+            // x86_64: Wowbox64 listed first so the default selection picks the
+            // working WoW64 module. Plain Box64 doesn't supply a WoW64 thunk
+            // DLL, so 32-bit guests crash during init when it's chosen.
             state.emulator64Entries.value = listOfNotNull(entryById("box64"))
-            state.emulator32Entries.value = listOfNotNull(entryById("box64"))
+            state.emulator32Entries.value =
+                listOfNotNull(
+                    if (hasWowbox64) entryById("wowbox64") else null,
+                    entryById("box64")
+                )
         }
 
         val new32 = state.emulator32Entries.value

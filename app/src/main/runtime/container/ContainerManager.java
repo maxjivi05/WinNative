@@ -243,10 +243,19 @@ public class ContainerManager {
       if (!data.has("emulator") || !data.has("emulator64")) {
           WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersion);
           if (wineInfo.isArm64EC()) {
-              if (!data.has("emulator"))   container.setEmulator("fexcore");
+              // ARM64EC: 64-bit guests use FEXCore directly; for 32-bit guests
+              // wowbox64.dll is the more compatible WoW64 path (FEX's
+              // libwow64fex.dll triggers stack-overflow class faults on long
+              // sessions of certain titles). Users can still flip to FEXCore
+              // via the 32-bit emulator dropdown.
+              if (!data.has("emulator"))   container.setEmulator("wowbox64");
               if (!data.has("emulator64")) container.setEmulator64("fexcore");
           } else {
-              if (!data.has("emulator"))   container.setEmulator("box64");
+              // x86_64: 64-bit guests run native through Box64; 32-bit guests
+              // need a WoW64 module — wowbox64.dll is Box64's WoW64
+              // implementation. Plain Box64 has no WoW64 thunk, so 32-bit
+              // games crashed during init when it was the default.
+              if (!data.has("emulator"))   container.setEmulator("wowbox64");
               if (!data.has("emulator64")) container.setEmulator64("box64");
           }
           Log.d("ContainerManager", "createContainer: auto-set emulators for arch="

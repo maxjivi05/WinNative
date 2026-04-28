@@ -681,6 +681,7 @@ EXPORT int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     return my_poll ? my_poll(fds, nfds, timeout) : -1;
 
   const long long deadline_ms = timeout < 0 ? -1 : monotonic_ms() + timeout;
+  const long long loop_start_ms = monotonic_ms();
 
   while (true) {
     int ready = 0;
@@ -722,7 +723,12 @@ EXPORT int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     if (deadline_ms >= 0 && monotonic_ms() >= deadline_ms)
       return 0;
 
-    struct timespec sleep_time = {0, 5 * 1000 * 1000};
+    // Adaptive sleep: tight 1ms window for the first 50ms (low input
+    // latency when a game is actively reading) then back off to 5ms once
+    // we've been idle long enough that responsiveness no longer matters.
+    long long elapsed_ms = monotonic_ms() - loop_start_ms;
+    long sleep_ns = (elapsed_ms < 50) ? (1 * 1000 * 1000L) : (5 * 1000 * 1000L);
+    struct timespec sleep_time = {0, sleep_ns};
     nanosleep(&sleep_time, nullptr);
   }
 }
@@ -791,6 +797,7 @@ EXPORT int select(int nfds, fd_set *readfds, fd_set *writefds,
   const long long timeout_ms = timeval_to_ms(timeout);
   const long long deadline_ms =
       timeout_ms < 0 ? -1 : monotonic_ms() + timeout_ms;
+  const long long loop_start_ms = monotonic_ms();
 
   while (true) {
     int ready = 0;
@@ -850,7 +857,9 @@ EXPORT int select(int nfds, fd_set *readfds, fd_set *writefds,
     if (deadline_ms >= 0 && monotonic_ms() >= deadline_ms)
       return 0;
 
-    struct timespec sleep_time = {0, 5 * 1000 * 1000};
+    long long elapsed_ms = monotonic_ms() - loop_start_ms;
+    long sleep_ns = (elapsed_ms < 50) ? (1 * 1000 * 1000L) : (5 * 1000 * 1000L);
+    struct timespec sleep_time = {0, sleep_ns};
     nanosleep(&sleep_time, nullptr);
   }
 }

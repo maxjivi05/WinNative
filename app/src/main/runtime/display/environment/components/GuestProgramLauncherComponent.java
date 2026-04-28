@@ -461,7 +461,20 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     synchronized (lock) {
       if (wineInfo.isArm64EC()) {
         extractEmulatorsDlls();
-      } else extractBox64Files();
+      } else {
+        extractBox64Files();
+        // x86_64 containers also need wowbox64.dll extracted when configured
+        // so 32-bit Windows games can launch through Box64's WoW64 path. The
+        // wine binary is x86_64; wowbox64.dll is what Wine loads as its WoW64
+        // module to translate 32-bit guest syscalls back through Box64.
+        String emulatorForExtract = container.getEmulator();
+        if (shortcut != null) {
+          emulatorForExtract = shortcut.getExtra("emulator", emulatorForExtract);
+        }
+        if (emulatorForExtract != null && emulatorForExtract.equalsIgnoreCase("wowbox64")) {
+          extractEmulatorsDlls();
+        }
+      }
       copyDefaultBox64RCFile();
       checkDependencies();
 
@@ -740,20 +753,27 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     Log.d("GuestLauncher", "nativeLibDir: " + nativeLibDir);
     Log.d("GuestLauncher", "fakeinputSrc exists: " + fakeinputSrc.exists());
     Log.d("GuestLauncher", "fakeinputDest: " + fakeinputDest.getAbsolutePath());
-    if (!fakeinputDest.exists()) {
+    // Re-copy whenever the APK ships a different build than what's in imagefs,
+    // so native-side fakeinput updates land automatically on app upgrade.
+    // Without this, the launcher used to skip the copy as long as a stale
+    // libfakeinput.so existed in imagefs from the previous install.
+    boolean needsCopy =
+        fakeinputSrc.exists()
+            && (!fakeinputDest.exists() || fakeinputDest.length() != fakeinputSrc.length());
+    if (needsCopy) {
       try {
-        if (fakeinputSrc.exists()) {
-          FileUtils.copy(fakeinputSrc, fakeinputDest);
-          Log.d("GuestLauncher", "Copied libfakeinput.so to imagefs");
-        } else {
-          Log.e(
-              "GuestLauncher",
-              "libfakeinput.so NOT FOUND in APK: " + fakeinputSrc.getAbsolutePath());
-        }
+        FileUtils.copy(fakeinputSrc, fakeinputDest);
+        Log.d(
+            "GuestLauncher",
+            "Copied libfakeinput.so to imagefs (size=" + fakeinputDest.length() + ")");
       } catch (Exception e) {
         Log.e("GuestLauncher", "Failed to copy libfakeinput.so: " + e.getMessage());
         e.printStackTrace();
       }
+    } else if (!fakeinputSrc.exists() && !fakeinputDest.exists()) {
+      Log.e(
+          "GuestLauncher",
+          "libfakeinput.so NOT FOUND in APK: " + fakeinputSrc.getAbsolutePath());
     }
     Log.d("GuestLauncher", "fakeinputDest exists after copy: " + fakeinputDest.exists());
 
@@ -851,6 +871,13 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         }
       } else {
         command = imageFs.getBinDir() + "/box64 " + guestExecutable;
+        // On x86_64 containers Wine itself runs under Box64; for 32-bit guest
+        // PEs Wine still needs an HODLL pointing at a WoW64 module. wowbox64.dll
+        // is Box64's WoW64 implementation — without HODLL set, 32-bit guests
+        // never finish initialising and the launch terminates immediately.
+        if (emulator.equalsIgnoreCase("wowbox64")) {
+          envVars.put("HODLL", "wowbox64.dll");
+        }
       }
     } else {
       String[] parts = overriddenCommand.split(";");

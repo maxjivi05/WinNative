@@ -819,7 +819,9 @@ class ShortcutSettingsComposeDialog private constructor(
     }
 
     // ARM64EC -> 64=FEXCore, 32=FEXCore|Wowbox64.
-    // x86_64 -> 64=Box64, 32=Box64.
+    // x86_64  -> 64=Box64,   32=Wowbox64|Box64. Wowbox64 is listed first so it's
+    // the default for new shortcuts — plain Box64 has no WoW64 module wired so
+    // 32-bit Steam games crash during init when it's selected.
     private fun rebuildEmulatorLists() {
         val fullList = state.emulatorEntries.value
         val hasWowbox64 = hasInstalledWowbox64()
@@ -836,14 +838,21 @@ class ShortcutSettingsComposeDialog private constructor(
 
         if (isArm64EC) {
             state.emulator64Entries.value = listOfNotNull(entryById("fexcore"))
+            // 32-bit on ARM64EC: wowbox64 listed first so the dropdown's
+            // default selection (index 0) gives the more stable WoW64 path.
+            // FEXCore is still selectable for users who want it.
             state.emulator32Entries.value =
                 listOfNotNull(
-                    entryById("fexcore"),
-                    if (hasWowbox64) entryById("wowbox64") else null
+                    if (hasWowbox64) entryById("wowbox64") else null,
+                    entryById("fexcore")
                 )
         } else {
             state.emulator64Entries.value = listOfNotNull(entryById("box64"))
-            state.emulator32Entries.value = listOfNotNull(entryById("box64"))
+            state.emulator32Entries.value =
+                listOfNotNull(
+                    if (hasWowbox64) entryById("wowbox64") else null,
+                    entryById("box64")
+                )
         }
 
         val new32 = state.emulator32Entries.value

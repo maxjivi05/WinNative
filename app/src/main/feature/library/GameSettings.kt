@@ -60,6 +60,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -72,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -90,6 +92,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.winlator.cmod.R
+import com.winlator.cmod.shared.ui.outlinedSwitchColors
 import com.winlator.cmod.shared.ui.widget.EnvVarsView
 import com.winlator.cmod.shared.ui.widget.chasingBorder
 import kotlin.math.roundToInt
@@ -2651,11 +2654,31 @@ private fun EnvVarValueEditor(
             val off = known!![2]
             val on = known[3]
             val isOn = value == on || value == "1" || value == "true"
-            EnvValueDropdown(
-                current = if (isOn) on else off,
-                options = listOf(off, on),
-                onSelected = onValueChange
-            )
+            // Render as a Switch toggle right-aligned inside a fixed-height
+            // box so the row matches the other env-var rows (TEXT, NUMBER,
+            // dropdown) and doesn't visually push them around.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(InputSurface)
+                    .border(1.dp, AccentBlue.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Switch(
+                    checked = isOn,
+                    onCheckedChange = { checked ->
+                        onValueChange(if (checked) on else off)
+                    },
+                    modifier = Modifier.scale(0.78f),
+                    colors = outlinedSwitchColors(
+                        accentColor = AccentBlue,
+                        textSecondaryColor = TextSecondary
+                    )
+                )
+            }
         }
         "SELECT" -> {
             val options = known!!.drop(2)

@@ -1107,7 +1107,9 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         )
 
         if (isArm64) {
-            container.setEmulator("fexcore")
+            // 32-bit slot defaults to wowbox64; user can swap to fexcore
+            // in container/shortcut advanced settings.
+            container.setEmulator("wowbox64")
             container.setEmulator64("fexcore")
             container.setBox64Version(
                 resolvePreferredContentVersion(
@@ -1124,7 +1126,9 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 ),
             )
         } else {
-            container.setEmulator("box64")
+            // 32-bit slot defaults to wowbox64 so 32-bit games boot via
+            // Box64's WoW64 module. 64-bit slot stays on plain Box64.
+            container.setEmulator("wowbox64")
             container.setEmulator64("box64")
             container.setBox64Version(
                 resolvePreferredContentVersion(
