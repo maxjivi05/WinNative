@@ -465,7 +465,6 @@
     <string name="fexcore_env_var_help__multiblock">啟用多區塊程式碼編譯。可能導致較長的 JIT 編譯時間和卡頓。</string>
     <string name="fexcore_env_var_help__hostfeatures">控制 CPU 功能強制啟用。</string>
     <string name="fexcore_env_var_help__smalltscscale">在低頻系統上縮放 TSC。</string>
-    <string name="fexcore_env_var_help__smc_checks">自修改程式碼檢查。</string>
     <string name="fexcore_env_var_help__volatilemetadata">可用時使用 PE 檔案中的易失性中繼資料進行 TSO。</string>
     <string name="fexcore_env_var_help__monohacks">用於 Mono 偵測的特殊 SMC + JIT 區塊技巧。</string>
     <string name="fexcore_env_var_help__hidehypervisorbit">隱藏 CPUID 虛擬機監控位元（適用於因此當機的應用程式）。</string>

@@ -465,7 +465,6 @@
     <string name="fexcore_env_var_help__multiblock">Aktiverer multiblok-kodekompilering. Kan forårsage længere JIT-kompilering og hakken.</string>
     <string name="fexcore_env_var_help__hostfeatures">Styrer tvungen CPU-funktioner.</string>
     <string name="fexcore_env_var_help__smalltscscale">Skalerer TSC på lavfrekvens-systemer.</string>
-    <string name="fexcore_env_var_help__smc_checks">Kontrol af selvmodificerende kode.</string>
     <string name="fexcore_env_var_help__volatilemetadata">Bruger volatil metadata fra PE-filer til TSO når det er tilgængeligt.</string>
     <string name="fexcore_env_var_help__monohacks">Specielle SMC + JIT-blokhacks til Mono-registrering.</string>
     <string name="fexcore_env_var_help__hidehypervisorbit">Skjuler CPUID hypervisor-bit (nyttigt for apps der crasher med det).</string>

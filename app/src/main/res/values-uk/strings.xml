@@ -469,7 +469,6 @@
     <string name="fexcore_env_var_help__multiblock">Вмикає компіляцію коду кількома блоками. Може спричинити тривалішу JIT-компіляцію та мікрозатримки.</string>
     <string name="fexcore_env_var_help__hostfeatures">Контролює примусове увімкнення функцій CPU.</string>
     <string name="fexcore_env_var_help__smalltscscale">Масштабує TSC на системах з низькою частотою.</string>
-    <string name="fexcore_env_var_help__smc_checks">Перевірки самомодифікуючогося коду.</string>
     <string name="fexcore_env_var_help__volatilemetadata">Використовує волатильні метадані з PE-файлів для TSO, коли доступні.</string>
     <string name="fexcore_env_var_help__monohacks">Спеціальні хаки SMC + JIT-блоків для виявлення Mono.</string>
     <string name="fexcore_env_var_help__hidehypervisorbit">Приховує біт гіпервізора CPUID (корисно для додатків, що аварійно завершуються з ним).</string>
