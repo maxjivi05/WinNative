@@ -102,6 +102,12 @@
     <string name="common_ui_application">Aplicación</string>
     <string name="common_ui_check">Comprobar</string>
     <string name="common_ui_select">Seleccionar</string>
+    <string name="common_ui_select_folder">Seleccionar carpeta</string>
+    <string name="common_ui_current_folder">Carpeta actual</string>
+    <string name="common_ui_storage_roots">Ubicaciones de almacenamiento</string>
+    <string name="common_ui_browse_local_folders_directly">Explorar carpetas locales directamente</string>
+    <string name="common_ui_no_folders_available_here">No hay carpetas disponibles aquí</string>
+    <string name="common_ui_grant_all_files_access_browse">Concede acceso total a los archivos para explorar carpetas locales directamente.</string>
     <string name="common_ui_not_configured">No configurado</string>
     <string name="common_ui_reinstall">Reinstalar</string>
     <string name="common_ui_exit_app_confirm">¿Salir de WinNative?</string>
@@ -109,7 +115,23 @@
     <string name="common_ui_disabled_placeholder">-- Desactivado --</string>
     <string name="common_ui_enabled">Activado</string>
     <string name="common_ui_unknown_error">Error desconocido</string>
+    <string name="common_ui_auto_detected">Detectado automáticamente</string>
+    <string name="common_ui_change">Cambiar</string>
     <string name="common_ui_proceed">Proceder</string>
+    <string name="common_ui_sign_out">Cerrar sesión</string>
+    <string name="common_ui_name_cannot_be_empty">El nombre no puede estar vacío</string>
+    <string name="common_ui_error_with_message">Error: %1$s</string>
+    <string name="common_ui_64_bit">64 bits</string>
+    <string name="common_ui_32_bit">32 bits</string>
+    <string name="common_ui_64_bit_and_32_bit">64 bits y 32 bits</string>
+    <plurals name="common_ui_folder_count">
+        <item quantity="one">%d carpeta</item>
+        <item quantity="other">%d carpetas</item>
+    </plurals>
+    <plurals name="common_ui_file_count">
+        <item quantity="one">%d archivo</item>
+        <item quantity="other">%d archivos</item>
+    </plurals>
 
     <!-- Library > Games -->
     <string name="library_games_shortcut_created">Acceso directo creado</string>
@@ -144,6 +166,7 @@
     <string name="library_games_play">Jugar</string>
     <string name="library_games_add_custom_game">Añadir juego personalizado</string>
     <string name="library_games_game_name">Nombre del juego</string>
+    <string name="library_games_game_folder_mapped_drive">Carpeta del juego (unidad de juego asignada)</string>
     <string name="library_games_select_exe_provide_name">Selecciona un exe e indica un nombre</string>
     <string name="library_games_sign_in_prompt">Inicia sesión en una tienda o añade un juego personalizado para construir tu biblioteca.</string>
 
@@ -152,9 +175,21 @@
     <string name="stores_accounts_steam_integration_title">Steam</string>
     <string name="stores_accounts_shared_downloads_folder">Carpeta de descargas compartida</string>
     <string name="stores_accounts_shared_downloads_subtitle">Usar una sola carpeta para todas las tiendas</string>
+    <string name="stores_accounts_default_downloads_folder">Carpeta de descargas predeterminada</string>
+    <string name="stores_accounts_steam_downloads">Descargas de Steam</string>
+    <string name="stores_accounts_epic_downloads">Descargas de Epic</string>
+    <string name="stores_accounts_gog_downloads">Descargas de GOG</string>
     <string name="stores_accounts_download_speed">Velocidad de descarga</string>
     <string name="stores_accounts_download_speed_subtitle">Controla la concurrencia de hilos de descarga de Steam</string>
     <string name="stores_accounts_download_server">Servidor de descarga</string>
+    <string name="stores_accounts_connected_stores">Tiendas conectadas</string>
+    <string name="stores_accounts_download_settings">Ajustes de descarga</string>
+    <string name="stores_accounts_download_speed_conservative">Conservador</string>
+    <string name="stores_accounts_download_speed_balanced">Equilibrado</string>
+    <string name="stores_accounts_download_speed_standard">Estándar</string>
+    <string name="stores_accounts_download_speed_performance">Rendimiento</string>
+    <string name="stores_accounts_download_server_auto_detected">Detectado automáticamente: %1$s</string>
+    <string name="stores_accounts_download_server_subtitle">Región CDN de Steam para descargas de juegos</string>
     <string name="stores_accounts_sign_out_confirm">¿Cerrar sesión de %1$s?</string>
     <string name="stores_accounts_sign_out_message">Tendrás que iniciar sesión de nuevo para acceder a tu biblioteca.</string>
     <string name="stores_accounts_logged_in_epic">¡Sesión iniciada en Epic Games!</string>
@@ -284,6 +319,7 @@
     <string name="container_config_total">Total</string>
     <string name="container_config_clear_cache">Limpiar caché</string>
     <string name="container_config_estimated_used_space">Espacio usado estimado</string>
+    <string name="settings_containers_error_saving_wallpaper">Error al guardar el fondo de pantalla</string>
     <string name="container_config_directinput_mapper_type">Tipo de mapeador DirectInput</string>
     <string name="container_config_title">Configuración</string>
     <string name="container_config_startup_selection">Selección de inicio</string>
@@ -327,6 +363,8 @@
     <string name="container_wine_mouse_warp_override">Anulación de deformación de ratón</string>
     <string name="container_wine_directx">DirectX</string>
     <string name="container_wine_dxvk_version">Versión de DXVK</string>
+    <string name="container_wine_dxvk_config_title">Configuración de DXVK</string>
+    <string name="container_wine_wined3d_config_title">Configuración de WineD3D</string>
     <string name="container_wine_vkd3d_version">Versión de VKD3D</string>
     <string name="container_wine_version">Versión de Wine</string>
     <string name="container_wine_dxwrapper_help_content">
@@ -345,6 +383,8 @@
 
     <!-- Container > Box64 -->
     <string name="container_box64_title">Box64</string>
+    <string name="container_box64_wowbox64_title">Box64 / Wowbox64</string>
+    <string name="container_wowbox64_title">Wowbox64</string>
     <string name="container_box64_preset">Preset de Box64</string>
     <string name="container_box64_version">Versión de Box64</string>
     <string name="container_box64_stability">Estabilidad</string>
@@ -372,7 +412,8 @@
         &lt;b&gt;0&lt;/b&gt; : No intentar nada especial&lt;br /&gt;
         &lt;b&gt;1&lt;/b&gt; : Activar algunas barreras de memoria al escribir en memoria (en algunos opcodes MOV)&lt;br /&gt;
         &lt;b&gt;2&lt;/b&gt; : Todo lo de 1 más una barrera de memoria en cada escritura a memoria usando MOV&lt;br /&gt;
-        &lt;b&gt;3&lt;/b&gt; : Todo lo de 2 más barrera de memoria al leer de memoria y en algunos opcodes SSE/SSE2
+        &lt;b&gt;3&lt;/b&gt; : Todo lo de 2 más barrera de memoria al leer de memoria y en algunos opcodes SSE/SSE2&lt;br /&gt;
+        &lt;b&gt;4&lt;/b&gt; : Mimics x86 TSO similarly to QEMU.
     </string>
     <string name="box64_env_var_help__dynarec_forward">Define el valor máximo de avance permitido al construir bloques</string>
     <string name="box64_env_var_help__dynarec_callret">Optimización de opcodes CALL/RET</string>
@@ -407,7 +448,7 @@
         &lt;b&gt;3&lt;/b&gt; : Usar SEVL+WFE para emular la instrucción PAUSE de x86.
     </string>
     <string name="box64_env_var_help__avx">
-        AVX y AVX2 implementados, junto con las extensiones BMI1, BMI2, ADX, FMA, F16C y RDANDR.&lt;br /&gt;&lt;br /&gt;
+        AVX y AVX2 implementados, junto con las extensiones BMI1, BMI2, ADX, FMA, F16C y RDRAND.&lt;br /&gt;&lt;br /&gt;
         &lt;b&gt;0&lt;/b&gt; : Desactivar extensión AVX&lt;br /&gt;
         &lt;b&gt;1&lt;/b&gt; : Activar extensiones AVX, BMI1, F16C y VAES.&lt;br /&gt;
         &lt;b&gt;2&lt;/b&gt; : Todo lo de 1 más activar AVX2, BMI2, FMA, ADX, VPCLMULQDQ y RDRAND.&lt;br /&gt;\
@@ -440,6 +481,7 @@
     <string name="container_graphics_configuration">Configuración del controlador gráfico</string>
     <string name="container_graphics_version">Versión del controlador gráfico</string>
     <string name="container_graphics_available_extensions">Extensiones disponibles</string>
+    <string name="container_graphics_extensions_enabled_summary">%1$d / %2$d habilitadas</string>
     <string name="container_graphics_max_device_memory">Memoria máxima del dispositivo</string>
     <string name="container_graphics_sync_frame">Sincronizar cada fotograma</string>
     <string name="container_graphics_disable_present_wait">Desactivar KHR_present_wait</string>
@@ -652,6 +694,9 @@ Ej. <b>META</b> para la <i>tecla META</i>, \n
     <string name="settings_general_cursor_speed">Velocidad del cursor</string>
     <string name="settings_general_theme">Tema</string>
     <string name="settings_general_background">Fondo</string>
+    <string name="settings_general_background_color_hex">Color (hex)</string>
+    <string name="settings_general_wallpaper_selected">Fondo de pantalla seleccionado</string>
+    <string name="settings_general_select_wallpaper">Seleccionar fondo de pantalla</string>
     <string name="settings_general_title">General</string>
     <string name="settings_general_enable_file_provider">Activar proveedor de archivos</string>
     <string name="settings_general_take_effect_next_startup">Esta opción tendrá efecto en el próximo inicio.</string>
@@ -820,6 +865,8 @@ Ruta instalada:
     <string name="setup_wizard_denied">Denegado</string>
     <string name="setup_wizard_allow">Permitir</string>
     <string name="setup_wizard_installing">Instalando</string>
+    <string name="setup_wizard_install_failed_reason">Error de instalación: %1$s</string>
+    <string name="setup_wizard_install_failed_detail">%1$s - %2$s</string>
     <string name="setup_wizard_required_access">Acceso requerido</string>
     <string name="setup_wizard_select_components">Seleccionar componentes</string>
     <string name="setup_wizard_recommended_wine_proton">Wine / Proton recomendado</string>
@@ -976,4 +1023,24 @@ Ruta instalada:
     <string name="cloud_saves_backing_up">Respaldando guardado en la nube…</string>
     <string name="cloud_saves_restoring">Restaurando guardado en la nube…</string>
 
+    <!-- Synced Box64/FEXCore environment help strings -->
+    <string name="box64_env_var_help__aes">Exposes AES CPU capabilities to the guest.</string>
+    <string name="box64_env_var_help__cputype">Selects the Intel or AMD CPU model exposed to the guest.</string>
+    <string name="box64_env_var_help__dynarec_noarch">Reduces dynarec block metadata to save memory, with compatibility tradeoffs.</string>
+    <string name="box64_env_var_help__dynarec_sep">Adds secondary entry points to optimize CALL/RET when CALLRET is enabled.</string>
+    <string name="box64_env_var_help__dynarec_volatile_metadata">Uses PE volatile metadata to guide strong memory emulation for 64-bit Windows games.</string>
+    <string name="box64_env_var_help__dynarec">Enables or disables the Box64 dynamic recompiler.</string>
+    <string name="box64_env_var_help__pclmulqdq">Exposes PCLMULQDQ CPU capabilities to the guest.</string>
+    <string name="box64_env_var_help__shaext">Exposes SHA extension CPU capabilities to the guest.</string>
+    <string name="box64_env_var_help__sse_flushto0">Controls SSE flush-to-zero behavior and exception flag tracking.</string>
+    <string name="box64_env_var_help__sse42">Exposes SSE4.2 CPU capabilities to the guest.</string>
+    <string name="box64_env_var_help__unity">Marks the app as a Unity game and enables Unity-specific compatibility handling.</string>
+    <string name="box64_env_var_help__x87_no80bits">Uses 64-bit double precision instead of 80-bit long double for x87.</string>
+    <string name="fexcore_env_var_help__dynamicl1cachedecreasecountheuristic">Lookups-per-second threshold for shrinking the dynamic L1 cache.</string>
+    <string name="fexcore_env_var_help__dynamicl1cacheincreasecountheuristic">Lookups-per-second threshold for growing the dynamic L1 cache.</string>
+    <string name="fexcore_env_var_help__hidehybrid">Hides hybrid CPU core layout from the guest.</string>
+    <string name="fexcore_env_var_help__kernelunalignedatomicbackpatching">Backpatches kernel-handled unaligned atomics to reduce kernel context switches.</string>
+    <string name="fexcore_env_var_help__maxinst">Maximum number of instructions stored in a compiled block.</string>
+    <string name="fexcore_env_var_help__smcchecks">Verificaciones de código automodificable.</string>
+    <string name="fexcore_env_var_help__strictinprocesssplitlocks">Uses a strict process-wide lock for split unaligned atomic accesses.</string>
 </resources>

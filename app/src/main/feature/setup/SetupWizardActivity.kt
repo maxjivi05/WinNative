@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -488,6 +489,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
     private val defaultArmContainerName = mutableStateOf("")
     private val wizardError = mutableStateOf<String?>(null)
     private val transferState = mutableStateOf<TransferState?>(null)
+    private var lastInstallFailureMessage: String? = null
     private val creatingContainer = mutableStateOf(false)
     private val advancedProfiles = mutableStateListOf<RemotePackageSpec>()
     private val advancedInstalledSet = mutableStateListOf<String>()
@@ -866,9 +868,12 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         val manager = ContentsManager(this)
         manager.syncContents()
 
+        lastInstallFailureMessage = null
         var extractedProfile: ContentProfile? = null
         var installedProfile: ContentProfile? = null
         var failed = false
+        var failureReason: ContentsManager.InstallFailedReason? = null
+        var failureException: Exception? = null
 
         val callback =
             object : ContentsManager.OnInstallFinishedCallback {
@@ -887,6 +892,8 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                         return
                     }
                     failed = true
+                    failureReason = reason
+                    failureException = e
                 }
 
                 override fun onSucceed(profile: ContentProfile) {
@@ -904,6 +911,16 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             }
 
         manager.extraContentFile(Uri.fromFile(file), callback)
+        if (failed) {
+            val reason = failureReason?.name ?: getString(R.string.common_ui_unknown_error)
+            val baseMessage = getString(R.string.setup_wizard_install_failed_reason, reason)
+            lastInstallFailureMessage =
+                failureException?.message
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { getString(R.string.setup_wizard_install_failed_detail, baseMessage, it) }
+                    ?: baseMessage
+            Log.e("SetupWizardActivity", lastInstallFailureMessage, failureException)
+        }
         return if (failed) null else installedProfile
     }
 
@@ -1070,6 +1087,8 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             )
 
         container.setGraphicsDriver(Container.DEFAULT_GRAPHICS_DRIVER)
+        container.setCPUList(Container.getFallbackCPUList())
+        container.setCPUListWoW64(Container.getFallbackCPUListWoW64())
         container.setDrives(normalizedDrives)
         container.setGraphicsDriverConfig(
             replaceDelimitedConfigValue(
@@ -1329,9 +1348,18 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
 
                             val installed = installDownloadedPackage(downloaded, spec.remoteUrl)
                             downloaded.delete()
+                            if (installed == null) {
+                                wizardError.value =
+                                    lastInstallFailureMessage
+                                        ?: getString(R.string.setup_wizard_install_failed_reason, spec.verName)
+                            }
                             installed
                         } catch (e: Exception) {
-                            wizardError.value = "Install failed: ${e.message}"
+                            wizardError.value =
+                                getString(
+                                    R.string.setup_wizard_install_failed_reason,
+                                    e.message ?: getString(R.string.common_ui_unknown_error),
+                                )
                             null
                         }
                     }
@@ -1394,9 +1422,18 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
 
                         val installed = installDownloadedPackage(downloaded, spec.remoteUrl)
                         downloaded.delete()
+                        if (installed == null) {
+                            wizardError.value =
+                                lastInstallFailureMessage
+                                    ?: getString(R.string.setup_wizard_install_failed_reason, spec.verName)
+                        }
                         installed
                     } catch (e: Exception) {
-                        wizardError.value = "Install failed: ${e.message}"
+                        wizardError.value =
+                            getString(
+                                R.string.setup_wizard_install_failed_reason,
+                                e.message ?: getString(R.string.common_ui_unknown_error),
+                            )
                         null
                     } finally {
                         transferState.value = null

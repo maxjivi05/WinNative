@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.core.net.toUri
 import com.winlator.cmod.app.PluviaApp
 import com.winlator.cmod.feature.shortcuts.LibraryShortcutUtils
+import com.winlator.cmod.feature.stores.common.StoreInstallPathSafety
 import com.winlator.cmod.feature.stores.gog.data.GOGCloudSavesLocation
 import com.winlator.cmod.feature.stores.gog.data.GOGCloudSavesLocationTemplate
 import com.winlator.cmod.feature.stores.gog.data.GOGGame
@@ -29,6 +30,7 @@ import com.winlator.cmod.runtime.container.Container
 import com.winlator.cmod.runtime.container.ContainerManager
 import com.winlator.cmod.runtime.display.environment.components.GuestProgramLauncherComponent
 import com.winlator.cmod.runtime.wine.EnvVars
+import com.winlator.cmod.runtime.wine.WineUtils
 import com.winlator.cmod.shared.io.StorageUtils
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -487,6 +489,16 @@ class GOGManager
                         }
                     val installDir = File(installPath)
                     val wasInstalled = game?.isInstalled == true || MarkerUtils.hasMarker(installPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                    val deleteCheck =
+                        StoreInstallPathSafety.checkInstallDirDelete(
+                            context,
+                            installPath,
+                            protectedRoots = listOf(GOGConstants.defaultGOGGamesPath),
+                        )
+                    if (!deleteCheck.allowed) {
+                        Timber.e("Refusing to delete GOG install path '$installPath': ${deleteCheck.reason}")
+                        return@withContext Result.failure(Exception("Refusing to delete unsafe install path: $installPath"))
+                    }
 
                     // Delete the manifest file
                     val manifestPath = File(context.filesDir, "manifests/$gameId")
@@ -792,39 +804,28 @@ class GOGManager
                 return "\"explorer.exe\""
             }
 
-            // Find the drive letter that's mapped to this game's install path
-            var gogDriveLetter: String? = null
-            for (drive in Container.drivesIterator(container.drives)) {
-                if (drive[1] == gameInstallPath) {
-                    gogDriveLetter = drive[0]
-                    Timber.d("Found GOG game mapped to ${drive[0]}: drive")
-                    break
-                }
-            }
-
-            if (gogDriveLetter == null) {
-                Timber.e("GOG game directory not mapped to any drive: $gameInstallPath")
-                return "\"explorer.exe\""
-            }
-
             val gameInstallDir = File(gameInstallPath)
             val execFile = File(gameInstallPath, executablePath)
-            // Handle potential IllegalArgumentException if paths don't share a common ancestor
-            val relativePath =
-                try {
-                    execFile.relativeTo(gameInstallDir).path.replace('/', '\\')
-                } catch (e: IllegalArgumentException) {
-                    Timber.e(e, "Failed to compute relative path from $gameInstallDir to $execFile")
-                    return "\"explorer.exe\""
-                }
-
-            val windowsPath = "$gogDriveLetter:\\$relativePath"
+            val windowsPath =
+                WineUtils.getDriveCGameWindowsPath(
+                    container,
+                    "GOG",
+                    gameInstallPath,
+                    execFile.absolutePath,
+                ) ?: WineUtils.getWindowsPath(container, execFile.absolutePath)
 
             // Set working directory
             val execWorkingDir = execFile.parentFile
             if (execWorkingDir != null) {
                 guestProgramLauncherComponent.setWorkingDir(execWorkingDir)
-                envVars.put("WINEPATH", "$gogDriveLetter:\\")
+                val mappedWorkingDir =
+                    WineUtils.getDriveCGameWindowsPath(
+                        container,
+                        "GOG",
+                        gameInstallPath,
+                        execWorkingDir.absolutePath,
+                    ) ?: WineUtils.getWindowsPath(container, execWorkingDir.absolutePath)
+                envVars.put("WINEPATH", mappedWorkingDir)
             } else {
                 guestProgramLauncherComponent.setWorkingDir(gameDir)
             }

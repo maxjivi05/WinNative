@@ -7,6 +7,7 @@ import com.winlator.cmod.app.PluviaApp
 import com.winlator.cmod.app.db.download.DownloadRecord
 import com.winlator.cmod.app.service.download.DownloadCoordinator
 import com.winlator.cmod.feature.stores.epic.ui.util.SnackbarManager
+import com.winlator.cmod.feature.stores.common.StoreInstallPathSafety
 import com.winlator.cmod.feature.stores.gog.data.GOGCredentials
 import com.winlator.cmod.feature.stores.gog.data.GOGGame
 import com.winlator.cmod.feature.stores.gog.data.LibraryItem
@@ -826,13 +827,33 @@ class GOGService : Service() {
                 }
                 CoroutineScope(Dispatchers.IO).launch {
                     info?.awaitCompletion(timeoutMs = 3000L)
-                    val pathToDelete = record.installPath
+                    val pathToDelete =
+                        record.installPath.ifEmpty {
+                            val game = gogManager.getGameFromDbById(gameId)
+                            if (game != null) {
+                                game.installPath.ifEmpty {
+                                    gogManager.getGameInstallPath(gameId, game.title)
+                                }
+                            } else {
+                                ""
+                            }
+                        }
                     if (pathToDelete.isNotEmpty()) {
                         val dirFile = File(pathToDelete)
                         if (dirFile.exists() && dirFile.isDirectory) {
-                            MarkerUtils.removeMarker(pathToDelete, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                            MarkerUtils.removeMarker(pathToDelete, Marker.DOWNLOAD_COMPLETE_MARKER)
-                            dirFile.deleteRecursively()
+                            val deleteCheck =
+                                StoreInstallPathSafety.checkInstallDirDelete(
+                                    applicationContext,
+                                    pathToDelete,
+                                    protectedRoots = listOf(GOGConstants.defaultGOGGamesPath),
+                                )
+                            if (deleteCheck.allowed) {
+                                MarkerUtils.removeMarker(pathToDelete, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                                MarkerUtils.removeMarker(pathToDelete, Marker.DOWNLOAD_COMPLETE_MARKER)
+                                dirFile.deleteRecursively()
+                            } else {
+                                Timber.e("Refusing to delete cancelled GOG download path '$pathToDelete': ${deleteCheck.reason}")
+                            }
                         }
                     }
                     info?.updateStatus(DownloadPhase.CANCELLED)

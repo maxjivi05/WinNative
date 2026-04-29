@@ -53,6 +53,7 @@ import com.winlator.cmod.feature.stores.steam.enums.SaveLocation
 import com.winlator.cmod.feature.stores.steam.enums.SyncResult
 import com.auth0.android.jwt.JWT
 import com.winlator.cmod.feature.stores.common.StoreAuthStatus
+import com.winlator.cmod.feature.stores.common.StoreInstallPathSafety
 import com.winlator.cmod.feature.stores.steam.events.AndroidEvent
 import com.winlator.cmod.feature.stores.steam.events.SteamEvent
 import com.winlator.cmod.feature.stores.steam.statsgen.StatType
@@ -593,6 +594,67 @@ class SteamService :
             return !target.exists()
         }
 
+        private fun cleanupSteamAppCacheDirs(appId: Int) {
+            steamAppCacheDirs(appId).forEach { dir ->
+                if (!dir.exists()) return@forEach
+                Timber.i("Deleting Steam cache folder for appId $appId: ${dir.absolutePath}")
+                if (!deleteRecursivelyWithRetries(dir)) {
+                    Timber.w("Failed to fully delete Steam cache folder for appId $appId: ${dir.absolutePath}")
+                }
+            }
+        }
+
+        private fun steamAppCacheDirs(appId: Int): List<File> {
+            val appIdString = appId.toString()
+            val dirs = linkedMapOf<String, File>()
+
+            fun addDir(dir: File) {
+                val normalized =
+                    try {
+                        dir.canonicalFile
+                    } catch (_: IOException) {
+                        dir.absoluteFile
+                    }
+                dirs[normalized.path] = normalized
+            }
+
+            fun addSteamAppsRoot(root: File) {
+                addDir(File(root, "staging/$appIdString"))
+                addDir(File(root, "shadercache/$appIdString"))
+            }
+
+            fun addInstallRoot(installRoot: String) {
+                if (installRoot.isBlank()) return
+                val root = File(installRoot)
+                val steamAppsRoot =
+                    if (root.name.equals("common", ignoreCase = true)) {
+                        root.parentFile ?: root
+                    } else {
+                        root
+                    }
+                addSteamAppsRoot(steamAppsRoot)
+            }
+
+            addDir(File(defaultAppStagingPath, appIdString))
+            if (defaultStoragePath.isNotBlank()) {
+                addDir(File(defaultStoragePath, "Steam/steamapps/shadercache/$appIdString"))
+            }
+
+            addInstallRoot(internalAppInstallPath)
+            addInstallRoot(externalAppInstallPath)
+            addInstallRoot(defaultAppInstallPath)
+            allInstallPaths.forEach(::addInstallRoot)
+
+            return dirs.values.toList()
+        }
+
+        private fun steamProtectedInstallRoots(): List<String> =
+            listOf(
+                internalAppInstallPath,
+                externalAppInstallPath,
+                defaultAppInstallPath,
+            ).filter { it.isNotBlank() }.distinct()
+
         fun hasPartialDownload(appId: Int): Boolean {
             if (isAppInstalled(appId)) return false
 
@@ -1062,14 +1124,38 @@ class SteamService :
         ) {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 try {
+                    val dirPath = getAppDirPath(appId)
+                    val deleteCheck =
+                        StoreInstallPathSafety.checkInstallDirDelete(
+                            instance?.applicationContext ?: DownloadService.appContext,
+                            dirPath,
+                            protectedRoots = steamProtectedInstallRoots(),
+                        )
+                    if (!deleteCheck.allowed) {
+                        Timber.e("Refusing to uninstall Steam appId=$appId from '$dirPath': ${deleteCheck.reason}")
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            onComplete(false)
+                        }
+                        return@launch
+                    }
+
+                    val dirFile = java.io.File(dirPath)
+                    if (dirFile.exists() && dirFile.isDirectory) {
+                        val deleted = deleteRecursivelyWithRetries(dirFile)
+                        if (!deleted) {
+                            Timber.e("Failed to fully delete Steam appId=$appId at '$dirPath'")
+                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                onComplete(false)
+                            }
+                            return@launch
+                        }
+                    }
+
+                    cleanupSteamAppCacheDirs(appId)
+
                     val appInfo = getInstalledApp(appId)
                     if (appInfo != null) {
                         instance?.appInfoDao?.update(appInfo.copy(isDownloaded = false))
-                    }
-                    val dirPath = getAppDirPath(appId)
-                    val dirFile = java.io.File(dirPath)
-                    if (dirFile.exists() && dirFile.isDirectory) {
-                        deleteRecursivelyWithRetries(dirFile)
                     }
                     LibraryShortcutUtils.deleteSteamShortcuts(PluviaApp.instance, appId)
                     PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(appId))
@@ -1414,6 +1500,15 @@ class SteamService :
             return appName
         }
 
+        private fun normalizeInstallPath(path: String): String {
+            if (path.isBlank()) return path
+            return try {
+                File(path).canonicalPath
+            } catch (_: IOException) {
+                File(path).absolutePath
+            }
+        }
+
         fun getAppDirPath(gameId: Int): String {
             val info = getAppInfoOf(gameId)
 
@@ -1422,7 +1517,7 @@ class SteamService :
             val customDir = info?.installDir.orEmpty()
             if (customDir.isNotEmpty() && (customDir.startsWith("/") || customDir.contains(File.separator))) {
                 // It's a full path (custom install location)
-                return customDir
+                return normalizeInstallPath(customDir)
             }
 
             val appName = getAppDirName(info)
@@ -1441,36 +1536,36 @@ class SteamService :
                         val path = Paths.get(baseDir, appName)
                         if (Files.exists(path)) {
                             Timber.i("getAppDirPath: found existing path $path")
-                            return path.pathString
+                            return normalizeInstallPath(path.pathString)
                         }
                         if (oldName.isNotEmpty()) {
                             val oldPath = Paths.get(baseDir, oldName)
                             if (Files.exists(oldPath)) {
                                 Timber.i("getAppDirPath: found existing oldPath $oldPath")
-                                return oldPath.pathString
+                                return normalizeInstallPath(oldPath.pathString)
                             }
                         }
                         // If it doesn't exist yet, this is where we'll install it
                         Timber.i("getAppDirPath: returning new path $path")
-                        return path.pathString
+                        return normalizeInstallPath(path.pathString)
                     }
                 }
             }
 
             for (basePath in allInstallPaths) {
                 val candidate = Paths.get(basePath, appName)
-                if (Files.exists(candidate)) return candidate.pathString
+                if (Files.exists(candidate)) return normalizeInstallPath(candidate.pathString)
                 if (oldName.isNotEmpty()) {
                     val oldCandidate = Paths.get(basePath, oldName)
-                    if (Files.exists(oldCandidate)) return oldCandidate.pathString
+                    if (Files.exists(oldCandidate)) return normalizeInstallPath(oldCandidate.pathString)
                 }
             }
 
             // Nothing on disk yet – default to whatever location you want new installs to use
             if (PrefManager.useExternalStorage) {
-                return Paths.get(externalAppInstallPath, appName).pathString
+                return normalizeInstallPath(Paths.get(externalAppInstallPath, appName).pathString)
             }
-            return Paths.get(internalAppInstallPath, appName).pathString
+            return normalizeInstallPath(Paths.get(internalAppInstallPath, appName).pathString)
         }
 
         private fun createSteamShortcut(
@@ -1759,11 +1854,16 @@ class SteamService :
         suspend fun deleteApp(appId: Int): Boolean =
             withContext(Dispatchers.IO) {
                 val appDirPath = getAppDirPath(appId)
-                val isUnsafeDeleteTarget = appDirPath == internalAppInstallPath || appDirPath == externalAppInstallPath
+                val deleteCheck =
+                    StoreInstallPathSafety.checkInstallDirDelete(
+                        instance?.applicationContext ?: DownloadService.appContext,
+                        appDirPath,
+                        protectedRoots = steamProtectedInstallRoots(),
+                    )
 
                 // Guard against accidental root deletion if path resolution failed.
-                if (isUnsafeDeleteTarget) {
-                    Timber.e("Refusing to delete appId=$appId because resolved path points to install root: $appDirPath")
+                if (!deleteCheck.allowed) {
+                    Timber.e("Refusing to delete appId=$appId from '$appDirPath': ${deleteCheck.reason}")
                     return@withContext false
                 }
 
@@ -1776,26 +1876,11 @@ class SteamService :
                 }
 
                 // Remove any download-complete marker
-                if (!isUnsafeDeleteTarget) {
-                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
-                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                    clearPersistedProgressSnapshot(appDirPath)
-                }
+                MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                clearPersistedProgressSnapshot(appDirPath)
 
-                // Also delete staging and shadercache folders if they exist
-                val stagingPath = Paths.get(defaultAppStagingPath, appId.toString()).pathString
-                val stagingDir = File(stagingPath)
-                if (stagingDir.exists()) {
-                    Timber.i("Deleting staging folder for appId $appId: $stagingPath")
-                    deleteRecursivelyWithRetries(stagingDir)
-                }
-
-                val shaderCachePath = Paths.get(defaultStoragePath, "Steam", "steamapps", "shadercache", appId.toString()).pathString
-                val shaderCacheDir = File(shaderCachePath)
-                if (shaderCacheDir.exists()) {
-                    Timber.i("Deleting shadercache folder for appId $appId: $shaderCachePath")
-                    deleteRecursivelyWithRetries(shaderCacheDir)
-                }
+                cleanupSteamAppCacheDirs(appId)
 
                 // Remove from DB synchronously so immediate reinstall cannot race with stale metadata.
                 with(instance!!) {
@@ -1837,10 +1922,10 @@ class SteamService :
             val finalPath =
                 if (customFile.name.equals(safeFolderName, ignoreCase = true)) {
                     // User selected the game folder itself
-                    customFile.absolutePath
+                    normalizeInstallPath(customFile.absolutePath)
                 } else {
                     // User selected parent folder, create/use subfolder
-                    File(customInstallPath, safeFolderName).absolutePath
+                    normalizeInstallPath(File(customInstallPath, safeFolderName).absolutePath)
                 }
 
             // Update SteamApp in DB
@@ -2419,10 +2504,10 @@ class SteamService :
                 val finalPath =
                     if (customFile.name.equals(safeFolderName, ignoreCase = true)) {
                         // User selected the game folder itself
-                        customFile.absolutePath
+                        normalizeInstallPath(customFile.absolutePath)
                     } else {
                         // User selected parent folder, create/use subfolder
-                        File(customInstallPath, safeFolderName).absolutePath
+                        normalizeInstallPath(File(customInstallPath, safeFolderName).absolutePath)
                     }
 
                 appDirPath = finalPath
@@ -5281,12 +5366,22 @@ class SteamService :
                 }
                 kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
                     info?.awaitCompletion(timeoutMs = 3000L)
-                    val appDirPath = getAppDirPath(appId)
+                    val appDirPath = record.installPath.ifEmpty { getAppDirPath(appId) }
                     val dirFile = java.io.File(appDirPath)
                     if (dirFile.exists() && dirFile.isDirectory) {
-                        MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                        MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
-                        deleteRecursivelyWithRetries(dirFile)
+                        val deleteCheck =
+                            StoreInstallPathSafety.checkInstallDirDelete(
+                                instance?.applicationContext ?: DownloadService.appContext,
+                                appDirPath,
+                                protectedRoots = steamProtectedInstallRoots(),
+                            )
+                        if (deleteCheck.allowed) {
+                            MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                            MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                            deleteRecursivelyWithRetries(dirFile)
+                        } else {
+                            Timber.e("Refusing to delete cancelled Steam download path '$appDirPath': ${deleteCheck.reason}")
+                        }
                     }
                     info?.updateStatus(DownloadPhase.CANCELLED)
                     removeDownloadJob(appId, forceRemove = true)

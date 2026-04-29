@@ -102,6 +102,12 @@
     <string name="common_ui_application">Applikation</string>
     <string name="common_ui_check">Tjek</string>
     <string name="common_ui_select">Vælg</string>
+    <string name="common_ui_select_folder">Vælg mappe</string>
+    <string name="common_ui_current_folder">Nuværende mappe</string>
+    <string name="common_ui_storage_roots">Lagringsrødder</string>
+    <string name="common_ui_browse_local_folders_directly">Gennemse lokale mapper direkte</string>
+    <string name="common_ui_no_folders_available_here">Ingen mapper tilgængelige her</string>
+    <string name="common_ui_grant_all_files_access_browse">Giv fuld filadgang for at gennemse lokale mapper direkte.</string>
     <string name="common_ui_not_configured">Ikke konfigureret</string>
     <string name="common_ui_reinstall">Geninstaller</string>
     <string name="common_ui_exit_app_confirm">Afslut WinNative?</string>
@@ -109,7 +115,23 @@
     <string name="common_ui_disabled_placeholder">-- Deaktiveret --</string>
     <string name="common_ui_enabled">Aktiveret</string>
     <string name="common_ui_unknown_error">Ukendt fejl</string>
+    <string name="common_ui_auto_detected">Automatisk registreret</string>
+    <string name="common_ui_change">Skift</string>
     <string name="common_ui_proceed">Fortsæt</string>
+    <string name="common_ui_sign_out">Log ud</string>
+    <string name="common_ui_name_cannot_be_empty">Navn må ikke være tomt</string>
+    <string name="common_ui_error_with_message">Fejl: %1$s</string>
+    <string name="common_ui_64_bit">64-bit</string>
+    <string name="common_ui_32_bit">32-bit</string>
+    <string name="common_ui_64_bit_and_32_bit">64-bit og 32-bit</string>
+    <plurals name="common_ui_folder_count">
+        <item quantity="one">%d mappe</item>
+        <item quantity="other">%d mapper</item>
+    </plurals>
+    <plurals name="common_ui_file_count">
+        <item quantity="one">%d fil</item>
+        <item quantity="other">%d filer</item>
+    </plurals>
 
     <!-- Library > Games -->
     <string name="library_games_shortcut_created">Genvej oprettet</string>
@@ -144,6 +166,7 @@
     <string name="library_games_play">Spil</string>
     <string name="library_games_add_custom_game">Tilføj brugerdefineret spil</string>
     <string name="library_games_game_name">Spilnavn</string>
+    <string name="library_games_game_folder_mapped_drive">Spilmappe (tilknyttet spildrev)</string>
     <string name="library_games_select_exe_provide_name">Vælg en exe og angiv et navn</string>
     <string name="library_games_sign_in_prompt">Log ind på en butik eller tilføj et brugerdefineret spil for at opbygge dit bibliotek.</string>
 
@@ -152,9 +175,21 @@
     <string name="stores_accounts_steam_integration_title">Steam</string>
     <string name="stores_accounts_shared_downloads_folder">Delt downloadmappe</string>
     <string name="stores_accounts_shared_downloads_subtitle">Brug en enkelt mappe på tværs af alle butikker</string>
+    <string name="stores_accounts_default_downloads_folder">Standard downloadmappe</string>
+    <string name="stores_accounts_steam_downloads">Steam-downloads</string>
+    <string name="stores_accounts_epic_downloads">Epic-downloads</string>
+    <string name="stores_accounts_gog_downloads">GOG-downloads</string>
     <string name="stores_accounts_download_speed">Downloadhastighed</string>
     <string name="stores_accounts_download_speed_subtitle">Styrer Steam download-trådsamtidighed</string>
     <string name="stores_accounts_download_server">Downloadserver</string>
+    <string name="stores_accounts_connected_stores">Forbundne butikker</string>
+    <string name="stores_accounts_download_settings">Downloadindstillinger</string>
+    <string name="stores_accounts_download_speed_conservative">Konservativ</string>
+    <string name="stores_accounts_download_speed_balanced">Balanceret</string>
+    <string name="stores_accounts_download_speed_standard">Standard</string>
+    <string name="stores_accounts_download_speed_performance">Ydeevne</string>
+    <string name="stores_accounts_download_server_auto_detected">Automatisk registreret: %1$s</string>
+    <string name="stores_accounts_download_server_subtitle">Steam CDN-region til spildownloads</string>
     <string name="stores_accounts_sign_out_confirm">Log ud af %1$s?</string>
     <string name="stores_accounts_sign_out_message">Du skal logge ind igen for at få adgang til dit bibliotek.</string>
     <string name="stores_accounts_logged_in_epic">Logget ind på Epic Games!</string>
@@ -284,6 +319,7 @@
     <string name="container_config_total">Total</string>
     <string name="container_config_clear_cache">Ryd cache</string>
     <string name="container_config_estimated_used_space">Estimeret brugt plads</string>
+    <string name="settings_containers_error_saving_wallpaper">Fejl ved gemning af baggrundsbillede</string>
     <string name="container_config_directinput_mapper_type">DirectInput Mapper-type</string>
     <string name="container_config_title">Konfiguration</string>
     <string name="container_config_startup_selection">Opstartsvalg</string>
@@ -327,6 +363,8 @@
     <string name="container_wine_mouse_warp_override">Mouse Warp-tilsidesættelse</string>
     <string name="container_wine_directx">DirectX</string>
     <string name="container_wine_dxvk_version">DXVK-version</string>
+    <string name="container_wine_dxvk_config_title">DXVK-konfiguration</string>
+    <string name="container_wine_wined3d_config_title">WineD3D-konfiguration</string>
     <string name="container_wine_vkd3d_version">VKD3D-version</string>
     <string name="container_wine_version">Wine-version</string>
     <string name="container_wine_dxwrapper_help_content">
@@ -345,6 +383,8 @@
 
     <!-- Container > Box64 -->
     <string name="container_box64_title">Box64</string>
+    <string name="container_box64_wowbox64_title">Box64 / Wowbox64</string>
+    <string name="container_wowbox64_title">Wowbox64</string>
     <string name="container_box64_preset">Box64-forudindstilling</string>
     <string name="container_box64_version">Box64-version</string>
     <string name="container_box64_stability">Stabilitet</string>
@@ -372,7 +412,8 @@
         &lt;b&gt;0&lt;/b&gt; : Forsøg ikke noget særligt&lt;br /&gt;
         &lt;b&gt;1&lt;/b&gt; : Aktiver nogle hukommelsesbarrierer ved skrivning til hukommelse (på visse MOV-opkoder)&lt;br /&gt;
         &lt;b&gt;2&lt;/b&gt; : Alt fra 1 plus en hukommelsesbarriere ved hver skrivning til hukommelse via MOV&lt;br /&gt;
-        &lt;b&gt;3&lt;/b&gt; : Alt fra 2 plus hukommelsesbarriere ved læsning fra hukommelse og på visse SSE/SSE2-opkoder
+        &lt;b&gt;3&lt;/b&gt; : Alt fra 2 plus hukommelsesbarriere ved læsning fra hukommelse og på visse SSE/SSE2-opkoder&lt;br /&gt;
+        &lt;b&gt;4&lt;/b&gt; : Mimics x86 TSO similarly to QEMU.
     </string>
     <string name="box64_env_var_help__dynarec_forward">Definerer den maksimalt tilladte forward-værdi ved blokopbygning</string>
     <string name="box64_env_var_help__dynarec_callret">Optimering af CALL/RET-opkoder</string>
@@ -407,7 +448,7 @@
         &lt;b&gt;3&lt;/b&gt; : Brug SEVL+WFE til at emulere x86 PAUSE-instruktion.
     </string>
     <string name="box64_env_var_help__avx">
-        AVX og AVX2 implementeret, sammen med BMI1, BMI2, ADX, FMA, F16C og RDANDR-udvidelser!&lt;br /&gt;&lt;br /&gt;
+        AVX og AVX2 implementeret, sammen med BMI1, BMI2, ADX, FMA, F16C og RDRAND-udvidelser!&lt;br /&gt;&lt;br /&gt;
         &lt;b&gt;0&lt;/b&gt; : Deaktiver AVX-udvidelse&lt;br /&gt;
         &lt;b&gt;1&lt;/b&gt; : Aktiver AVX, BMI1, F16C og VAES-udvidelse.&lt;br /&gt;
         &lt;b&gt;2&lt;/b&gt; : Alt fra 1 plus aktiver AVX2, BMI2, FMA, ADX, VPCLMULQDQ og RDRAND.&lt;br /&gt;\
@@ -440,6 +481,7 @@
     <string name="container_graphics_configuration">Grafikdriver-konfiguration</string>
     <string name="container_graphics_version">Grafikdriver-version</string>
     <string name="container_graphics_available_extensions">Tilgængelige udvidelser</string>
+    <string name="container_graphics_extensions_enabled_summary">%1$d / %2$d aktiveret</string>
     <string name="container_graphics_max_device_memory">Maks enhedshukommelse</string>
     <string name="container_graphics_sync_frame">Synkroniser hver frame</string>
     <string name="container_graphics_disable_present_wait">Deaktiver KHR_present_wait</string>
@@ -652,6 +694,9 @@ F.eks. <b>META</b> for <i>META-tast</i>, \n
     <string name="settings_general_cursor_speed">Markørhastighed</string>
     <string name="settings_general_theme">Tema</string>
     <string name="settings_general_background">Baggrund</string>
+    <string name="settings_general_background_color_hex">Farve (hex)</string>
+    <string name="settings_general_wallpaper_selected">Baggrundsbillede valgt</string>
+    <string name="settings_general_select_wallpaper">Vælg baggrundsbillede</string>
     <string name="settings_general_title">Generelt</string>
     <string name="settings_general_enable_file_provider">Aktiver filudbyder</string>
     <string name="settings_general_take_effect_next_startup">Denne indstilling træder i kraft ved næste opstart.</string>
@@ -820,6 +865,8 @@ Installeret sti:
     <string name="setup_wizard_denied">Afvist</string>
     <string name="setup_wizard_allow">Tillad</string>
     <string name="setup_wizard_installing">Installerer</string>
+    <string name="setup_wizard_install_failed_reason">Installation mislykkedes: %1$s</string>
+    <string name="setup_wizard_install_failed_detail">%1$s - %2$s</string>
     <string name="setup_wizard_required_access">Påkrævet adgang</string>
     <string name="setup_wizard_select_components">Vælg komponenter</string>
     <string name="setup_wizard_recommended_wine_proton">Anbefalet Wine / Proton</string>
@@ -976,4 +1023,24 @@ Installeret sti:
     <string name="cloud_saves_backing_up">Sikkerhedskopierer cloud-save…</string>
     <string name="cloud_saves_restoring">Gendanner cloud-save…</string>
 
+    <!-- Synced Box64/FEXCore environment help strings -->
+    <string name="box64_env_var_help__aes">Exposes AES CPU capabilities to the guest.</string>
+    <string name="box64_env_var_help__cputype">Selects the Intel or AMD CPU model exposed to the guest.</string>
+    <string name="box64_env_var_help__dynarec_noarch">Reduces dynarec block metadata to save memory, with compatibility tradeoffs.</string>
+    <string name="box64_env_var_help__dynarec_sep">Adds secondary entry points to optimize CALL/RET when CALLRET is enabled.</string>
+    <string name="box64_env_var_help__dynarec_volatile_metadata">Uses PE volatile metadata to guide strong memory emulation for 64-bit Windows games.</string>
+    <string name="box64_env_var_help__dynarec">Enables or disables the Box64 dynamic recompiler.</string>
+    <string name="box64_env_var_help__pclmulqdq">Exposes PCLMULQDQ CPU capabilities to the guest.</string>
+    <string name="box64_env_var_help__shaext">Exposes SHA extension CPU capabilities to the guest.</string>
+    <string name="box64_env_var_help__sse_flushto0">Controls SSE flush-to-zero behavior and exception flag tracking.</string>
+    <string name="box64_env_var_help__sse42">Exposes SSE4.2 CPU capabilities to the guest.</string>
+    <string name="box64_env_var_help__unity">Marks the app as a Unity game and enables Unity-specific compatibility handling.</string>
+    <string name="box64_env_var_help__x87_no80bits">Uses 64-bit double precision instead of 80-bit long double for x87.</string>
+    <string name="fexcore_env_var_help__dynamicl1cachedecreasecountheuristic">Lookups-per-second threshold for shrinking the dynamic L1 cache.</string>
+    <string name="fexcore_env_var_help__dynamicl1cacheincreasecountheuristic">Lookups-per-second threshold for growing the dynamic L1 cache.</string>
+    <string name="fexcore_env_var_help__hidehybrid">Hides hybrid CPU core layout from the guest.</string>
+    <string name="fexcore_env_var_help__kernelunalignedatomicbackpatching">Backpatches kernel-handled unaligned atomics to reduce kernel context switches.</string>
+    <string name="fexcore_env_var_help__maxinst">Maximum number of instructions stored in a compiled block.</string>
+    <string name="fexcore_env_var_help__smcchecks">Kontrol af selvmodificerende kode.</string>
+    <string name="fexcore_env_var_help__strictinprocesssplitlocks">Uses a strict process-wide lock for split unaligned atomic accesses.</string>
 </resources>
