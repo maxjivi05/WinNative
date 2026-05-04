@@ -17,6 +17,8 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <errno.h>
 
 #include "sys/shm.h"
@@ -53,18 +55,30 @@ COMPAT_GLIBC_2_17(__compat_sem_wait,    sem_wait);
 COMPAT_GLIBC_2_17(__compat_sem_trywait, sem_trywait);
 COMPAT_GLIBC_2_17(__compat_sem_destroy, sem_destroy);
 COMPAT_GLIBC_2_17(__compat_sem_getvalue, sem_getvalue);
+COMPAT_GLIBC_2_17(__compat_pthread_mutex_lock, pthread_mutex_lock);
+COMPAT_GLIBC_2_17(__compat_pthread_mutex_unlock, pthread_mutex_unlock);
+COMPAT_GLIBC_2_17(__compat_pthread_create, pthread_create);
+COMPAT_GLIBC_2_17(__compat_pthread_detach, pthread_detach);
 extern int __compat_sem_init(sem_t *, int, unsigned int);
 extern int __compat_sem_post(sem_t *);
 extern int __compat_sem_wait(sem_t *);
 extern int __compat_sem_trywait(sem_t *);
 extern int __compat_sem_destroy(sem_t *);
 extern int __compat_sem_getvalue(sem_t *, int *);
+extern int __compat_pthread_mutex_lock(pthread_mutex_t *);
+extern int __compat_pthread_mutex_unlock(pthread_mutex_t *);
+extern int __compat_pthread_create(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
+extern int __compat_pthread_detach(pthread_t);
 #define sem_init     __compat_sem_init
 #define sem_post     __compat_sem_post
 #define sem_wait     __compat_sem_wait
 #define sem_trywait  __compat_sem_trywait
 #define sem_destroy  __compat_sem_destroy
 #define sem_getvalue __compat_sem_getvalue
+#define pthread_mutex_lock   __compat_pthread_mutex_lock
+#define pthread_mutex_unlock __compat_pthread_mutex_unlock
+#define pthread_create       __compat_pthread_create
+#define pthread_detach       __compat_pthread_detach
 #endif
 
 #define REQUEST_CODE_SHMGET 0
@@ -88,6 +102,33 @@ static shmemory_t* shmemories = NULL;
 static int shmemory_count = 0;
 static int sysvshm_server_fd = -1;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#if defined(__GLIBC__)
+static void* winnative_early_reaper(void* arg) {
+    (void)arg;
+    const time_t end = time(NULL) + 30;
+    while (time(NULL) < end) {
+        int status = 0;
+        pid_t p;
+        while ((p = waitpid(-1, &status, WNOHANG)) > 0) {
+            fprintf(stderr, "[winnative-preload] reaped child pid=%d status=0x%x\n", p, status);
+        }
+        usleep(100000);
+    }
+    return NULL;
+}
+
+__attribute__((constructor))
+static void winnative_start_early_reaper(void) {
+    const char* enabled = getenv("WINNATIVE_STEAM_EARLY_REAPER");
+    if (!enabled || enabled[0] != '1') return;
+
+    pthread_t t;
+    if (pthread_create(&t, NULL, winnative_early_reaper, NULL) == 0) {
+        pthread_detach(t);
+    }
+}
+#endif
 
 static int find_shmemory_index(int shmid) {
     for (int i = 0; i < shmemory_count; i++) if (shmemories[i].id == shmid) return i;

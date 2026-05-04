@@ -5,6 +5,7 @@ import android.util.Log
 import com.winlator.cmod.runtime.display.environment.ImageFs
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
 import java.security.MessageDigest
 
 /**
@@ -48,24 +49,48 @@ object ProtonToolInstaller {
      * only ever write here, so creating it on demand is fine — Steam
      * will recognize the tool the next time it scans the directory.
      */
-    private fun compatToolsDir(context: Context): File =
-        File(
-            ImageFs.find(context).rootDir,
-            "${ImageFs.HOME_PATH}/.local/share/Steam/compatibilitytools.d",
+    private fun compatToolRoots(context: Context): List<File> {
+        val imageFs = ImageFs.find(context)
+        val rootDir = imageFs.rootDir
+        val roots = mutableListOf(
+            File(rootDir, "${ImageFs.HOME_PATH}/.local/share/Steam/compatibilitytools.d"),
         )
 
+        val dotSteamRoot = File(rootDir, "${ImageFs.HOME_PATH}/.steam/root")
+        if (dotSteamRoot.exists() && !Files.isSymbolicLink(dotSteamRoot.toPath())) {
+            roots.add(File(dotSteamRoot, "compatibilitytools.d"))
+        }
+
+        roots.add(File(rootDir, "opt/steam-arm64/client/compatibilitytools.d"))
+        return roots
+    }
+
+    private fun primaryCompatToolsDir(context: Context): File =
+        File(ImageFs.find(context).rootDir, "${ImageFs.HOME_PATH}/.local/share/Steam/compatibilitytools.d")
+
     fun installDir(context: Context): File =
-        File(compatToolsDir(context), TOOL_NAME)
+        File(primaryCompatToolsDir(context), TOOL_NAME)
 
     fun protonScript(context: Context): File =
         File(installDir(context), "proton")
 
     @Throws(IOException::class)
     fun ensureInstalled(context: Context): File {
-        val target = installDir(context)
-        target.mkdirs()
-
         val files = listOf("compatibilitytool.vdf", "toolmanifest.vdf", "proton")
+        val targets = compatToolRoots(context).map { File(it, TOOL_NAME) }
+        for (target in targets) {
+            installInto(context, target, files)
+        }
+        Log.i(TAG, "Installed Steam compat tool '$TOOL_NAME' at ${targets.joinToString()}")
+        return targets.first()
+    }
+
+    @Throws(IOException::class)
+    private fun installInto(context: Context, target: File, files: List<String>) {
+        if (!target.mkdirs() && !target.isDirectory) {
+            throw IOException("Could not create compat tool directory $target")
+        }
+
         for (name in files) {
             val asset = ASSET_PREFIX + name
             val expectedSha = sha256Asset(context, asset)
@@ -105,8 +130,6 @@ object ProtonToolInstaller {
         if (script.exists() && !script.setExecutable(true, false)) {
             throw IOException("Could not set executable bit on $script")
         }
-        Log.i(TAG, "Installed Steam compat tool '$TOOL_NAME' at $target")
-        return target
     }
 
     private fun sha256(file: File): String {

@@ -160,6 +160,9 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
       case Container.STEAM_TYPE_ULTRALIGHT:
         this.steamType = Container.STEAM_TYPE_ULTRALIGHT;
         break;
+      case Container.STEAM_TYPE_LINUX_ARM64:
+        this.steamType = Container.STEAM_TYPE_LINUX_ARM64;
+        break;
       default:
         this.steamType = Container.STEAM_TYPE_NORMAL;
     }

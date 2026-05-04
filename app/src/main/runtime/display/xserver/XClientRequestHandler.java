@@ -171,6 +171,14 @@ public class XClientRequestHandler implements RequestHandler {
     client.generateSequenceNumber();
     client.setRequestData(requestData);
     client.setRequestLength(requestLength);
+    Log.d(
+        "X11",
+        "opcode="
+            + (opcode & 0xff)
+            + " requestData="
+            + (requestData & 0xff)
+            + " length="
+            + requestLength);
 
     try {
       switch (opcode) {

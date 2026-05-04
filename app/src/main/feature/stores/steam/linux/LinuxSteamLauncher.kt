@@ -276,8 +276,11 @@ object LinuxSteamLauncher {
         val wineBinInsideProot = "/winnative-imagefs/opt/$wineIdentifier/bin/wine"
         val wineDirInsideProot = "/winnative-imagefs/opt/$wineIdentifier/bin"
         val bionicPreload = "/winnative-imagefs/usr/lib/libandroid-sysvshm.so"
-
-        val applaunch = if (steamAppId != null) "-applaunch $steamAppId " else ""
+        val steamArgs = if (steamAppId == null) {
+            listOf("-console", "-tcp")
+        } else {
+            listOf("-silent", "-tcp", "-applaunch", steamAppId.toString())
+        }
 
         // The script uses `/system/bin/sh` because the host launcher is
         // running before any chroot is in effect. proot is invoked as a
@@ -334,7 +337,7 @@ object LinuxSteamLauncher {
             appendLine("export PROOT_VERBOSE=1")
             appendLine()
             appendLine("# Make sure the writable directories the chroot expects exist.")
-            appendLine("mkdir -p \"\$XUSER_HOME\" \"\$TMP/runtime-xuser\" \"\$PROOT_TMP_DIR\"")
+            appendLine("mkdir -p \"\$XUSER_HOME\" \"\$TMP\" \"\$PROOT_TMP_DIR\"")
             appendLine("mkdir -p \"\$(dirname \"\$LOG\")\"")
             // steam.sh hardcodes PLATFORM=ubuntu12_32 and calls
             // unpack_runtime("$STEAMROOT/$PLATFORM/steam-runtime") which
@@ -411,19 +414,59 @@ object LinuxSteamLauncher {
             // proot-internal form because Steam follows them from inside the
             // chroot.
             appendLine("STEAM_DOTSTEAM=\"\$XUSER_HOME/.steam\"")
-            appendLine("STEAM_ARM64_BIN_DIR=\"\$STEAM_OPT/client/steamrtarm64\"")
-            appendLine("STEAM_ARM64_SDK_DIR=\"\$STEAM_OPT/client/linuxarm64\"")
-            appendLine("if [ -x \"\$STEAM_ARM64_BIN_DIR/steamwebhelper\" ] && \\")
-            appendLine("   [ -f \"\$STEAM_ARM64_SDK_DIR/steamclient.so\" ]; then")
+            appendLine("find_arm64_file_dir() {")
+            appendLine("    name=\"\$1\"")
+            appendLine("    find \"\$STEAM_OPT/client\" -type f -name \"\$name\" 2>/dev/null | while IFS= read -r f; do")
+            appendLine("        if command -v file >/dev/null 2>&1; then")
+            appendLine("            if file \"\$f\" 2>/dev/null | grep -Eiq 'aarch64|ARM aarch64|ARM64'; then")
+            appendLine("                dirname \"\$f\"")
+            appendLine("                break")
+            appendLine("            fi")
+            appendLine("        elif echo \"\$f\" | grep -Eiq '/(steamrtarm64|linuxarm64|androidarm64)(/|\$)'; then")
+            appendLine("            dirname \"\$f\"")
+            appendLine("            break")
+            appendLine("        fi")
+            appendLine("    done")
+            appendLine("}")
+            appendLine("host_to_proot_steam_path() {")
+            appendLine("    path=\"\$1\"")
+            appendLine("    prefix=\"\$STEAM_OPT/client\"")
+            appendLine("    case \"\$path\" in")
+            appendLine("        \"\$prefix\"*) printf '/opt/steam-arm64/client%s\\n' \"\${path#\$prefix}\" ;;")
+            appendLine("        *) printf '%s\\n' \"\$path\" ;;")
+            appendLine("    esac")
+            appendLine("}")
+            appendLine("STEAM_ARM64_BIN_DIR_HOST=\"\$(find_arm64_file_dir steamwebhelper)\"")
+            appendLine("[ -n \"\$STEAM_ARM64_BIN_DIR_HOST\" ] || STEAM_ARM64_BIN_DIR_HOST=\"\$STEAM_OPT/client/steamrtarm64\"")
+            appendLine("STEAMCLIENT_SO=\"\$(find \"\$STEAM_OPT/client\" -type f -name steamclient.so 2>/dev/null | head -n1)\"")
+            appendLine("if [ -n \"\$STEAMCLIENT_SO\" ]; then")
+            appendLine("    STEAM_ARM64_SDK_DIR_HOST=\"\$(dirname \"\$STEAMCLIENT_SO\")\"")
+            appendLine("else")
+            appendLine("    STEAM_ARM64_SDK_DIR_HOST=\"\$STEAM_OPT/client/linuxarm64\"")
+            appendLine("fi")
+            appendLine("STEAM_ARM64_BIN_DIR=\"\$(host_to_proot_steam_path \"\$STEAM_ARM64_BIN_DIR_HOST\")\"")
+            appendLine("STEAM_ARM64_SDK_DIR=\"\$(host_to_proot_steam_path \"\$STEAM_ARM64_SDK_DIR_HOST\")\"")
+            appendLine("echo \"STEAM_ARM64_BIN_DIR=\$STEAM_ARM64_BIN_DIR\"")
+            appendLine("echo \"STEAM_ARM64_SDK_DIR=\$STEAM_ARM64_SDK_DIR\"")
+            appendLine("if [ -x \"\$STEAM_ARM64_BIN_DIR_HOST/steamwebhelper\" ] && \\")
+            appendLine("   [ -x \"\$STEAM_ARM64_BIN_DIR_HOST/steam\" ] && \\")
+            appendLine("   [ -f \"\$STEAM_ARM64_BIN_DIR_HOST/libcef.so\" ] && \\")
+            appendLine("   [ -f \"\$STEAM_ARM64_SDK_DIR_HOST/steamclient.so\" ]; then")
             appendLine("    mkdir -p \"\$STEAM_DOTSTEAM\"")
-            appendLine("    ln -fsn /opt/steam-arm64/client/steamrtarm64 \"\$STEAM_DOTSTEAM/bin64\"")
-            appendLine("    ln -fsn /opt/steam-arm64/client/linuxarm64   \"\$STEAM_DOTSTEAM/sdk64\"")
-            appendLine("    ln -fsn /opt/steam-arm64/client/steamrtarm64 \"\$STEAM_DOTSTEAM/bin\"")
+            appendLine("    ln -fsn \"\$STEAM_ARM64_BIN_DIR\" \"\$STEAM_DOTSTEAM/bin64\"")
+            appendLine("    ln -fsn \"\$STEAM_ARM64_BIN_DIR\" \"\$STEAM_DOTSTEAM/bin\"")
+            appendLine("    ln -fsn \"\$STEAM_ARM64_SDK_DIR\" \"\$STEAM_DOTSTEAM/sdk64\"")
             appendLine("    ln -fsn /opt/steam-arm64/client              \"\$STEAM_DOTSTEAM/root\"")
             appendLine("    ln -fsn /opt/steam-arm64/client              \"\$STEAM_DOTSTEAM/steam\"")
-            appendLine("    echo \"Re-anchored \$STEAM_DOTSTEAM/{bin,bin64,sdk64,root,steam} for arm64\"")
+            appendLine("    echo \"Re-anchored Steam links:\"")
+            appendLine("    ls -l \"\$STEAM_DOTSTEAM\"/bin \"\$STEAM_DOTSTEAM\"/bin64 \"\$STEAM_DOTSTEAM\"/sdk64 \"\$STEAM_DOTSTEAM\"/root \"\$STEAM_DOTSTEAM\"/steam")
             appendLine("else")
-            appendLine("    echo \"WARN: arm64 client payload incomplete (need \$STEAM_ARM64_BIN_DIR/steamwebhelper + \$STEAM_ARM64_SDK_DIR/steamclient.so); not touching ~/.steam links\"")
+            appendLine("    echo \"FATAL: incomplete ARM64 Steam payload\"")
+            appendLine("    find \"\$STEAM_OPT/client\" -maxdepth 3 -type f \\( -name steam -o -name steamwebhelper -o -name steamclient.so -o -name libcef.so \\) 2>/dev/null | while IFS= read -r f; do")
+            appendLine("        ls -l \"\$f\" 2>&1 || true")
+            appendLine("        command -v file >/dev/null 2>&1 && file \"\$f\" 2>&1 || true")
+            appendLine("    done")
+            appendLine("    exit 71")
             appendLine("fi")
             appendLine()
             // Delete stale single-instance IPC files. Without this, native arm64
@@ -493,13 +536,17 @@ object LinuxSteamLauncher {
             appendLine("EOF")
             appendLine("echo \"Wrote \$ROOTFS/etc/pulse/client.conf (autospawn=no)\"")
             appendLine()
+            appendLine("RUNTIME_UID=\"\$(id -u 2>/dev/null || echo 1000)\"")
+            appendLine("RUNTIME_GID=\"\$(id -g 2>/dev/null || echo \"\$RUNTIME_UID\")\"")
+            appendLine("echo \"Runtime identity: uid=\$RUNTIME_UID gid=\$RUNTIME_GID\"")
+            appendLine()
             // Provide /etc/passwd, /etc/group, /etc/hosts, and an
             // override /etc/nsswitch.conf inside the sniper rootfs.
             //
             // Pressure-vessel synthesizes these from the host before
             // launching Steam — we don't have a host /etc/passwd to bind
             // from on Android. Without them:
-            //   * `getpwuid(1000)` returns NULL → libpulse / libsystemd /
+            //   * `getpwuid(getuid())` returns NULL → libpulse / libsystemd /
             //     libdbus fall through to env-var fallbacks; some paths
             //     attempt nss-systemd which dials varlink at
             //     /run/systemd/userdb/io.systemd.NameServiceSwitch and
@@ -515,14 +562,14 @@ object LinuxSteamLauncher {
             //     mapping too for safety. Round-6 dual review (Codex +
             //     research-agent) ranked these as the single most likely
             //     unblocker; both insisted on shipping the trio together.
-            appendLine("cat > \"\$ROOTFS/etc/passwd\" <<'EOF'")
+            appendLine("cat > \"\$ROOTFS/etc/passwd\" <<EOF")
             appendLine("root:x:0:0:root:/root:/bin/sh")
-            appendLine("xuser:x:1000:1000:WinNative:/home/xuser:/bin/sh")
+            appendLine("xuser:x:\$RUNTIME_UID:\$RUNTIME_GID:WinNative:/home/xuser:/bin/sh")
             appendLine("nobody:x:65534:65534:nobody:/nonexistent:/bin/sh")
             appendLine("EOF")
-            appendLine("cat > \"\$ROOTFS/etc/group\" <<'EOF'")
+            appendLine("cat > \"\$ROOTFS/etc/group\" <<EOF")
             appendLine("root:x:0:")
-            appendLine("xuser:x:1000:")
+            appendLine("xuser:x:\$RUNTIME_GID:")
             appendLine("audio:x:29:xuser")
             appendLine("video:x:44:xuser")
             appendLine("nogroup:x:65534:")
@@ -567,7 +614,21 @@ object LinuxSteamLauncher {
             // research-agent on round 6.
             appendLine("XDG_STUB_DIR=\"\$ROOTFS/usr/local/bin\"")
             appendLine("mkdir -p \"\$XDG_STUB_DIR\"")
-            appendLine("for tool in xdg-user-dir xdg-open xdg-mime xdg-desktop-menu xdg-icon-resource xdg-screensaver update-mime-database update-desktop-database; do")
+            appendLine("cat > \"\$XDG_STUB_DIR/xdg-user-dir\" <<'EOF'")
+            appendLine("#!/bin/sh")
+            appendLine("case \"\$1\" in")
+            appendLine("  DESKTOP)   echo \"\$HOME/Desktop\" ;;")
+            appendLine("  DOWNLOAD)  echo \"\$HOME/Downloads\" ;;")
+            appendLine("  DOCUMENTS) echo \"\$HOME/Documents\" ;;")
+            appendLine("  MUSIC)     echo \"\$HOME/Music\" ;;")
+            appendLine("  PICTURES)  echo \"\$HOME/Pictures\" ;;")
+            appendLine("  VIDEOS)    echo \"\$HOME/Videos\" ;;")
+            appendLine("  *)         echo \"\$HOME\" ;;")
+            appendLine("esac")
+            appendLine("exit 0")
+            appendLine("EOF")
+            appendLine("chmod 0755 \"\$XDG_STUB_DIR/xdg-user-dir\"")
+            appendLine("for tool in xdg-open xdg-mime xdg-desktop-menu xdg-icon-resource xdg-screensaver update-mime-database update-desktop-database; do")
             appendLine("    if [ ! -x \"\$XDG_STUB_DIR/\$tool\" ]; then")
             appendLine("        printf '#!/bin/sh\\nexit 0\\n' > \"\$XDG_STUB_DIR/\$tool\"")
             appendLine("        chmod 0755 \"\$XDG_STUB_DIR/\$tool\"")
@@ -575,15 +636,90 @@ object LinuxSteamLauncher {
             appendLine("done")
             appendLine("echo \"Staged xdg-* stubs in \$XDG_STUB_DIR\"")
             appendLine()
-            // Pre-create /run/user/1000 (the conventional XDG_RUNTIME_DIR
+            // Pre-create /run/user/$RUNTIME_UID (the conventional XDG_RUNTIME_DIR
             // path that libpulse, libdbus, and pipewire fall back to when
             // their primary lookup fails). Owned by us, mode 0700 — anything
             // less restrictive triggers a libpulse "directory has wrong
             // permissions" abort. Bound into proot below as -b $RUN_USER.
-            appendLine("RUN_USER_DIR=\"\$IMAGEFS/run/user/1000\"")
+            appendLine("RUN_USER_DIR=\"\$IMAGEFS/run/user/\$RUNTIME_UID\"")
+            appendLine("XDG_RUNTIME_DIR_IN_PROOT=\"/run/user/\$RUNTIME_UID\"")
             appendLine("mkdir -p \"\$RUN_USER_DIR\"")
             appendLine("chmod 0700 \"\$RUN_USER_DIR\"")
-            appendLine("echo \"Pre-created \$RUN_USER_DIR (mode 0700)\"")
+            appendLine("echo \"Pre-created \$RUN_USER_DIR (mode 0700); XDG_RUNTIME_DIR=\$XDG_RUNTIME_DIR_IN_PROOT\"")
+            appendLine()
+            appendLine("echo \"==== pre-Steam X/socket probe ====\"")
+            appendLine("echo \"DISPLAY will be :0\"")
+            appendLine("ls -la \"\$TMP/.X11-unix\" 2>&1 || true")
+            appendLine("ls -l \"\$TMP/.X11-unix/X0\" 2>&1 || true")
+            appendLine("echo \"host X socket type:\"")
+            appendLine("[ -S \"\$TMP/.X11-unix/X0\" ] && echo \"XSOCKET_OK\" || echo \"XSOCKET_MISSING\"")
+            appendLine()
+            appendLine("echo \"==== payload audit ====\"")
+            appendLine("for f in \\")
+            appendLine("  \"\$STEAM_ARM64_BIN_DIR_HOST/steam\" \\")
+            appendLine("  \"\$STEAM_ARM64_BIN_DIR_HOST/steamwebhelper\" \\")
+            appendLine("  \"\$STEAM_ARM64_BIN_DIR_HOST/libcef.so\" \\")
+            appendLine("  \"\$STEAM_ARM64_SDK_DIR_HOST/steamclient.so\" \\")
+            appendLine("  \"\$STEAM_OPT/client/steamui.so\"")
+            appendLine("do")
+            appendLine("    echo \"-- \$f\"")
+            appendLine("    ls -l \"\$f\" 2>&1 || true")
+            appendLine("    command -v file >/dev/null 2>&1 && file \"\$f\" 2>&1 || true")
+            appendLine("done")
+            appendLine()
+            appendLine("run_sniper_preflight() {")
+            appendLine("    \"\$PROOT\" \\")
+            appendLine("        -r \"\$ROOTFS\" \\")
+            appendLine("        -b /system \\")
+            appendLine("        -b /apex \\")
+            appendLine("        -b /vendor \\")
+            appendLine("        -b /proc \\")
+            appendLine("        -b /sys \\")
+            appendLine("        -b /dev \\")
+            appendLine("        -b ${quote(resolvConf.absolutePath)}:/etc/resolv.conf \\")
+            appendLine("        -b \"\$IMAGEFS:/winnative-imagefs\" \\")
+            appendLine("        -b \"\$STEAM_OPT:/opt/steam-arm64\" \\")
+            appendLine("        -b \"\$XUSER_HOME:/home/xuser\" \\")
+            appendLine("        -b \"\$TMP:/tmp\" \\")
+            appendLine("        -b \"\$IMAGEFS/run:/run\" \\")
+            appendLine("        -w /home/xuser \\")
+            appendLine("        /usr/bin/env -i \\")
+            appendLine("            HOME=/home/xuser \\")
+            appendLine("            USER=xuser \\")
+            appendLine("            DISPLAY=:0 \\")
+            appendLine("            XDG_RUNTIME_DIR=\"\$XDG_RUNTIME_DIR_IN_PROOT\" \\")
+            appendLine("            PATH=/usr/local/bin:/usr/bin:/bin \\")
+            appendLine("            LD_PRELOAD=${quoteShell(glibcPreloadInProot)} \\")
+            appendLine("            ANDROID_SYSVSHM_SERVER=${quoteShell(sysvshmServer)} \\")
+            appendLine("            LD_LIBRARY_PATH=\"\$STEAM_ARM64_BIN_DIR:\$STEAM_ARM64_SDK_DIR\" \\")
+            appendLine("            STEAM_ARM64_BIN_DIR=\"\$STEAM_ARM64_BIN_DIR\" \\")
+            appendLine("            STEAM_ARM64_SDK_DIR=\"\$STEAM_ARM64_SDK_DIR\" \\")
+            appendLine("            /bin/sh -c '")
+            appendLine("                echo \"==== steamwebhelper dependency audit ====\"")
+            appendLine("                ldd \"\$STEAM_ARM64_BIN_DIR/steamwebhelper\" 2>&1 || true")
+            appendLine("                echo \"==== steamui dependency audit ====\"")
+            appendLine("                ldd /opt/steam-arm64/client/steamui.so 2>&1 || true")
+            appendLine("                echo \"==== steamwebhelper smoke test ====\"")
+            appendLine("                if command -v timeout >/dev/null 2>&1; then")
+            appendLine("                    timeout 15 \"\$STEAM_ARM64_BIN_DIR/steamwebhelper\" --version")
+            appendLine("                else")
+            appendLine("                    \"\$STEAM_ARM64_BIN_DIR/steamwebhelper\" --version &")
+            appendLine("                    helper_pid=\$!")
+            appendLine("                    sleep 15")
+            appendLine("                    if kill -0 \"\$helper_pid\" 2>/dev/null; then")
+            appendLine("                        echo \"steamwebhelper smoke timed out; killing pid=\$helper_pid\"")
+            appendLine("                        kill \"\$helper_pid\" 2>/dev/null || true")
+            appendLine("                        sleep 1")
+            appendLine("                        kill -9 \"\$helper_pid\" 2>/dev/null || true")
+            appendLine("                    fi")
+            appendLine("                    wait \"\$helper_pid\"")
+            appendLine("                fi")
+            appendLine("                status=\$?")
+            appendLine("                echo \"steamwebhelper smoke status=\$status\"")
+            appendLine("                exit 0")
+            appendLine("            '")
+            appendLine("}")
+            appendLine("run_sniper_preflight || echo \"WARN: sniper preflight failed status=\$?\"")
             appendLine()
             appendLine("set -e")
             appendLine()
@@ -606,7 +742,7 @@ object LinuxSteamLauncher {
             appendLine("        HOME=/home/xuser \\")
             appendLine("        USER=xuser \\")
             appendLine("        DISPLAY=:0 \\")
-            appendLine("        XDG_RUNTIME_DIR=/tmp/runtime-xuser \\")
+            appendLine("        XDG_RUNTIME_DIR=\"\$XDG_RUNTIME_DIR_IN_PROOT\" \\")
             appendLine("        XDG_DATA_HOME=/home/xuser/.local/share \\")
             appendLine("        XDG_CONFIG_HOME=/home/xuser/.config \\")
             // xdg stub dir takes precedence so Steam's early system()
@@ -617,8 +753,11 @@ object LinuxSteamLauncher {
             appendLine("        ANDROID_SYSVSHM_SERVER=${quoteShell(sysvshmServer)} \\")
             appendLine("        WINNATIVE_WINE_BIN=${quoteShell(wineBinInsideProot)} \\")
             appendLine("        WINNATIVE_BIONIC_LD_PRELOAD=${quoteShell(bionicPreload)} \\")
+            appendLine("        WINNATIVE_BIONIC_LD_LIBRARY_PATH=/winnative-imagefs/usr/lib:/system/lib64 \\")
+            appendLine("        WINNATIVE_BIONIC_TMPDIR=/winnative-imagefs/usr/tmp \\")
             appendLine("        WINNATIVE_BIONIC_PATH=${quoteShell("$wineDirInsideProot:/winnative-imagefs/usr/bin")} \\")
             appendLine("        WINNATIVE_PROTON_LOG=/tmp/winnative-proton.log \\")
+            appendLine("        WINNATIVE_STEAM_EARLY_REAPER=1 \\")
             appendLine("        STEAM_RUNTIME=0 \\")
             appendLine("        STEAM_RUNTIME_PREFER_HOST_LIBRARIES=0 \\")
             // Tell libdbus there is no session/system bus available so it
@@ -663,16 +802,16 @@ object LinuxSteamLauncher {
             // Tell the loader where to find them with LD_LIBRARY_PATH; the
             // sniper rootfs already provides glibc / pthread / libdl /
             // ld-linux-aarch64.so.1 from the in-chroot /lib path.
-            appendLine("        LD_LIBRARY_PATH=/opt/steam-arm64/client/steamrtarm64:/opt/steam-arm64/client/linuxarm64 \\")
+            appendLine("        LD_LIBRARY_PATH=\"\$STEAM_ARM64_BIN_DIR:\$STEAM_ARM64_SDK_DIR\" \\")
             // Bypass steam.sh entirely. The bundled steam.sh hardcodes
             // PLATFORM=ubuntu12_32 (no ARM64 detection) and aborts on a
             // 32-bit libc.so.6 check. Exec the actual ARM64 Steam Client
             // binary directly. It accepts the same CLI args as the legacy
             // Linux client (-silent / -console / -applaunch <id> etc.).
-            appendLine("        /opt/steam-arm64/client/steamrtarm64/steam \\")
-            appendLine("            -silent \\")
-            appendLine("            -tcp \\")
-            appendLine("            ${if (applaunch.isNotEmpty()) "-applaunch ${steamAppId} \\" else "\\"}")
+            appendLine("        \"\$STEAM_ARM64_BIN_DIR/steam\" \\")
+            steamArgs.forEach { arg ->
+                appendLine("            ${quoteShell(arg)} \\")
+            }
             appendLine("            \"\$@\"")
         }
 

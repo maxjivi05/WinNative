@@ -65,9 +65,19 @@ setup_wine_env() {
 	# glibc loader can resolve libcef/libSDL3/etc. Bionic Wine must
 	# NOT inherit that; those .so files are glibc-linked and will pull
 	# in GLIBC_2.31 symbols that Android's bionic libc doesn't provide.
-	# Drop the variable; the launcher's WINNATIVE_BIONIC_PATH already
-	# points PATH at the imagefs Wine + /usr/bin.
-	unset LD_LIBRARY_PATH
+	export LD_LIBRARY_PATH="${WINNATIVE_BIONIC_LD_LIBRARY_PATH:-/winnative-imagefs/usr/lib:/system/lib64}"
+	export TMPDIR="${WINNATIVE_BIONIC_TMPDIR:-/winnative-imagefs/usr/tmp}"
+	export ANDROID_SYSVSHM_SERVER=/winnative-imagefs/usr/tmp/.sysvshm/SM0
+	export FONTCONFIG_PATH=/winnative-imagefs/usr/etc/fonts
+	export VK_LAYER_PATH=/winnative-imagefs/usr/share/vulkan/implicit_layer.d:/winnative-imagefs/usr/share/vulkan/explicit_layer.d
+	export WRAPPER_LAYER_PATH=/winnative-imagefs/usr/lib
+	export WRAPPER_CACHE_PATH=/winnative-imagefs/usr/var/cache
+	export ALSA_CONFIG_PATH=/winnative-imagefs/usr/share/alsa/alsa.conf:/winnative-imagefs/usr/etc/alsa/conf.d/android_aserver.conf
+	export ALSA_PLUGIN_DIR=/winnative-imagefs/usr/lib/alsa-lib
+	export WINEESYNC_WINLATOR=1
+	export WINE_NEW_NDIS=1
+	export WINE_DISABLE_FULLSCREEN_HACK=1
+	export WINE_GST_NO_GL=1
 	if [ -n "${WINNATIVE_BIONIC_PATH-}" ]; then
 		export PATH="$WINNATIVE_BIONIC_PATH"
 	fi

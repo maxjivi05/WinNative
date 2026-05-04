@@ -166,9 +166,15 @@ object LinuxSteamClientManager {
             )
 
             if (installedVersion(context) == manifest.version) {
-                Log.i(TAG, "Already at version ${manifest.version}; skipping install")
-                listener?.onComplete(true, null)
-                return true
+                try {
+                    assertArm64Payload(target)
+                    Log.i(TAG, "Already at version ${manifest.version}; skipping install")
+                    listener?.onComplete(true, null)
+                    return true
+                } catch (e: IOException) {
+                    Log.w(TAG, "Installed Steam client marker exists but payload is incomplete; reinstalling", e)
+                    File(target, INSTALL_MARKER).delete()
+                }
             }
 
             val selected = manifest.packages.filter { keepPackage(it.name) }
@@ -217,6 +223,7 @@ object LinuxSteamClientManager {
             // swapping it in, so any successful rename outcome leaves a
             // self-consistent install.
             chmodExecutables(stagingTree)
+            assertArm64Payload(stagingTree)
             File(stagingTree, INSTALL_MARKER).writeText(manifest.version)
 
             // Pure-rename two-phase swap: target → .old, then staging → target,
@@ -278,6 +285,19 @@ object LinuxSteamClientManager {
         // The manifest root key is "linuxarm64" itself; some manifests carry a
         // bare "client" or "linuxarm64" top-level package. Keep those too.
         return lower == "linuxarm64" || lower == "client"
+    }
+
+    private fun assertArm64Payload(root: File) {
+        val required = listOf(
+            "steamrtarm64/steam",
+            "steamrtarm64/steamwebhelper",
+            "steamrtarm64/libcef.so",
+            "linuxarm64/steamclient.so",
+        )
+        val missing = required.filter { !File(root, it).exists() }
+        if (missing.isNotEmpty()) {
+            throw IOException("Linux Steam ARM64 payload incomplete; missing: $missing")
+        }
     }
 
     /**
