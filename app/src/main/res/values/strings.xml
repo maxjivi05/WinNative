@@ -848,6 +848,8 @@ E.g. <b>META</b> for <i>META key</i>, \n
     <string name="settings_debug_input_logs_description">Log gamepad, touch, and keyboard input events</string>
     <string name="settings_debug_download_logs">Download Logs</string>
     <string name="settings_debug_download_logs_description">Log download resolver and WinNative fallback events</string>
+    <string name="settings_debug_verbose_launch_title">Verbose Launch</string>
+    <string name="settings_debug_verbose_launch_subtitle">Replace the loading screen with a live console showing every command run during launch (pid, argv, exit code).</string>
     <string name="settings_debug_share_logs">Share Logs</string>
     <string name="settings_debug_logs_subject">WinNative Logs (%1$s)</string>
     <string name="settings_debug_no_logs_available">No debug logs available. Enable debugging options first and launch a game.</string>

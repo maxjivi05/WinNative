@@ -8,6 +8,7 @@ import com.winlator.cmod.runtime.display.xserver.extensions.DRI3Extension;
 import com.winlator.cmod.runtime.display.xserver.extensions.Extension;
 import com.winlator.cmod.runtime.display.xserver.extensions.MITSHMExtension;
 import com.winlator.cmod.runtime.display.xserver.extensions.PresentExtension;
+import com.winlator.cmod.runtime.display.xserver.extensions.RandRExtension;
 import com.winlator.cmod.runtime.display.xserver.extensions.SyncExtension;
 import com.winlator.cmod.shared.android.CursorLocker;
 import java.nio.charset.Charset;
@@ -222,6 +223,7 @@ public class XServer {
       extensions.put(DRI3Extension.MAJOR_OPCODE, new DRI3Extension());
     }
     extensions.put(PresentExtension.MAJOR_OPCODE, new PresentExtension());
+    extensions.put(RandRExtension.MAJOR_OPCODE, new RandRExtension());
     extensions.put(SyncExtension.MAJOR_OPCODE, new SyncExtension());
   }
 

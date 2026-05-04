@@ -201,9 +201,10 @@ public abstract class ProcessHelper {
     EnvironmentManager.setEnvVars(envp);
 
     int pid = -1;
+    String[] splitCommand = null;
     try {
       if (PRINT_DEBUG) Log.d("ProcessHelper", "Splitting command: " + command);
-      String[] splitCommand = splitCommand(command);
+      splitCommand = splitCommand(command);
       if (PRINT_DEBUG)
         Log.d("ProcessHelper", "Split command result: " + Arrays.toString(splitCommand));
       if (PRINT_DEBUG) Log.d("ProcessHelper", "Starting process...");
@@ -229,12 +230,59 @@ public abstract class ProcessHelper {
       pidField.setAccessible(false);
       if (PRINT_DEBUG) Log.d("ProcessHelper", "Process started with pid: " + pid);
 
-      if (terminationCallback != null) createWaitForThread(process, terminationCallback);
+      // Mirror to the verbose-launch overlay. Argv only — never env (it
+      // can contain Steam refresh tokens and similar). Lifecycle finish
+      // event also surfaces the exit code so the operator can see whether
+      // a child silently died vs ran to completion. The overlay no-ops
+      // when subscribers are absent (Settings → Debug → Verbose off).
+      try {
+        com.winlator.cmod.runtime.system.LaunchLogBus.postCommand(pid, splitCommand);
+      } catch (Throwable ignored) {
+        // Never let logging break a real launch.
+      }
+
+      if (terminationCallback != null) {
+        createWaitForThread(process, terminationCallback);
+      } else {
+        createVerboseFinishWatcher(process, pid);
+      }
 
     } catch (Exception e) {
       Log.e("ProcessHelper", "Error executing command: " + command, e);
+      try {
+        com.winlator.cmod.runtime.system.LaunchLogBus.post(
+            "exec",
+            "exec FAILED: "
+                + (splitCommand != null ? Arrays.toString(splitCommand) : command)
+                + " — "
+                + e.getMessage(),
+            com.winlator.cmod.runtime.system.LaunchLogBus.Level.ERROR);
+      } catch (Throwable ignored) {
+      }
     }
     return pid;
+  }
+
+  /**
+   * For exec() callers without a termination callback: spin a thin watcher
+   * thread so the verbose overlay still gets a finish event with exit code.
+   * No-ops when the verbose overlay is uninterested (LaunchLogBus has no
+   * subscribers) — but we always post; the bus's bounded ring buffer makes
+   * this cheap and the post itself is a no-op when no overlay is rendering.
+   */
+  private static void createVerboseFinishWatcher(java.lang.Process process, int pid) {
+    new Thread(
+            () -> {
+              try {
+                int status = process.waitFor();
+                drainDeadChildren("verbose finish watcher");
+                com.winlator.cmod.runtime.system.LaunchLogBus.postCommandFinish(pid, status);
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
+            },
+            "VerboseFinishWatcher-" + pid)
+        .start();
   }
 
   private static void createDebugThread(final InputStream inputStream) {
@@ -265,6 +313,19 @@ public abstract class ProcessHelper {
               try {
                 int status = process.waitFor();
                 drainDeadChildren("process waitFor");
+                int pid = -1;
+                try {
+                  Field pidField = process.getClass().getDeclaredField("pid");
+                  pidField.setAccessible(true);
+                  pid = pidField.getInt(process);
+                  pidField.setAccessible(false);
+                } catch (Throwable ignored) {
+                  // /proc may already be gone — exit-code event is enough.
+                }
+                try {
+                  com.winlator.cmod.runtime.system.LaunchLogBus.postCommandFinish(pid, status);
+                } catch (Throwable ignored) {
+                }
                 terminationCallback.call(status);
               } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

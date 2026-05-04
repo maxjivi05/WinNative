@@ -81,6 +81,17 @@ public class Container {
     public static final String STEAM_TYPE_NORMAL = "normal";
     public static final String STEAM_TYPE_LIGHT = "light";
     public static final String STEAM_TYPE_ULTRALIGHT = "ultralight";
+    /**
+     * Selects the native Linux ARM64 Steam Client (orchestrated by
+     * {@code LinuxSteamLauncher}) instead of the Windows Steam paths above.
+     * Only valid on arm64ec containers; choosing it on x86_64 or arm64
+     * (non-EC) falls through to {@link #STEAM_TYPE_NORMAL} so the launch
+     * still picks a working path. The earlier auto-route from
+     * {@code wineInfo.isArm64EC() && launchRealSteam} robbed arm64ec users
+     * of access to the proven Windows Steam variants — making this a
+     * dropdown choice restores that access.
+     */
+    public static final String STEAM_TYPE_LINUX_ARM64 = "linux_arm64";
 
     private ContainerManager containerManager;
 
@@ -732,6 +743,9 @@ public class Container {
                 break;
             case STEAM_TYPE_ULTRALIGHT:
                 this.steamType = STEAM_TYPE_ULTRALIGHT;
+                break;
+            case STEAM_TYPE_LINUX_ARM64:
+                this.steamType = STEAM_TYPE_LINUX_ARM64;
                 break;
             default:
                 this.steamType = STEAM_TYPE_NORMAL;

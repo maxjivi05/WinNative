@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# WinNative Proton — minimal Steam compat tool.
+#
+# Steam invokes this script INSIDE proot (sniper-arm64 chroot) as one of:
+#   proton run                   <exe> [args...]
+#   proton waitforexitandrun     <exe> [args...]
+#   proton runinprefix           <exe> [args...]
+#   proton getcompatpath         <exe>
+#   proton getnativepath         <path>
+#
+# Standard Proton uses pressure-vessel + bwrap. We can't (proot has no
+# unprivileged user namespaces). We bypass pressure-vessel entirely and
+# delegate to the host emulator's bionic Wine, which is reachable inside
+# proot via a host-bound path injected by the launcher in env var
+# WINNATIVE_WINE_BIN.
+#
+# Required env (set by XServerDisplayActivity before launching Steam):
+#   WINNATIVE_WINE_BIN          absolute proot-visible path to `wine`
+#   WINNATIVE_BIONIC_LD_PRELOAD bionic-linked LD_PRELOAD value for Wine
+#                               (path string; may be empty)
+#   WINNATIVE_BIONIC_PATH       PATH for the Wine subprocess (host bin
+#                               dirs plus imagefs `/usr/bin`)
+#   STEAM_COMPAT_DATA_PATH      from Steam — per-game prefix dir
+#
+# Steam *also* sets STEAM_COMPAT_LIBRARY_PATHS, STEAM_COMPAT_INSTALL_PATH,
+# PROTON_VERB, etc.; we just pass through whichever Wine cares about.
+set -e
+
+log() {
+	if [ -n "${WINNATIVE_PROTON_LOG-}" ]; then
+		printf '[winnative-proton] %s\n' "$*" >>"$WINNATIVE_PROTON_LOG" 2>/dev/null || true
+	fi
+}
+
+verb="${1-}"
+shift || true
+
+# Common env setup we want for every wine-bound verb. Done here so
+# winepath calls (getcompatpath/getnativepath) and waitforexitandrun's
+# wineserver wait both run with the right ABI/PATH.
+setup_wine_env() {
+	if [ -z "${WINNATIVE_WINE_BIN-}" ]; then
+		echo 'winnative-proton: WINNATIVE_WINE_BIN not set' >&2
+		exit 65
+	fi
+	if [ ! -x "$WINNATIVE_WINE_BIN" ]; then
+		echo "winnative-proton: $WINNATIVE_WINE_BIN missing or not executable" >&2
+		exit 66
+	fi
+	if [ -n "${STEAM_COMPAT_DATA_PATH-}" ]; then
+		export WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx"
+		mkdir -p "$WINEPREFIX"
+	fi
+	# Swap LD_PRELOAD: Steam's preload (the glibc sysvshm shim) only
+	# works in the glibc Steam process. Wine is bionic; loading a glibc
+	# .so into it would fail before main(). Use the bionic shim path
+	# the launcher computed, or unset entirely if we don't have one.
+	if [ -n "${WINNATIVE_BIONIC_LD_PRELOAD-}" ]; then
+		export LD_PRELOAD="$WINNATIVE_BIONIC_LD_PRELOAD"
+	else
+		unset LD_PRELOAD
+	fi
+	# Same reasoning for LD_LIBRARY_PATH — Steam runs with
+	# /opt/steam-arm64/client/{steamrtarm64,linuxarm64} on it so the
+	# glibc loader can resolve libcef/libSDL3/etc. Bionic Wine must
+	# NOT inherit that; those .so files are glibc-linked and will pull
+	# in GLIBC_2.31 symbols that Android's bionic libc doesn't provide.
+	# Drop the variable; the launcher's WINNATIVE_BIONIC_PATH already
+	# points PATH at the imagefs Wine + /usr/bin.
+	unset LD_LIBRARY_PATH
+	if [ -n "${WINNATIVE_BIONIC_PATH-}" ]; then
+		export PATH="$WINNATIVE_BIONIC_PATH"
+	fi
+}
+
+run_winepath() {
+	# `winepath` is a Wine helper sitting next to the wine binary.
+	local wine_dir
+	wine_dir=$(dirname "$WINNATIVE_WINE_BIN")
+	local helper="$wine_dir/winepath"
+	if [ ! -x "$helper" ]; then
+		# fall back to identity if winepath isn't installed; better
+		# than failing the whole tool dispatch.
+		log "winepath helper missing at $helper — falling back to identity for: $*"
+		printf '%s\n' "${@:$#}"
+		return 0
+	fi
+	"$helper" "$@"
+}
+
+case "$verb" in
+	getcompatpath)
+		# Steam → Wine: convert a Linux/native path to its Windows
+		# (drive-letter) equivalent under the active prefix.
+		setup_wine_env
+		run_winepath -w "${1-}"
+		exit $?
+		;;
+	getnativepath)
+		# Wine → Steam: convert a Windows path back to its Linux
+		# representation under the active prefix.
+		setup_wine_env
+		run_winepath -u "${1-}"
+		exit $?
+		;;
+	getversion)
+		printf 'WinNative-Proton 0.1\n'
+		exit 0
+		;;
+	waitforexitandrun)
+		# Block until any prior wineserver session for this prefix has
+		# fully shut down before launching, matching upstream Proton.
+		# This avoids a race where Steam is already waiting on the
+		# previous game's wineserver shutdown (e.g. mid-install flows).
+		setup_wine_env
+		wine_dir=$(dirname "$WINNATIVE_WINE_BIN")
+		if [ -x "$wine_dir/wineserver" ]; then
+			"$wine_dir/wineserver" -w || true
+		fi
+		log "waitforexitandrun: wineserver drained, exec=${1-} args=$#"
+		exec "$WINNATIVE_WINE_BIN" "$@"
+		;;
+	run|runinprefix)
+		setup_wine_env
+		log "verb=$verb WINEPREFIX=${WINEPREFIX-} exe=${1-} args=$#"
+		exec "$WINNATIVE_WINE_BIN" "$@"
+		;;
+	*)
+		log "unknown verb '$verb' — args: $*"
+		printf 'winnative-proton: unknown verb: %s\n' "$verb" >&2
+		exit 64
+		;;
+esac

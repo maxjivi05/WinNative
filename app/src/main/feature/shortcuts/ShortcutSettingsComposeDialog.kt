@@ -574,13 +574,16 @@ class ShortcutSettingsComposeDialog private constructor(
         val themeIdx = desktopThemeArr.indexOfFirst { it.equals(themePart, ignoreCase = true) }
         state.selectedDesktopTheme.intValue = if (themeIdx >= 0) themeIdx else 0
 
-        // Steam type entries
+        // Steam type entries — display labels for the spinner; the index
+        // resolves into STEAM_TYPE_CANONICAL on save, so users never see
+        // raw "linux_arm64" but the persisted value is stable across
+        // localization / label tweaks.
         if (state.isSteamGame.value) {
             val steamTypeArr =
                 context.resources.getStringArray(R.array.steam_type_entries).toList()
             state.steamTypeEntries.value = steamTypeArr
             val savedSteamType = getShortcutSetting("steamType", container.getSteamType())
-            selectByValue(steamTypeArr, savedSteamType, state.selectedSteamType)
+            selectByCanonicalSteamType(savedSteamType, state.selectedSteamType, steamTypeArr)
         }
 
         // Show Box64/FEXCore frames based on saved emulator selection immediately,
@@ -1249,9 +1252,14 @@ class ShortcutSettingsComposeDialog private constructor(
                 val steamTypeEntries = state.steamTypeEntries.value
                 val stIdx = state.selectedSteamType.intValue
                 if (stIdx in steamTypeEntries.indices) {
+                    // Save the canonical Steam-type constant (normal / light /
+                    // ultralight / linux_arm64), not the display label. Codex
+                    // round-5 review: persisting localized labels breaks if
+                    // strings.xml ever changes; the canonical form keeps
+                    // arrays.xml editable without invalidating saved selections.
                     hasContainerOverride = hasContainerOverride or saveOverride(
                         "steamType",
-                        steamTypeEntries[stIdx],
+                        STEAM_TYPE_CANONICAL.getOrElse(stIdx) { Container.STEAM_TYPE_NORMAL },
                         container.getSteamType()
                     )
                 }
@@ -2180,9 +2188,30 @@ class ShortcutSettingsComposeDialog private constructor(
             state.useSteamInput.value = container.getExtra("useSteamInput", "0") == "1"
             val steamTypeArr = state.steamTypeEntries.value
             if (steamTypeArr.isNotEmpty()) {
-                selectByValue(steamTypeArr, container.getSteamType(), state.selectedSteamType)
+                selectByCanonicalSteamType(container.getSteamType(), state.selectedSteamType, steamTypeArr)
             }
         }
+    }
+
+    /**
+     * Map a saved value to a spinner index. Accepts either the canonical form
+     * (`normal` / `light` / `ultralight` / `linux_arm64`) or, for shortcuts
+     * saved before the canonicalization migration, a localized display label —
+     * we map the legacy label by index in [steamTypeArr] as a fallback. Values
+     * we can't recognize default to index 0 (Normal).
+     */
+    private fun selectByCanonicalSteamType(
+        saved: String,
+        target: androidx.compose.runtime.MutableIntState,
+        steamTypeArr: List<String>,
+    ) {
+        val canonicalIdx = STEAM_TYPE_CANONICAL.indexOfFirst { it == saved }
+        if (canonicalIdx >= 0) {
+            target.intValue = canonicalIdx
+            return
+        }
+        val legacyIdx = steamTypeArr.indexOfFirst { it == saved }
+        target.intValue = if (legacyIdx >= 0) legacyIdx else 0
     }
 
     private fun parseCpuList(cpuList: String, cpuCount: Int): List<Boolean> {
@@ -2331,6 +2360,23 @@ class ShortcutSettingsComposeDialog private constructor(
     companion object {
         private const val TAG = "ShortcutSettingsCompose"
         private const val EXTRA_USE_CONTAINER_DEFAULTS = "use_container_defaults"
+
+        /**
+         * Steam-type spinner: index → canonical persisted value. Order must
+         * match `R.array.steam_type_entries`. Lives on the companion object
+         * so it's initialized at class-load time — `loadResourceArrays`
+         * runs from the constructor and used to NPE here when the value
+         * was a regular `private val` declared further down the file
+         * (Kotlin initializes `val`s in source order, so it was still null
+         * when first read). Adding a new entry here also requires adding
+         * the matching display label in `arrays.xml`.
+         */
+        private val STEAM_TYPE_CANONICAL = listOf(
+            Container.STEAM_TYPE_NORMAL,
+            Container.STEAM_TYPE_LIGHT,
+            Container.STEAM_TYPE_ULTRALIGHT,
+            Container.STEAM_TYPE_LINUX_ARM64,
+        )
 
         /**
          * Creates a minimal `.desktop` file on the preferred game container and returns a

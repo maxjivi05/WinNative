@@ -44,5 +44,14 @@ add_executable(libproot.so
 target_link_libraries(libproot.so
                       talloc)
 
-add_library(proot-loader SHARED
-            src/loader/loader.c)
+# proot-loader is NOT built here. The NDK toolchain bakes
+# crtbegin_so/libc/libdl into anything compiled via add_library(SHARED) and
+# Android's PackageManager rejects the stripped static-PIE shape proot
+# actually needs (INSTALL_FAILED_CONTAINER_ERROR / "Failed to extract
+# native libraries, res=-18"). Instead we cross-compile the loader once
+# with `aarch64-linux-gnu-gcc -nostdlib -static-pie` and ship the
+# resulting binary as an APK asset at
+# `assets/proot/loader/proot-loader`; ProotLoaderInstaller extracts it
+# at first run and PROOT_LOADER points at the imagefs copy. Re-run
+# `android_sysvshm/../tools/build-proot-loader.sh` (or the inline command
+# in the README) when you change `src/loader/loader.c`.

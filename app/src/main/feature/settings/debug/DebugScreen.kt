@@ -96,6 +96,7 @@ data class DebugState(
     val steamLogs: Boolean = false,
     val inputLogs: Boolean = false,
     val downloadLogs: Boolean = false,
+    val verboseLaunch: Boolean = false,
 )
 
 // Root
@@ -113,6 +114,7 @@ fun DebugScreen(
     onSteamLogsChanged: (Boolean) -> Unit,
     onInputLogsChanged: (Boolean) -> Unit,
     onDownloadLogsChanged: (Boolean) -> Unit,
+    onVerboseLaunchChanged: (Boolean) -> Unit,
     onShareLogs: () -> Unit,
 ) {
     var showChannelsDialog by remember { mutableStateOf(false) }
@@ -238,6 +240,16 @@ fun DebugScreen(
                 icon = Icons.Outlined.CloudDownload,
                 checked = state.downloadLogs,
                 onCheckedChange = onDownloadLogsChanged,
+            )
+        }
+
+        item(key = "verbose_launch_card") {
+            SettingsToggleCard(
+                title = stringResource(R.string.settings_debug_verbose_launch_title),
+                subtitle = stringResource(R.string.settings_debug_verbose_launch_subtitle),
+                icon = Icons.Outlined.Terminal,
+                checked = state.verboseLaunch,
+                onCheckedChange = onVerboseLaunchChanged,
             )
         }
 

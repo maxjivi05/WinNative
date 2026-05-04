@@ -109,6 +109,7 @@
         <item>Normal - No optimizations</item>
         <item>Light - Disables overlay, shaders, UI extras</item>
         <item>Ultralight - Maximum performance, minimal features</item>
+        <item>Linux ARM64 Client (experimental, arm64ec only)</item>
     </string-array>
     <string-array name="dinput_mapper_type_entries">
         <item>@string/container_config_dinput_legacy</item>

@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+	"compat_tools"
+	{
+		"winnative-proton"
+		{
+			"install_path" "."
+			"display_name" "WinNative Proton (Wine ARM64EC)"
+			"from_oslist"  "windows"
+			"to_oslist"    "linux"
+		}
+	}
+}

@@ -51,8 +51,29 @@ public class PreloaderDialog {
         new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-    PreloaderDialogContentKt.setupPreloaderComposeView(composeView, composeState, activity);
+    if (isVerboseLaunchEnabled()) {
+      // Verbose mode: replace the animated "Loading…" UI with a live console
+      // showing every command exec'd during launch. Reset the bus first so
+      // the overlay starts clean for this run (Codex round-5 review).
+      com.winlator.cmod.runtime.system.LaunchLogBus.reset();
+      VerboseLaunchOverlayKt.setupVerboseLaunchComposeView(composeView, activity);
+    } else {
+      PreloaderDialogContentKt.setupPreloaderComposeView(composeView, composeState, activity);
+    }
     dialog.setContentView(composeView);
+  }
+
+  private boolean isVerboseLaunchEnabled() {
+    try {
+      android.content.SharedPreferences prefs =
+          androidx.preference.PreferenceManager.getDefaultSharedPreferences(activity);
+      return prefs.getBoolean("enable_verbose_launch", false);
+    } catch (Throwable t) {
+      // Activity context already gone or pref store unavailable — fall back
+      // to the standard preloader rather than risk a crash on a debug-only
+      // path.
+      return false;
+    }
   }
 
   private boolean isHostActivityInvalid() {

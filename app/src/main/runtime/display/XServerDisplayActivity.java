@@ -2770,6 +2770,32 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 : container != null && container.isLaunchRealSteam();
     }
 
+    /**
+     * Resolves the effective Steam-type constant for this launch. Reads the
+     * shortcut-level override if present, otherwise the container-level
+     * default. Always returns one of {@link Container#STEAM_TYPE_NORMAL},
+     * {@link Container#STEAM_TYPE_LIGHT}, {@link Container#STEAM_TYPE_ULTRALIGHT},
+     * or {@link Container#STEAM_TYPE_LINUX_ARM64}; unknown values fall through
+     * to NORMAL so a stray label or future-version string can't silently
+     * hijack the routing.
+     */
+    private String getEffectiveSteamType() {
+        String raw = shortcut != null
+                ? getShortcutSetting("steamType",
+                        container != null ? container.getSteamType() : Container.STEAM_TYPE_NORMAL)
+                : (container != null ? container.getSteamType() : Container.STEAM_TYPE_NORMAL);
+        if (raw == null) return Container.STEAM_TYPE_NORMAL;
+        String normalized = raw.toLowerCase();
+        switch (normalized) {
+            case Container.STEAM_TYPE_LIGHT:
+            case Container.STEAM_TYPE_ULTRALIGHT:
+            case Container.STEAM_TYPE_LINUX_ARM64:
+                return normalized;
+            default:
+                return Container.STEAM_TYPE_NORMAL;
+        }
+    }
+
     private boolean isColdClientEnabledForShortcut() {
         if (!isSteamShortcut()) return false;
         if (isRealSteamLaunchEnabledForShortcut()) return false; // mutually exclusive
@@ -3416,7 +3442,35 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             setSteamClientVisibility(false);
         }
 
-        if (launchRealSteamSetup) {
+        // The Steam Client Performance dropdown selects which Steam path to
+        // run: Normal/Light/Ultralight = Windows Steam (extracted into the
+        // Wine prefix), Linux ARM64 Client = LinuxSteamLauncher's native
+        // Linux Steam under proot+sniper. Previously this was an automatic
+        // arch-based switch (`wineInfo.isArm64EC()`), but that prevented
+        // arm64ec users from accessing the proven Windows Steam variants —
+        // making it an explicit dropdown choice restores that flexibility
+        // and keeps the Linux experimental path opt-in. Codex round-5
+        // review: also guard on isArm64EC() so an accidental selection on
+        // an x86_64/non-EC arm64 container doesn't silently use a
+        // mismatched runtime; we abort with a toast instead so the user
+        // notices and corrects.
+        boolean linuxSteamPath = launchRealSteamSetup
+                && Container.STEAM_TYPE_LINUX_ARM64.equals(getEffectiveSteamType());
+        if (linuxSteamPath && (wineInfo == null || !wineInfo.isArm64EC())) {
+            Log.w("XServerDisplayActivity",
+                    "Linux ARM64 Client selected on a non-arm64ec container; "
+                    + "aborting (this configuration is unsupported)");
+            runOnUiThread(() -> showToast(this,
+                    "Linux ARM64 Client requires an arm64ec container — "
+                    + "select a Windows Steam variant or rebuild the container."));
+            closeLaunchAttempt();
+            return;
+        }
+
+        if (linuxSteamPath) {
+            Log.d("XServerDisplayActivity",
+                    "arm64ec + launchRealSteam: skipping Windows Steam prep; Linux Steam handled by LinuxSteamLauncher");
+        } else if (launchRealSteamSetup) {
             Log.d("XServerDisplayActivity", "Ensuring real Steam client is ready...");
             boolean steamReady = false;
             while (!steamReady) {
@@ -4905,13 +4959,57 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 File containerSteamDir = new File(container.getRootDir(),
                         ".wine/drive_c/Program Files (x86)/Steam");
 
-                if (launchRealSteam) {
-                    // Real Steam mode: launch steam.exe with -applaunch <appId> and let
-                    // Steam handle the game launch normally (update check, cloud sync, exe
-                    // spawn). Cloud pending-ops are cleared pre-launch via javasteam's
-                    // signalAppLaunchIntent(ignorePendingOperations=true) (see
-                    // setupSteamEnvironment). No env var / DLL override hacks — matches the
-                    // reference implementation exactly.
+                String effectiveSteamType = getEffectiveSteamType();
+                boolean useLinuxSteam = launchRealSteam
+                        && Container.STEAM_TYPE_LINUX_ARM64.equals(effectiveSteamType)
+                        && wineInfo != null && wineInfo.isArm64EC();
+                if (useLinuxSteam) {
+                    // Linux Steam path (explicit dropdown choice on arm64ec): native
+                    // Linux ARM64 Steam Client running inside proot under Valve's
+                    // sniper-arm64 glibc rootfs. The Wine ARM64EC + FEX combo can't
+                    // host modern 64-bit Windows Steam (Hangover #213 / "chromium
+                    // not working under new wow64"); Linux Steam talks to the same
+                    // Steamworks backend and hands off to our Wine via
+                    // WinNative-Proton. Routing now requires the user to opt in via
+                    // the Steam Client Performance dropdown so existing arm64ec +
+                    // Windows-Steam workflows aren't auto-converted.
+                    //
+                    // LinuxSteamLauncher.prepare() is blocking — it runs the
+                    // POC1/1.5/2/3 installers (idempotent — fast on second launch)
+                    // and renders the bash wrapper script. We invoke that script
+                    // via GUEST_PROGRAM_LAUNCHER_COMMAND so the existing launcher
+                    // pipeline (env merge, ProcessHelper, lifecycle) drives the
+                    // proot+Steam process tree. `args` is intentionally left empty
+                    // — the override command takes priority in
+                    // GuestProgramLauncherComponent.execGuestProgram() once the
+                    // env var is set. On any setup failure we throw so the
+                    // outer setup pipeline aborts (returning null is not a
+                    // control-flow barrier here).
+                    Log.d("XServerDisplayActivity", "Linux Steam launch on arm64ec for appId=" + appId);
+                    com.winlator.cmod.feature.stores.steam.linux.LinuxSteamLauncher.LaunchPlan plan = null;
+                    try {
+                        plan = com.winlator.cmod.feature.stores.steam.linux.LinuxSteamLauncher.INSTANCE
+                                .prepare(this, wineInfo, Integer.valueOf(appId), null, null);
+                    } catch (Exception e) {
+                        Log.e("XServerDisplayActivity",
+                                "Linux Steam launch prepare failed; aborting", e);
+                        final String msg = e.getMessage();
+                        runOnUiThread(() -> AppUtils.showToast(this,
+                                "Linux Steam launch failed: " + msg,
+                                android.widget.Toast.LENGTH_LONG));
+                        // Clean activity teardown + return to UnifiedActivity, matching
+                        // the pattern at line 3428 (Steam download retry decline).
+                        closeLaunchAttempt();
+                        return null;
+                    }
+                    envVars.put("GUEST_PROGRAM_LAUNCHER_COMMAND", plan.getCommand());
+                    launcherComponent.setWorkingDir(plan.getWorkingDir());
+                    args = "";
+                } else if (launchRealSteam) {
+                    // Real Steam mode (legacy x86_64 path): launch steam.exe with
+                    // -applaunch <appId> and let Steam handle the game launch
+                    // normally. Kept for x86_64 containers where Wine + box64
+                    // hosts the 32-bit Windows Steam Client just fine.
                     if (containerSteamDir.exists()) launcherComponent.setWorkingDir(containerSteamDir);
                     args = "\"C:\\Program Files (x86)\\Steam\\steam.exe\" -silent -vgui -tcp "
                             + "-nobigpicture -nofriendsui -nochatui -nointro -applaunch " + appId;
@@ -7145,6 +7243,16 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     : container.isLaunchRealSteam();
 
             if (launchRealSteamMode) {
+                // Linux ARM64 Client dropdown choice routes through
+                // LinuxSteamLauncher and never reads the Windows-side Steam
+                // store. Skip seed/heal here so we don't extract steam.tzst
+                // into a wineprefix that's about to launch a Linux ELF.
+                boolean linuxSteamMode = Container.STEAM_TYPE_LINUX_ARM64.equals(getEffectiveSteamType())
+                        && wineInfo != null && wineInfo.isArm64EC();
+                if (linuxSteamMode) {
+                    Log.d("XServerDisplayActivity",
+                            "Real Steam mode + arm64ec: skipping Windows Steam store seed/heal (Linux path)");
+                } else {
                 // Seed or heal the shared Steam client store before launch.
                 // isSteamInstalled() only verifies file existence; isSharedSteamStorePristine()
                 // adds a size check that catches a Goldberg-stub overwrite (the #1 cause of
@@ -7160,6 +7268,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                         Log.w("XServerDisplayActivity", "Real Steam mode: failed to seed/heal Steam client store");
                     }
                 }
+                } // end legacy seed/heal else-branch
 
                 // Unconditionally inhibit Steam's bootstrapper. This is what keeps the client
                 // from trying to self-update over the network on launch (the cause of the long

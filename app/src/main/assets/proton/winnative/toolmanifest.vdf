@@ -1,0 +1,7 @@
+"manifest"
+{
+	"version" "2"
+	"commandline" "/proton %verb%"
+	"compatmanager_layer_name" "proton"
+	"use_sessions" "1"
+}
