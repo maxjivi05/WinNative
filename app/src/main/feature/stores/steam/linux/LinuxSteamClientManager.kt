@@ -268,9 +268,14 @@ object LinuxSteamClientManager {
         val lower = name.lowercase()
         val tokens = lower.split('_').filter { it.isNotEmpty() }.toSet()
 
-        // pressure-vessel container runtime — never invoked on Android
+        // Drop pressure-vessel / scout container runtime tarballs only
+        // (`runtime_steamrt_linuxarm64`, `runtime_scout_linuxarm64`). We
+        // ship sniper-arm64 separately via SniperRuntimeManager, so these
+        // are redundant. Per-component `*_steamrt_linuxarm64` packages
+        // (bins_steamrt_*, webkit_steamrt_*, sdl3_steamrt_*, etc.) are NOT
+        // dropped — they're the runtime-bound binaries that populate
+        // steamrtarm64/, built against the same sniper ABI we provide.
         if (lower.startsWith("runtime_")) return false
-        if ("steamrt" in tokens || lower.contains("steamrt")) return false
 
         // Foreign-arch / foreign-OS payloads. Match on whole tokens so that
         // future names like "win_all" / "win_linuxarm64" are correctly dropped.
