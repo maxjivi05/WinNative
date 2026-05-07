@@ -841,7 +841,12 @@ public class GLRenderer
       // wait_fence support, it'll call Drawable.setAcquireFenceFd and the
       // following takeAcquireFenceFd() will return a real FD.
       int fenceFd = scanoutSource.takeAcquireFenceFd();
-      boolean ok = dcTarget.pushBuffer(ahbPtr, 0, 0, surfaceWidth, surfaceHeight, fenceFd);
+      // Game swap-chain frames from DXVK / vkd3d-proton are RGBA8888 with
+      // alpha=1.0 throughout — declaring OPAQUE lets HWC skip the alpha-blend
+      // stage that engages the SDR-on-HDR-panel routing on Snapdragon DPUs
+      // (the visible-brightness mismatch vs the GL composition path).
+      boolean ok = dcTarget.pushBuffer(ahbPtr, 0, 0, surfaceWidth, surfaceHeight, fenceFd,
+              /* opaque */ true);
       if (ok) {
         dcLastPushedAhb = ahbPtr;
         dcLastPushedW = surfaceWidth;

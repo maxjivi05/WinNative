@@ -4745,13 +4745,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     .DirectCompositionLayer.releaseBuffer(directCompositionTestBufferPtr);
             directCompositionTestBufferPtr = 0L;
         }
-        // 0xFFFF00FF = opaque magenta. 256x256 swatch — picked so it's large
-        // enough to be eligible for an HWC overlay plane on Adreno (some
-        // chipsets reject planes < 100px tall, which would silently fall
-        // back to GPU client composition). Phase 2.3 will replace this with
-        // real Wine frames.
-        final int testWidth = 256;
-        final int testHeight = 256;
+        // 0xFFFF00FF = opaque magenta. 128x128 swatch — small visual
+        // confirmation that the SC layer is alive without obscuring useful
+        // game UI. (Was 256x256; user wanted ~50% smaller.) Still well
+        // above any plausible HWC overlay-plane minimum-size threshold.
+        // Phase 2.3 replaces this with real Wine frames once a fullscreen
+        // direct-scanout candidate is detected.
+        final int testWidth = 128;
+        final int testHeight = 128;
         final int testColorArgb = 0xFFFF00FF;
 
         directCompositionTestBufferPtr =
@@ -4774,7 +4775,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         boolean ok = directCompositionLayer.pushBuffer(
                 directCompositionTestBufferPtr,
                 dstX, dstY, testWidth, testHeight,
-                /* fenceFd */ -1);
+                /* fenceFd */ -1,
+                /* opaque  */ true /* magenta swatch is fully opaque */);
         Log.i("XServerDisplayActivity",
                 "Direct Composition smoke test pushBuffer returned " + ok
                         + " (dst=" + dstX + "," + dstY + " " + testWidth + "x" + testHeight

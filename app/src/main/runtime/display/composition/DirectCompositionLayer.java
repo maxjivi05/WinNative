@@ -118,13 +118,22 @@ public final class DirectCompositionLayer {
      *                    surface_control.h:343-348 — the caller MUST NOT close
      *                    it after this call. Phase 2.2 always passes -1; real
      *                    fence threading lives in Phase 2.4.
+     * @param opaque      Whether the buffer's pixels are fully opaque
+     *                    (alpha=1.0 throughout). Game swap-chain frames are
+     *                    by convention; pass {@code true} to let HWC mark the
+     *                    layer OPAQUE and skip per-pixel alpha blending,
+     *                    which on Snapdragon DPUs avoids the SDR-on-HDR
+     *                    panel routing that boosts layer brightness vs the
+     *                    legacy GL composition path. Pass {@code false} when
+     *                    the buffer may contain translucency (overlays, UI).
      * @return true if the transaction was queued; false on any failure (in
      *         which case the caller should fall back to the GL composition
      *         path for this frame).
      */
     public synchronized boolean pushBuffer(long ahbPtr,
                                            int dstX, int dstY, int dstW, int dstH,
-                                           int fenceFd) {
+                                           int fenceFd,
+                                           boolean opaque) {
         // Always enter JNI so the native side has a single, consistent place
         // to consume / close the fence FD. The native code's first action is
         // to validate sc / ahb / extents and close the fence on any error
@@ -133,7 +142,7 @@ public final class DirectCompositionLayer {
         // passes -1, so this is a no-op today, but the invariant matters
         // for Phase 2.4 when real fences arrive.
         try {
-            return nativePushBuffer(nativeSc, ahbPtr, dstX, dstY, dstW, dstH, fenceFd);
+            return nativePushBuffer(nativeSc, ahbPtr, dstX, dstY, dstW, dstH, fenceFd, opaque);
         } catch (UnsatisfiedLinkError | RuntimeException e) {
             Log.w(TAG, "nativePushBuffer threw", e);
             // FD ownership on a thrown JNI call is undefined — best-effort:
@@ -220,7 +229,7 @@ public final class DirectCompositionLayer {
 
     private static native boolean nativePushBuffer(long sc, long ahbPtr,
                                                    int dstX, int dstY, int dstW, int dstH,
-                                                   int fenceFd);
+                                                   int fenceFd, boolean opaque);
 
     private static native long nativeAllocateTestBuffer(int width, int height, int argb);
 
