@@ -18,6 +18,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.hardware.input.InputManager;
 import android.net.Uri;
 import android.opengl.GLSurfaceView;
 import android.text.format.DateFormat;
@@ -297,6 +298,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private boolean firstTimeBoot = false;
     private SharedPreferences preferences;
     private boolean isMouseDisabled = false;
+    private boolean isPointerCaptureForcedOff = false;
+    private boolean isVolumeUpPressed = false;
+    private boolean isVolumeDownPressed = false;
     private OnExtractFileListener onExtractFileListener;
     private WinHandler winHandler;
     private WineRequestHandler wineRequestHandler;
@@ -308,10 +312,31 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private int taskAffinityMask = 0;
     private int taskAffinityMaskWoW64 = 0;
     private int frameRatingWindowId = -1;
-    private boolean cursorLock; // Flag to track if pointer capture was requested
     private final float[] xform = XForm.getInstance();
     private ContentsManager contentsManager;
     private boolean navigationFocused = false;
+
+    private boolean hasExternalMouse() {
+        InputManager inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
+        for (int deviceId : inputManager.getInputDeviceIds()) {
+            InputDevice device = inputManager.getInputDevice(deviceId);
+            if (device != null && !device.isVirtual() && (device.getSources() & InputDevice.SOURCE_MOUSE) != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void tryCapturePointer() {
+        if (touchpadView != null && hasExternalMouse() && (drawerStateHolder == null || !drawerStateHolder.isDrawerOpen())) {
+            touchpadView.postDelayed(() -> {
+                if (touchpadView != null) {
+                    updatePointerCapture();
+                }
+            }, 100);
+        }
+    }
+
     private MidiHandler midiHandler;
     private String midiSoundFont = "";
     private String lc_all = "";
@@ -609,7 +634,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         preloaderDialog = new PreloaderDialog(this);
 
-        cursorLock = preferences.getBoolean("cursor_lock", false);
         dualSeriesBattery = preferences.getBoolean(FrameRating.PREF_HUD_DUAL_SERIES_BATTERY, false);
 
         // Check for Dark Mode
@@ -1808,6 +1832,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     @Override
     public void onPause() {
         super.onPause();
+        isVolumeUpPressed = false;
+        isVolumeDownPressed = false;
         boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
         if (gyroEnabled) {
@@ -2990,6 +3016,19 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             Log.e(tag, "MidiHandler socket still open");
         }
         cleanupDebugDialog("onDestroy");
+
+        // Epic ownership tokens are short-lived (~30 minutes server-side) and personally scoped
+        // to the running session. Clear them on game exit so we don't leave them sitting in the
+        // Wine prefix between launches; the next launch fetches a fresh token via the cache
+        // (still valid for ~25 minutes).
+        if (shortcut != null && "EPIC".equals(shortcut.getExtra("game_source"))) {
+            try {
+                com.winlator.cmod.feature.stores.epic.service.EpicService.Companion
+                        .cleanupLaunchTokens(getApplicationContext(), container);
+            } catch (Exception e) {
+                Log.w("EPIC", "Failed to cleanup ownership tokens on game exit", e);
+            }
+        }
     }
 
     private boolean isCustomShortcut() {
@@ -3044,12 +3083,17 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         if (drawerStateHolder != null) {
             drawerStateHolder.openDrawer();
         }
+        if (touchpadView != null) {
+            touchpadView.releasePointerCapture();
+            touchpadView.setOnCapturedPointerListener(null);
+        }
     }
 
     private void closeDrawerMenu() {
         if (drawerStateHolder != null) {
             drawerStateHolder.closeDrawer();
         }
+        tryCapturePointer();
     }
 
     private String currentGyroActivatorLabel() {
@@ -3853,8 +3897,16 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
     }
 
+    @Override
+    public void onPointerCaptureChanged(boolean hasCapture) {
+        super.onPointerCaptureChanged(hasCapture);
+        if (xServer != null) {
+            xServer.setPointerCaptureActive(hasCapture);
+        }
+    }
+
     private boolean shouldUsePointerCapture() {
-        return cursorLock;
+        return !isPointerCaptureForcedOff && hasExternalMouse() && (drawerStateHolder == null || !drawerStateHolder.isDrawerOpen());
     }
 
     private void updatePointerCapture() {
@@ -3868,6 +3920,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 }
             });
             if (!touchpadView.hasPointerCapture()) {
+                touchpadView.requestFocus();
                 touchpadView.requestPointerCapture();
             }
         } else {
@@ -3880,6 +3933,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         if (touchpadView != null) {
             if (hadPointerCapture) {
                 touchpadView.resetInputState();
+                touchpadView.releasePointerCapture();
+                touchpadView.setOnCapturedPointerListener(null);
             }
             touchpadView.releasePointerCapture();
             touchpadView.setOnCapturedPointerListener(null);
@@ -5369,6 +5424,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         boolean handledByTouchpadView = false;
 
         if (isPointerMotionEvent(event) && touchpadView != null) {
+            if (shouldUsePointerCapture() && !touchpadView.hasPointerCapture()) {
+                updatePointerCapture();
+            }
             handledByTouchpadView = touchpadView.onExternalMouseEvent(event);
         }
 
@@ -5418,6 +5476,23 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
 
         if (handled) return true;
+
+        int keyCode = event.getKeyCode();
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) isVolumeUpPressed = true;
+                else isVolumeDownPressed = true;
+
+                if (isVolumeUpPressed && isVolumeDownPressed) {
+                    isPointerCaptureForcedOff = !isPointerCaptureForcedOff;
+                    updatePointerCapture();
+                    return true;
+                }
+            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) isVolumeUpPressed = false;
+                else isVolumeDownPressed = false;
+            }
+        }
 
         if (event.getAction() == KeyEvent.ACTION_DOWN &&
                 (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_MODE ||
