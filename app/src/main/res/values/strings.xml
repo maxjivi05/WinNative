@@ -866,6 +866,27 @@ E.g. <b>META</b> for <i>META key</i>, \n
     <string name="settings_general_imagefs_summary">Restore bundled system files without removing your existing containers.</string>
     <string name="settings_general_check_for_updates">Check for Updates</string>
     <string name="settings_general_check_for_updates_summary">Automatically check for new app versions on launch and periodically.</string>
+    <string name="settings_general_check_for_updates_nightly_summary">Nightly builds update through a separate channel.</string>
+
+    <!-- Updater dialog + toasts -->
+    <string name="update_dialog_title">Update Available</string>
+    <string name="update_dialog_released_at">Released %1$s</string>
+    <string name="update_dialog_release_notes">Release Notes</string>
+    <string name="update_dialog_update_button">Update</string>
+    <string name="update_dialog_later_button">Later</string>
+    <string name="update_dialog_skip_button">Skip this version</string>
+    <string name="update_permission_title">Install Permission Needed</string>
+    <string name="update_permission_message">To finish installing WinNative updates, Android needs permission to install apps from this source.\n\nEnable it for WinNative, then tap Update again.</string>
+    <string name="update_permission_open_settings">Open Settings</string>
+    <string name="update_permission_cancel">Cancel</string>
+    <string name="update_toast_downloading">Downloading WinNative %1$s…</string>
+    <string name="update_toast_no_space">Not enough free space to download the update</string>
+    <string name="update_toast_start_failed">Could not start update download</string>
+    <string name="update_toast_download_failed">Update download failed</string>
+    <string name="update_toast_download_incomplete">Update download incomplete</string>
+    <string name="update_toast_signature_mismatch">Update signature mismatch — aborted</string>
+    <string name="update_toast_install_open_failed">Could not open the installer</string>
+    <string name="update_toast_install_ready">Update ready — reopen WinNative to install</string>
 
     <!-- Settings > Audio -->
     <string name="settings_audio_midi_sound_font">MIDI SoundFont</string>

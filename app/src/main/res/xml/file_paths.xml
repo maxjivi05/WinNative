@@ -1,4 +1,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-path name="external_files" path="." />
     <cache-path name="cache_files" path="." />
+    <!-- Required so the updater can hand the downloaded APK to the system installer via FileProvider. -->
+    <external-files-path name="update_files" path="updates/" />
 </paths>

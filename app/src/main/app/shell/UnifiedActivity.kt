@@ -581,6 +581,14 @@ class UnifiedActivity :
             hasCompletedInitialResume = true
         }
 
+        // Pick up any deferred installer hand-off from a download that
+        // completed while the app was backgrounded. Posted so it runs AFTER
+        // PluviaApp.ActivityLifecycleCallbacks.onActivityResumed has updated
+        // `currentForegroundActivity`; otherwise the launcher would no-op
+        // and the install would have to wait for the next resume cycle.
+        window.decorView.post {
+            UpdateChecker.resumePendingInstall(this)
+        }
         // (Re)start the background update loop (checks hourly + on first tick)
         UpdateChecker.startBackgroundLoop(this)
     }

@@ -212,6 +212,7 @@ class OtherSettingsFragment : Fragment() {
         uiState =
             OtherSettingsState(
                 checkForUpdates = preferences.getBoolean("check_for_updates", false),
+                isStableBuild = UpdateChecker.isStableBuild(),
                 languageLabels = languageLabels,
                 languageIndex = languageIndex,
                 soundFontFiles = soundFontFiles,

@@ -100,6 +100,7 @@ private const val SettingsSliderTrackScaleY = 0.72f
 // State
 data class OtherSettingsState(
     val checkForUpdates: Boolean = true,
+    val isStableBuild: Boolean = true,
     val languageLabels: List<String> = emptyList(),
     val languageIndex: Int = 0,
     val soundFontFiles: List<String> = emptyList(),
@@ -199,6 +200,7 @@ fun OtherSettingsScreen(
         item(key = "updates_card") {
             UpdatesCard(
                 checked = state.checkForUpdates,
+                isStableBuild = state.isStableBuild,
                 onCheckedChange = onCheckForUpdatesChanged,
                 onCheckNow = onCheckForUpdatesNow,
             )
@@ -422,9 +424,16 @@ private fun SettingsToggleCard(
 @Composable
 private fun UpdatesCard(
     checked: Boolean,
+    isStableBuild: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     onCheckNow: () -> Unit,
 ) {
+    val summaryRes =
+        if (isStableBuild) {
+            R.string.settings_general_check_for_updates_summary
+        } else {
+            R.string.settings_general_check_for_updates_nightly_summary
+        }
     Box(
         modifier =
             Modifier
@@ -464,17 +473,20 @@ private fun UpdatesCard(
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
-                    text = stringResource(R.string.settings_general_check_for_updates_summary),
+                    text = stringResource(summaryRes),
                     color = TextSecondary,
                     fontSize = 11.sp,
                 )
             }
             Spacer(Modifier.width(8.dp))
-            SmallActionButton(label = stringResource(R.string.common_ui_check), textColor = Accent, onClick = onCheckNow)
-            Spacer(Modifier.width(6.dp))
+            if (isStableBuild) {
+                SmallActionButton(label = stringResource(R.string.common_ui_check), textColor = Accent, onClick = onCheckNow)
+                Spacer(Modifier.width(6.dp))
+            }
             Switch(
-                checked = checked,
+                checked = checked && isStableBuild,
                 onCheckedChange = onCheckedChange,
+                enabled = isStableBuild,
                 modifier = Modifier.scale(0.78f),
                 colors =
                     outlinedSwitchColors(

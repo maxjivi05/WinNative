@@ -30,6 +30,10 @@ ksp {
 def appVersionName = providers.gradleProperty("VERSION_NAME")
         .orElse(providers.environmentVariable("VERSION_NAME"))
         .getOrElse("Nightly")
+// Stable builds are those produced with an explicit VERSION_NAME (e.g. "v0.1.0-beta").
+// The default "Nightly" sentinel marks development/nightly builds that must never
+// pull updates from the Stable Releases stream.
+def appIsStableBuild = appVersionName != "Nightly" && !appVersionName.trim().isEmpty()
 
 android {
     namespace 'com.winlator.cmod'
@@ -55,6 +59,7 @@ android {
 
         resConfigs "en", "da", "de", "es", "fr", "it", "ko", "pl", "pt-rBR", "ro", "uk", "zh-rCN", "zh-rTW"
 
+        buildConfigField("boolean", "BUILD_IS_STABLE", "${appIsStableBuild}")
         buildConfigField("boolean", "GOLD", "false")
         buildConfigField("String", "POSTHOG_API_KEY", "\"\"")
         buildConfigField("String", "POSTHOG_HOST", "\"\"")

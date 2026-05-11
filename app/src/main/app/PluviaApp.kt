@@ -130,9 +130,12 @@ class PluviaApp : Application() {
                         false
                     }
 
-                if (UpdateChecker.isEnabled(this@PluviaApp)) {
-                    UpdateChecker.refreshInstallTimestamp(this@PluviaApp)
-                }
+                // Resume any in-flight download or deferred install first,
+                // then sweep stale APKs left behind by a prior update flow.
+                runCatching {
+                    UpdateChecker.resumePendingInstall(this@PluviaApp)
+                    UpdateChecker.cleanupOldDownloads(this@PluviaApp)
+                }.onFailure { Log.e("PluviaApp", "Update cleanup failed", it) }
 
                 runCatching { PluviaDatabase.init(this@PluviaApp) }
                     .onFailure { Log.e("PluviaApp", "Database warmup failed", it) }
