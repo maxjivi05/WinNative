@@ -237,6 +237,8 @@ class GameSettingsStateHolder {
     val gfxSelectedMaxDeviceMemory = mutableIntStateOf(0)
     val gfxPresentModeEntries = mutableStateOf<List<String>>(emptyList())
     val gfxSelectedPresentMode = mutableIntStateOf(0)
+    val gfxCompositorPresentModeEntries = mutableStateOf<List<String>>(emptyList())
+    val gfxSelectedCompositorPresentMode = mutableIntStateOf(0)
     val gfxResourceTypeEntries = mutableStateOf<List<String>>(emptyList())
     val gfxSelectedResourceType = mutableIntStateOf(0)
     val gfxBcnEmulationEntries = mutableStateOf<List<String>>(emptyList())
@@ -387,6 +389,13 @@ interface GameSettingsCallbacks {
     fun onConfirm()
     fun onDismiss()
     fun onAddToHomeScreen()
+
+    /** When true, Sidebar renders Export + Import buttons above Cancel/Save. */
+    val showExportImport: Boolean get() = false
+    /** Invoked when the user taps Export. Implementations decide what dialog/flow to open. */
+    fun onExport() {}
+    /** Invoked when the user taps Import. Implementations decide what dialog/flow to open. */
+    fun onImport() {}
     fun onPickGameCardArtwork() {}
     fun onRemoveGameCardArtwork() {}
     fun onPickGridArtwork() {}
@@ -501,6 +510,9 @@ fun GameSettingsContent(
                 saveEnabled = saveEnabled,
                 onSave = { callbacks.onConfirm() },
                 onCancel = { callbacks.onDismiss() },
+                showExportImport = callbacks.showExportImport,
+                onExport = { callbacks.onExport() },
+                onImport = { callbacks.onImport() },
                 modifier = Modifier
                     .width(220.dp)
                     .fillMaxHeight()
@@ -580,6 +592,9 @@ private fun Sidebar(
     saveEnabled: Boolean,
     onSave: () -> Unit,
     onCancel: () -> Unit,
+    showExportImport: Boolean = false,
+    onExport: () -> Unit = {},
+    onImport: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -641,6 +656,30 @@ private fun Sidebar(
         )
         Spacer(Modifier.height(8.dp))
 
+        // Export + Import — shortcut-level dialog only. Sits above Cancel/Save so the
+        // user has a clear "share this config" / "load a config" entry point that's
+        // separate from the per-tab Save/Cancel flow.
+        if (showExportImport) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                SidebarOutlineButton(
+                    label = stringResource(R.string.best_configs_export_label),
+                    onClick = onExport,
+                    modifier = Modifier.weight(1f),
+                )
+                SidebarOutlineButton(
+                    label = stringResource(R.string.best_configs_import_label),
+                    onClick = onImport,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+
         // Cancel + Save buttons
         Row(
             modifier = Modifier
@@ -674,6 +713,30 @@ private fun Sidebar(
                 modifier = Modifier.weight(1f)
             )
         }
+    }
+}
+
+@Composable
+private fun SidebarOutlineButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .height(30.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .border(1.dp, CardBorder, RoundedCornerShape(8.dp))
+            .background(CardSurface)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = TextPrimary,
+            fontSize = SettingLabelSize,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
@@ -1183,6 +1246,15 @@ private fun DisplaySection(
             entries = state.dxWrapperEntries.value,
             selectedIndex = state.selectedDxWrapper.intValue,
             onSelected = { state.selectedDxWrapper.intValue = it }
+        )
+
+        Spacer(Modifier.height(SettingSectionGap))
+
+        SettingDropdown(
+            label = stringResource(R.string.container_graphics_compositor_present_mode),
+            entries = state.gfxCompositorPresentModeEntries.value,
+            selectedIndex = state.gfxSelectedCompositorPresentMode.intValue,
+            onSelected = { state.gfxSelectedCompositorPresentMode.intValue = it }
         )
     }
 
