@@ -34,6 +34,14 @@ sealed class ImportState {
         val archMismatch: ArchMismatch?,
     ) : ImportState()
 
+    /**
+     * Resolving / creating the container that matches the imported Wine/Proton,
+     * and moving the shortcut into it. This phase can be slow — creating a
+     * container extracts a wineprefix archive — so [message] carries a
+     * human-readable sub-step label for the dialog spinner.
+     */
+    data class ProvisioningContainer(val message: String) : ImportState()
+
     /** Final apply step. Briefly visible while writing the shortcut. */
     object Applying : ImportState()
 

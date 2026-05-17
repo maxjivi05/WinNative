@@ -78,11 +78,12 @@ import com.winlator.cmod.shared.theme.WinNativeTextSecondary
  * list with per-row progress doesn't fit. Composition follows the WinNativeTheme
  * palette so the dialog looks like the rest of the app.
  *
- * The dialog handles five of the six [ImportState] variants:
+ * The dialog handles six of the seven [ImportState] variants:
  *  - [ImportState.Analyzing] → indeterminate spinner + "Checking your device…" message
  *  - [ImportState.ChoosingComponents] → header + LazyColumn of selectable rows + footer
  *  - [ImportState.Downloading] → same row layout but each selected row morphs into
  *    a progress bar in-place (per Material 3 selection-then-progress pattern)
+ *  - [ImportState.ProvisioningContainer] → indeterminate spinner + sub-step message
  *  - [ImportState.Applying] → indeterminate spinner + "Applying config…"
  *  - [ImportState.Failed] → error icon + reason + Dismiss
  * (Idle and Done are handled by the host: the dialog isn't rendered at all in
@@ -100,6 +101,7 @@ fun MissingComponentsDialog(
     if (state is ImportState.Idle || state is ImportState.Done) return
     val isBusy = state is ImportState.Analyzing ||
         state is ImportState.Downloading ||
+        state is ImportState.ProvisioningContainer ||
         state is ImportState.Applying
 
     BackHandler(enabled = true) { if (!isBusy) onDismiss() }
@@ -147,6 +149,7 @@ fun MissingComponentsDialog(
                     onApplyAvailableOnly = onApplyAvailableOnly,
                     onCancel = onDismiss,
                 )
+                is ImportState.ProvisioningContainer -> SpinnerBlock(label = state.message)
                 is ImportState.Applying -> ApplyingContent()
                 is ImportState.Failed -> FailedContent(state.reason, onDismiss)
                 ImportState.Idle, is ImportState.Done -> Unit

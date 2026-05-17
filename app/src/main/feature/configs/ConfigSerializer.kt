@@ -297,11 +297,18 @@ object ConfigSerializer {
      *    out for non-Steam targets.
      *
      * Caller is responsible for invoking [Shortcut.saveData].
+     *
+     * @param skipWineVersionOverride when true, `wineVersion` is NOT written as a
+     *   per-shortcut override. The config-import flow moves the shortcut into a
+     *   container whose wineprefix already matches the imported Wine/Proton, so
+     *   the container owns the wine and a shortcut-level override would be
+     *   redundant (and dangerous if it ever drifted from the container).
      */
     fun applyToShortcut(
         json: JSONObject,
         container: Container,
         shortcut: Shortcut,
+        skipWineVersionOverride: Boolean = false,
     ): ApplyResult {
         val warnings = mutableListOf<String>()
         val schema = json.optInt("schemaVersion", -1)
@@ -313,6 +320,7 @@ object ConfigSerializer {
         json.optJSONObject("container")?.let { containerObj ->
             CONTAINER_STRING_FIELDS.forEach { f ->
                 if (f.key in DEVICE_BOUND_KEYS) return@forEach
+                if (skipWineVersionOverride && f.key == "wineVersion") return@forEach
                 val v = containerObj.optString(f.key, "").takeIf { it.isNotEmpty() } ?: return@forEach
                 runCatching { shortcut.putExtra(f.key, v) }
                     .onFailure { warnings += "shortcut override ${f.key}: ${it.message}" }

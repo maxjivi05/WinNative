@@ -117,18 +117,16 @@ object ConfigExportImport {
         return repository.uploadConfig(input)
     }
 
-    /**
-     * Read a file's contents (UTF-8) and apply it as a config to the target shortcut.
-     * Caller is responsible for opening the SAF picker and getting the file bytes.
+    /*
+     * NOTE: a former `applyFromJsonString` helper applied a config directly via
+     * ConfigSerializer.applyToShortcut. It was removed because that path bypassed
+     * component download AND container provisioning — exactly the breakage the
+     * Best-Config import fix addresses (it would write an imported `wineVersion`
+     * onto a shortcut whose container can't run it). Any future file-import
+     * feature MUST route its parsed JSON through
+     * `ConfigImportCoordinator.start(json, container, shortcut, onResult)` so it
+     * inherits the missing-component download + matching-container provisioning.
      */
-    fun applyFromJsonString(
-        json: String,
-        container: Container,
-        shortcut: Shortcut,
-    ): ConfigSerializer.ApplyResult {
-        val obj = JSONObject(json)
-        return ConfigSerializer.applyToShortcut(obj, container, shortcut)
-    }
 
     private fun sanitizeSlug(raw: String): String =
         raw.trim().replace(Regex("[^A-Za-z0-9._-]"), "_").take(64).ifEmpty { "unknown" }

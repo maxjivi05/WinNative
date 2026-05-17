@@ -7,6 +7,7 @@ import android.os.Looper
 import androidx.preference.PreferenceManager
 import com.winlator.cmod.feature.configs.ConfigSerializer
 import com.winlator.cmod.runtime.container.Container
+import com.winlator.cmod.runtime.container.ContainerManager
 import com.winlator.cmod.runtime.container.Shortcut
 import com.winlator.cmod.runtime.content.ContentProfile
 import com.winlator.cmod.runtime.content.ContentsManager
@@ -84,6 +85,16 @@ class ConfigImportCoordinator(private val appContext: Context) {
     private val driverInstallNames = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /**
+     * Per-import set of requirement ids whose download + install actually
+     * succeeded this run. Read by [isWineInstalled] so container provisioning
+     * knows whether the imported Wine/Proton is genuinely on disk — a row the
+     * user deselected, or one that failed, never lands here. Cleared alongside
+     * [driverInstallNames] on every fresh [start] and on [cancel].
+     */
+    private val installedRequirementIds: MutableSet<String> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
      * Begin the analysis + download + apply pipeline. No-op if not in [ImportState.Idle].
      * [onResult] is invoked exactly once when the flow reaches a terminal state (Done/Failed).
      */
@@ -116,6 +127,7 @@ class ConfigImportCoordinator(private val appContext: Context) {
         // the next analysis starts clean.
         session = null
         driverInstallNames.clear()
+        installedRequirementIds.clear()
         // Wrap the caller's onResult so internal invocations always marshal to
         // Main. This is the boundary between coordinator coroutines (Default/IO)
         // and the UI side — without it, a caller that touches Toast/View/etc. from
@@ -210,15 +222,33 @@ class ConfigImportCoordinator(private val appContext: Context) {
      * delivered and we don't double-toast.
      */
     fun cancel() {
+        // Container provisioning (createContainer extracts a wineprefix archive,
+        // then the shortcut .desktop is physically moved) is not safely
+        // interruptible — aborting mid-move could leave a shortcut pointing at a
+        // container it doesn't live in. The dialog already blocks dismissal in
+        // this state (MissingComponentsDialog isBusy); ignore stray cancels too.
+        if (_state.value is ImportState.ProvisioningContainer) {
+            Timber.tag(TAG).w("cancel() ignored: container provisioning in progress")
+            return
+        }
         val terminalAlready = _state.value is ImportState.Done || _state.value is ImportState.Failed
         scope.coroutineContext.cancelChildren()
         if (!terminalAlready) session?.onResult?.invoke("Import cancelled.")
         session = null
         driverInstallNames.clear()
+        installedRequirementIds.clear()
         _state.value = ImportState.Idle
     }
 
-    /** Caller must invoke when the parent UI is permanently gone (ViewModel.onCleared). */
+    /**
+     * Caller must invoke when the parent UI is permanently gone (ViewModel.onCleared).
+     *
+     * Unlike [cancel], this force-cancels the scope even mid-[ImportState.ProvisioningContainer].
+     * If that happens while a new container is being created, the container may
+     * be left on disk without a shortcut moved into it (a harmless orphan that
+     * the user can delete from container management) — an acceptable trade for
+     * not leaking the coordinator's coroutine scope.
+     */
     fun dispose() {
         scope.cancel()
         session = null
@@ -300,7 +330,7 @@ class ConfigImportCoordinator(private val appContext: Context) {
                     e.requirement.id to r.profile
                 } else null
             }.toMap()
-            session = s.copy(manager = manager, substitutionMap = substitutions)
+            session = s.copy(manager = manager, substitutionMap = substitutions, entries = entries)
 
             if (!needsUserDecision) {
                 // Everything is either Installed or Unsupported (drivers). There's
@@ -407,6 +437,7 @@ class ConfigImportCoordinator(private val appContext: Context) {
             runCatching { tmp.delete() }
             if (installed != null) {
                 withContext(Dispatchers.IO) { manager.syncContents() }
+                installedRequirementIds.add(req.id)
                 updateRow(req.id, RowState.Done)
             } else {
                 updateRow(req.id, RowState.Failed("Install failed"))
@@ -460,6 +491,7 @@ class ConfigImportCoordinator(private val appContext: Context) {
                 // the shortcut would still point at the requested-but-uninstalled
                 // identifier and the launcher would fail to resolve the driver.
                 driverInstallNames[req.id] = installedName
+                installedRequirementIds.add(req.id)
                 updateRow(req.id, RowState.Done)
             } else {
                 updateRow(req.id, RowState.Failed("Install failed"))
@@ -526,19 +558,134 @@ class ConfigImportCoordinator(private val appContext: Context) {
             }
             val filtered = if (keysToStrip.isEmpty()) rewritten
             else stripKeys(rewritten, keysToStrip)
+
+            // --- Resolve the container the imported Wine/Proton must run in ---
+            // A shortcut runs inside a Container whose wineprefix is physically
+            // built for one Wine/Proton + arch. Writing wineVersion as a per-
+            // shortcut override on a container that can't host it guarantees a
+            // no-boot. Instead, move the shortcut into a container that matches
+            // — reusing an existing one or creating a new one. wantedWine is
+            // read post-strip: "Apply available only" that drops the wine key
+            // leaves it blank → NoWineInConfig → no container change.
+            val wantedWine = filtered.optJSONObject("container")
+                ?.optString("wineVersion").orEmpty().takeIf { it.isNotBlank() }
+            val wineInstalled = isWineInstalled(s, wantedWine)
+
+            _state.value = ImportState.ProvisioningContainer("Setting up the container…")
+            val contentsManager = s.manager
+            if (contentsManager == null) {
+                terminalFailure("Components manager not initialized.", s.onResult)
+                return
+            }
+            val resolution = withContext(Dispatchers.IO) {
+                val cm = ContainerManager(appContext)
+                TargetContainerResolver.resolve(
+                    appContext, cm, contentsManager,
+                    wantedWine, wineInstalled, s.shortcut.name ?: "Imported",
+                )
+            }
+
+            // --- Decide the target container + collect any warnings ----------
+            val warnings = mutableListOf<String>()
+            val targetContainer: Container = when (resolution) {
+                is TargetContainerResolver.TargetContainerResult.Resolved ->
+                    resolution.container
+                TargetContainerResolver.TargetContainerResult.NoWineInConfig ->
+                    s.container
+                is TargetContainerResolver.TargetContainerResult.WineUnavailable -> {
+                    warnings += "Wine/Proton '${resolution.wantedIdentifier}' could not be " +
+                        "installed — kept your current container; Wine version not changed."
+                    s.container
+                }
+                is TargetContainerResolver.TargetContainerResult.CreateFailed -> {
+                    warnings += "Couldn't create a container for " +
+                        "'${resolution.wantedIdentifier}'; Wine version not changed."
+                    s.container
+                }
+            }
+            val createdContainer =
+                (resolution as? TargetContainerResolver.TargetContainerResult.Resolved)
+                    ?.created == true
+            val needsMove = targetContainer.id != s.container.id
+
+            // --- Move the shortcut into the target container, if needed ------
+            // Stay in ProvisioningContainer across the physical .desktop move so
+            // cancel() keeps refusing to interrupt it — a half-done move could
+            // duplicate the .desktop onto two containers. Switch to Applying
+            // only once the move has settled.
+            val movedShortcut: Shortcut? = if (needsMove) {
+                withContext(Dispatchers.IO) { moveShortcutFile(s.shortcut, targetContainer) }
+            } else {
+                null
+            }
+            val moveFailed = needsMove && movedShortcut == null
+            if (moveFailed) {
+                warnings += "Couldn't move ${s.shortcut.name} into the matching " +
+                    "container; kept it on the current one."
+            }
+            // The Shortcut to write settings into: the freshly-loaded instance
+            // when the move succeeded (the original is stale — its .file was
+            // deleted), otherwise the original. effectiveTarget is where it
+            // actually lives now (old container if the move failed).
+            val applyShortcut = movedShortcut ?: s.shortcut
+            val effectiveTarget = if (moveFailed) s.container else targetContainer
+
+            // --- Apply the remaining settings as per-shortcut overrides ------
+            _state.value = ImportState.Applying
             val applyResult = withContext(Dispatchers.IO) {
-                val r = ConfigSerializer.applyToShortcut(filtered, s.container, s.shortcut)
-                s.shortcut.saveData()
+                val r = ConfigSerializer.applyToShortcut(
+                    filtered, effectiveTarget, applyShortcut,
+                    skipWineVersionOverride = true,
+                )
+                // Honour the per-shortcut overrides we just wrote. Game shortcuts
+                // are created with `use_container_defaults=1` (Steam/Epic/GOG/.lnk
+                // creation paths all set it), and while it is "1" the launcher's
+                // getSettingExtra() ignores EVERY per-shortcut extra and reads the
+                // container value instead — so an imported config would silently
+                // do nothing. "0" makes the launcher honour the extras; keys the
+                // config didn't set still fall back to the container (empty extra
+                // → container value), so this only enables the imported settings.
+                applyShortcut.putExtra("use_container_defaults", "0")
+                // The container owns the Wine now — drop any per-shortcut
+                // wineVersion override, including a stale one left by an
+                // earlier (pre-fix) import.
+                applyShortcut.putExtra("wineVersion", null)
+                applyShortcut.saveData()
                 r
             }
-            val msgPrefix = if (keysToStrip.isEmpty()) "Config imported"
-            else "Config imported with ${keysToStrip.size} key(s) skipped"
-            val warningsTail = applyResult.warnings.take(3).joinToString("\n")
-            val message = if (warningsTail.isBlank()) "$msgPrefix into ${s.shortcut.name}."
-            else "$msgPrefix:\n$warningsTail"
+            warnings += applyResult.warnings
+
+            // --- Result message + library refresh ----------------------------
+            val moved = needsMove && !moveFailed
+            val base = when {
+                moved && createdContainer ->
+                    "Config imported — set up a container for the imported Wine and " +
+                        "moved ${s.shortcut.name} into it."
+                moved ->
+                    "Config imported — moved ${s.shortcut.name} to a matching container."
+                else -> "Config imported into ${s.shortcut.name}."
+            }
+            val strippedNote =
+                if (keysToStrip.isEmpty()) "" else " (${keysToStrip.size} key(s) skipped)"
+            val warningsTail = warnings.take(3).joinToString("\n")
+            val message = if (warningsTail.isBlank()) "$base$strippedNote"
+            else "$base$strippedNote\n$warningsTail"
+
+            if (moved) {
+                // Drop the ghost library entry that still points at the old
+                // container. Best-effort; tolerate the UI host being gone.
+                mainHandler.post {
+                    runCatching { com.winlator.cmod.app.shell.UnifiedActivity.refreshLibrary() }
+                        .onFailure { Timber.tag(TAG).w(it, "refreshLibrary failed") }
+                }
+            }
             _state.value = ImportState.Done(message)
             s.onResult(message)
             session = null
+        } catch (t: kotlinx.coroutines.CancellationException) {
+            // cancel()/dispose() already delivered the terminal outcome — don't
+            // fire onResult again or flip the state back out of Idle.
+            throw t
         } catch (t: Throwable) {
             Timber.tag(TAG).w(t, "applyConfig failed")
             terminalFailure("Could not apply config: ${t.message ?: t::class.simpleName}", s.onResult)
@@ -548,6 +695,89 @@ class ConfigImportCoordinator(private val appContext: Context) {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Whether the imported Wine/Proton ([wantedWine], post-substitution) is
+     * genuinely on disk now. Drives [TargetContainerResolver]: a row the user
+     * deselected or one that failed to download must not let the resolver
+     * create/move into a container for a wine that isn't there.
+     *
+     * MAIN wine ships with the app. Otherwise the wine is installed iff the
+     * detector saw it as [RequirementResolution.Installed], or it was
+     * downloadable and its install actually succeeded this run (tracked in
+     * [installedRequirementIds]).
+     */
+    private fun isWineInstalled(s: Session, wantedWine: String?): Boolean {
+        if (wantedWine == null) return false
+        if (com.winlator.cmod.runtime.wine.WineInfo.isMainWineVersion(wantedWine)) return true
+        val wineEntry = s.entries.firstOrNull {
+            it.requirement.id == ComponentRequirement.ID_WINE
+        } ?: return false
+        return when (wineEntry.resolution) {
+            is RequirementResolution.Installed -> true
+            // Wine is downloaded through the ContentsManager path, never as an
+            // AvailableDriver — so only Available can transition to installed,
+            // and only when its install actually succeeded this run.
+            is RequirementResolution.Available ->
+                ComponentRequirement.ID_WINE in installedRequirementIds
+            else -> false
+        }
+    }
+
+    /**
+     * Moves [shortcut]'s `.desktop` (and sibling `.lnk`) into [target]'s Desktop
+     * directory and records the `container_id` override — the same move the
+     * settings dialog performs (ShortcutSettingsComposeDialog.saveSettings).
+     * The `container_id` is written + persisted BEFORE the copy so the moved
+     * file carries it.
+     *
+     * Returns a freshly-loaded [Shortcut] bound to [target] (the caller's
+     * original [Shortcut] is stale afterwards — its `.file` is deleted), or
+     * null if the physical move failed, in which case the original shortcut is
+     * left intact on its current container with `container_id` reverted.
+     */
+    private fun moveShortcutFile(shortcut: Shortcut, target: Container): Shortcut? {
+        val originalContainerId = shortcut.container.id
+        val oldFile = shortcut.file
+        shortcut.putExtra("container_id", target.id.toString())
+        shortcut.putExtra("cloud_force_download", "1")
+        // Strip any per-shortcut wineVersion override BEFORE this pre-copy save,
+        // so the .desktop copied into the new container never carries a stale
+        // override. The target container owns the Wine; if a later step throws,
+        // the moved shortcut is still safe to launch (no override pointing at a
+        // wine the new container can't run).
+        shortcut.putExtra("wineVersion", null)
+        shortcut.saveData()
+        return runCatching {
+            val newDesktopDir = target.desktopDir
+            if (!newDesktopDir.exists() && !newDesktopDir.mkdirs()) {
+                throw java.io.IOException("Could not create ${newDesktopDir.path}")
+            }
+            val newShortcutFile = File(newDesktopDir, oldFile.name)
+            if (!com.winlator.cmod.shared.io.FileUtils.copy(oldFile, newShortcutFile)) {
+                throw java.io.IOException("Failed to copy ${oldFile.path}")
+            }
+            oldFile.delete()
+            // Carry the sibling .lnk so launcher paths that key off it stay consistent.
+            val lnkName = oldFile.name.substringBeforeLast(".desktop") + ".lnk"
+            val oldLnk = File(oldFile.parentFile, lnkName)
+            if (oldLnk.exists()) {
+                val newLnk = File(newDesktopDir, lnkName)
+                if (com.winlator.cmod.shared.io.FileUtils.copy(oldLnk, newLnk)) {
+                    oldLnk.delete()
+                } else {
+                    // Non-fatal: the .desktop (the load-bearing file) did move.
+                    Timber.tag(TAG).w("moveShortcutFile: .lnk copy failed, left at ${oldLnk.path}")
+                }
+            }
+            Shortcut(target, newShortcutFile)
+        }.getOrElse { ex ->
+            Timber.tag(TAG).w(ex, "moveShortcutFile failed; reverting container_id")
+            shortcut.putExtra("container_id", originalContainerId.toString())
+            runCatching { shortcut.saveData() }
+            null
+        }
+    }
 
     private fun computeArchMismatch(json: JSONObject, container: Container): ArchMismatch? {
         val ident = json.optJSONObject("container")?.optString("wineVersion").orEmpty()
@@ -721,6 +951,12 @@ class ConfigImportCoordinator(private val appContext: Context) {
          * config JSON to point at the version that's actually installed on disk.
          */
         val substitutionMap: Map<String, com.winlator.cmod.runtime.content.ContentProfile> = emptyMap(),
+        /**
+         * The detector's analysis entries, captured so [applyConfig] — which
+         * runs after the UI has left the entry-carrying states — can tell
+         * whether the imported Wine requirement ended up installed.
+         */
+        val entries: List<RequirementEntry> = emptyList(),
     )
 
     companion object {

@@ -1275,7 +1275,7 @@ Installed path:
     <string name="best_configs_import_status_downloading">Downloading %1$s</string>
     <string name="best_configs_import_status_installing">Installing…</string>
     <string name="best_configs_import_status_done">Done</string>
-    <string name="best_configs_import_arch_mismatch">This config targets %1$s; this container is %2$s. The game may not launch — consider creating a new container for the imported Wine version before launching.</string>
+    <string name="best_configs_import_arch_mismatch">This config targets %1$s; your current container is %2$s. The import will set up a dedicated container for the imported Wine version and move this game into it, so it launches correctly.</string>
     <string name="best_configs_import_pick_file">Pick a config file (.json)</string>
 
     <!-- Performance recording settings -->

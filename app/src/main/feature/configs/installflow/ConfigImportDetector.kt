@@ -61,7 +61,7 @@ object ConfigImportDetector {
             .takeIf { it.isNotBlank() }
             ?.let { wineIdent ->
                 val req = ComponentRequirement(
-                    id = "wine",
+                    id = ComponentRequirement.ID_WINE,
                     type = wineTypeFor(wineIdent),
                     identifier = wineIdent,
                     displayLabel = prettyWine(wineIdent),

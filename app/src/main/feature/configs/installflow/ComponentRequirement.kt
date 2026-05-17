@@ -25,6 +25,16 @@ data class ComponentRequirement(
     ) {
         enum class Block { CONTAINER, CONTAINER_EXTRAS, SHORTCUT_EXTRAS, DXWRAPPER_CONFIG_VKD3D }
     }
+
+    companion object {
+        /**
+         * Stable requirement id for the Wine/Proton component. The Wine
+         * requirement is special — it decides which container the shortcut runs
+         * in — so its id is referenced by name in more than one place
+         * ([ConfigImportDetector], the coordinator's container provisioning).
+         */
+        const val ID_WINE: String = "wine"
+    }
 }
 
 /**
