@@ -44,28 +44,38 @@ data class ConfigRow(
     val voteCount: Int,
 ) {
     /**
-     * Resolution string (e.g. "1280x720") pulled from the embedded container config.
-     * Used as part of the default display name when the uploader didn't pick one.
+     * Resolution string (e.g. "1280×720") pulled from the embedded container
+     * config. Always shown as part of [displayName]; the raw `screenSize` "x"
+     * is prettified to "×" for a clean board label.
      */
     val resolutionLabel: String?
-        get() = configJson.optJSONObject("container")?.optString("screenSize")?.takeIf { it.isNotBlank() }
+        get() = configJson.optJSONObject("container")
+            ?.optString("screenSize")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { if (it.matches(Regex("\\d+x\\d+"))) it.replace("x", "×") else it }
 
     /**
-     * What to show as the config name on the leaderboard row. Prefers the
-     * uploader's public display name (GPG name or "Anonymous"). Falls back to
-     * the legacy `custom_name` column, then to a "resolution / device" label
-     * so older rows without either field are still distinguishable.
+     * What to show as the config name on the leaderboard row:
+     * `"<uploader> — <resolution>"` — e.g. "MaxJividen — 1920×1080" or
+     * "Anonymous — 1280×720".
+     *
+     * The uploader is the public Play Games display name, or "Anonymous" for an
+     * upload made while not signed in (resolved automatically at upload time,
+     * never user-typed). Legacy rows without an uploader name fall back to the
+     * `custom_name` column, then the device model, so they stay distinguishable.
+     * The resolution is appended whenever the embedded config carries a screen
+     * size; if it somehow doesn't, just the uploader is shown.
      */
     val displayName: String
-        get() = uploaderName?.takeIf { it.isNotBlank() }
-            ?: customName?.takeIf { it.isNotBlank() }
-            ?: run {
-                val res = resolutionLabel ?: "—"
-                val dev = deviceModel?.takeIf { it.isNotBlank() }
-                    ?: manufacturer?.takeIf { it.isNotBlank() }
-                    ?: "Unknown"
-                "$res / $dev"
-            }
+        get() {
+            val uploader = uploaderName?.takeIf { it.isNotBlank() }
+                ?: customName?.takeIf { it.isNotBlank() }
+                ?: deviceModel?.takeIf { it.isNotBlank() }
+                ?: manufacturer?.takeIf { it.isNotBlank() }
+                ?: "Unknown"
+            val res = resolutionLabel
+            return if (res != null) "$uploader — $res" else uploader
+        }
 
     companion object {
         fun parseArray(body: String): List<ConfigRow> {

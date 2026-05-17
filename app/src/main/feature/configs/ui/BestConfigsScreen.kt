@@ -224,15 +224,22 @@ private fun Header(
             )
         }
         Spacer(Modifier.width(8.dp))
-        UploadButton(onClick = onUpload)
+        // Inset the Share button so it clears the circular "X" close-button
+        // overlay that the host draws at the window's top-right corner (see
+        // UnifiedActivity's LibraryDetail close overlay: 16dp pad + 42dp button).
+        // Without this the Share button sits underneath the X and is untappable.
+        UploadButton(
+            onClick = onUpload,
+            modifier = Modifier.padding(end = 48.dp),
+        )
     }
 }
 
 @Composable
-private fun UploadButton(onClick: () -> Unit) {
+private fun UploadButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(WinNativeAccent.copy(alpha = 0.22f))
             .border(1.dp, WinNativeAccent, RoundedCornerShape(12.dp))
