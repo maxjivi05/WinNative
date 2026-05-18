@@ -3124,9 +3124,27 @@ class SteamService : Service() {
                 val preSnapshotSelectedDepots = preSnapshotMainAppDepots + dlcAppDepots
 
                 if (preSnapshotSelectedDepots.isEmpty()) {
-                    Timber.i("selectedDepots is empty before snapshot filtering - App already installed.")
+                    // The download resolved to zero depots. Two very different
+                    // situations land here:
+                    //  (1) nothing was selected and the base game is already
+                    //      installed — a genuine no-op "complete".
+                    //  (2) the user EXPLICITLY selected DLC(s) that own no
+                    //      downloadable content — entitlement / branch-access
+                    //      DLCs (e.g. "Dota 2 - Reborn Beta", appid 373300).
+                    // The old code treated both as "Download complete", so (2)
+                    // showed the user a silent "Complete / 0 B" that did
+                    // nothing — the reported DLC-download bug.
+                    val selectedContentlessDlc = userSelectedDlcAppIds.isNotEmpty()
+                    Timber.i(
+                        "selectedDepots empty for appId=$appId — " +
+                            if (selectedContentlessDlc) {
+                                "selected DLC(s) $userSelectedDlcAppIds have no downloadable content"
+                            } else {
+                                "app already installed"
+                            },
+                    )
 
-                    // Instead of returning null, create a completed/verifying job so it shows in UI
+                    // Instead of returning null, create a completed job so it shows in UI
                     val info = DownloadInfo(1, appId, CopyOnWriteArrayList(listOf(appId)))
                     info.updateStatus(DownloadPhase.COMPLETE)
                     info.setProgress(1f)
@@ -3140,10 +3158,49 @@ class SteamService : Service() {
                     MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
                     MarkerUtils.addMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
 
-                    // Show success message to user
+                    if (selectedContentlessDlc) {
+                        // Record the content-less DLC(s) as installed so the DLC
+                        // picker reflects reality — they show "Installed" rather
+                        // than staying perpetually "available". The user owns
+                        // them and there is genuinely nothing to download.
+                        runCatching {
+                            runBlocking(Dispatchers.IO) {
+                                val mainAppInfo = instance?.appInfoDao?.getInstalledApp(appId)
+                                if (mainAppInfo != null) {
+                                    val updatedDlc =
+                                        (mainAppInfo.dlcDepots + userSelectedDlcAppIds)
+                                            .distinct()
+                                            .sorted()
+                                    instance?.appInfoDao?.update(
+                                        mainAppInfo.copy(dlcDepots = updatedDlc),
+                                    )
+                                    Timber.i(
+                                        "Marked content-less DLC(s) installed for appId=$appId: dlcDepots=$updatedDlc",
+                                    )
+                                }
+                            }
+                        }.onFailure { e ->
+                            Timber.w(e, "Failed to record content-less DLC(s) for appId=$appId")
+                        }
+                    }
+
+                    // Honest message — don't claim a download happened when the
+                    // selected DLC simply had no content to fetch.
                     instance?.let { service ->
                         service.scope.launch(Dispatchers.Main) {
-                            WinToast.show(service.applicationContext, "Download complete", Toast.LENGTH_SHORT)
+                            if (selectedContentlessDlc) {
+                                WinToast.show(
+                                    service.applicationContext,
+                                    "Selected DLC requires no download — marked installed",
+                                    Toast.LENGTH_LONG,
+                                )
+                            } else {
+                                WinToast.show(
+                                    service.applicationContext,
+                                    "Download complete",
+                                    Toast.LENGTH_SHORT,
+                                )
+                            }
                         }
                     }
 
