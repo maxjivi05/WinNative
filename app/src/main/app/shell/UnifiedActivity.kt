@@ -211,7 +211,7 @@ import com.winlator.cmod.shared.ui.widget.chasingBorder
 import com.winlator.cmod.shared.theme.WinNativeTheme
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.Lazy
-import `in`.dragonbra.javasteam.enums.EPersonaState
+import com.winlator.cmod.feature.stores.steam.enums.EPersonaState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -6864,6 +6864,15 @@ class UnifiedActivity :
         downloads.forEach { (_, info) ->
             LaunchedEffect(info) {
                 info.getStatusFlow().collect {
+                    tick++
+                }
+            }
+            // Also recompose on status-message changes. Active downloads push
+            // a changing message every progress tick, so this is what keeps
+            // the byte count / speed / progress bar refreshing live (the
+            // phase flow dedups to a single DOWNLOADING emission).
+            LaunchedEffect(info) {
+                info.getStatusMessageFlow().collect {
                     tick++
                 }
             }

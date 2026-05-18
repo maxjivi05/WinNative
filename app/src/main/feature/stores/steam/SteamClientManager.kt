@@ -687,6 +687,12 @@ object SteamClientManager {
      */
     @JvmStatic
     fun getEncryptedAppTicketBase64Blocking(appId: Int): String? {
+        // Blocks for a CM round-trip (can be tens of seconds). Never call on
+        // the main thread — that would ANR.
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            Log.e(TAG, "getEncryptedAppTicketBase64Blocking called on the main thread — refusing")
+            return null
+        }
         return try {
             val service = com.winlator.cmod.feature.stores.steam.service.SteamService.instance ?: return null
             kotlinx.coroutines.runBlocking {

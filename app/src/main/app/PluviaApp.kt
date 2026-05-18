@@ -18,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.bouncycastle.jce.provider.BouncyCastleProvider
+import java.io.File
 import java.security.Security
 
 @HiltAndroidApp
@@ -27,6 +28,13 @@ class PluviaApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        // Some devices (notably several Xiaomi/HyperOS builds) don't expose
+        // libjpeg.so on the default Bionic dlopen search path, which causes
+        // any downstream native lib that calls dlopen("libjpeg.so") to fail
+        // with "library not found". Eagerly pin the system copy into the
+        // global namespace at startup so subsequent dlopens resolve it.
+        preloadSystemLibraries()
 
         registerRefreshRateLifecycleCallbacks()
 
@@ -66,6 +74,25 @@ class PluviaApp : Application() {
 
         @JvmField
         val events = EventDispatcher()
+    }
+
+    private fun preloadSystemLibraries() {
+        val is64 = android.os.Build.SUPPORTED_64_BIT_ABIS.isNotEmpty()
+        val candidates = if (is64) {
+            listOf("/system/lib64/libjpeg.so", "/system/lib/libjpeg.so")
+        } else {
+            listOf("/system/lib/libjpeg.so", "/system/lib64/libjpeg.so")
+        }
+        for (path in candidates) {
+            if (!File(path).exists()) continue
+            try {
+                System.load(path)
+                Log.i("PluviaApp", "Preloaded $path")
+                return
+            } catch (t: Throwable) {
+                Log.w("PluviaApp", "Preload $path failed: ${t.message}")
+            }
+        }
     }
 
     private fun registerRefreshRateLifecycleCallbacks() {

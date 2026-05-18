@@ -62,6 +62,7 @@ import com.winlator.cmod.feature.stores.steam.enums.Marker;
 import com.winlator.cmod.feature.stores.steam.utils.MarkerUtils;
 import com.winlator.cmod.feature.stores.steam.utils.PrefManager;
 import com.winlator.cmod.feature.stores.steam.utils.SteamUtils;
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnSteamLauncherHook;
 
 import androidx.preference.PreferenceManager;
 import com.winlator.cmod.R;
@@ -147,6 +148,7 @@ import com.winlator.cmod.runtime.display.environment.XEnvironment;
 import com.winlator.cmod.feature.stores.steam.SteamClientManager;
 import com.winlator.cmod.runtime.display.environment.components.ALSAServerComponent;
 import com.winlator.cmod.runtime.display.environment.components.GuestProgramLauncherComponent;
+import com.winlator.cmod.runtime.display.environment.components.NetworkInfoUpdateComponent;
 import com.winlator.cmod.runtime.display.environment.components.PulseAudioComponent;
 import com.winlator.cmod.runtime.display.environment.components.SteamClientComponent;
 import com.winlator.cmod.runtime.display.environment.components.SysVSharedMemoryComponent;
@@ -209,10 +211,13 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private static final String LEGACY_STEAM_CLIENT_STORE_RELATIVE_PATH = ".wine/drive_c/WinNative/SteamClient";
     public static final String EXTRA_LAUNCHED_FROM_PINNED_SHORTCUT = "launched_from_pinned_shortcut";
 
-    // Real Steam launch flags. Keep this minimal set; CEF-workaround flags (-no-cef-sandbox,
-    // -cef-single-process, -no-browser) all made things worse in testing (V8 proxy errors
-    // under single-process, dead flag on modern Steam, etc.).
-    //   -silent -vgui -tcp -nobigpicture -nofriendsui -nochatui -nointro -applaunch <id>
+    // Real Steam launch flags — see the launchRealSteam branch in
+    // getWineStartCommand for the full analysis. Mirrors GameNative's command
+    // (incl. -tcp). -cef-disable-gpu / -cef-disable-gpu-compositor avoid a
+    // steamwebhelper crash in DXVK's dxgi.dll (they stand in for the CEF args
+    // GameNative injects via box64rc, which FEX containers don't read).
+    //   -silent -vgui -tcp -nobigpicture -nofriendsui -nochatui -nointro
+    //   -cef-disable-gpu -cef-disable-gpu-compositor -no-cef-sandbox -applaunch <id>
     private static final String[] STEAM_SYSTEM_REGISTRY_KEYS = new String[] {
             "Software\\Classes\\steam",
             "Software\\Wow6432Node\\Valve\\Steam"
@@ -4564,6 +4569,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             );
         }
 
+        // Publish the device's network interface list into the Wine prefix
+        // (<tmpDir>/ifaddrs + etc/hosts). Wine on Android can't enumerate
+        // interfaces itself; without this file steam.exe's startup network
+        // check sees no network and aborts with "Could not connect to Steam
+        // network" before it ever tries a CM connection. Harmless for every
+        // other launch type, so added unconditionally (matches the reference).
+        environment.addComponent(new NetworkInfoUpdateComponent());
+
         // Add Steam client component for Steam games (Goldberg emulator support)
         boolean launchRealSteamMode = shortcut != null
                 ? parseBoolean(getShortcutSetting("launchRealSteam", container.isLaunchRealSteam() ? "1" : "0"))
@@ -4573,10 +4586,71 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             environment.addComponent(new SteamClientComponent());
         }
 
+        // Bionic Steam hook: for Steam-launched shortcuts, fire off the JNI
+        // bootstrap (dlopen libsteamclient.so + refresh-token logon) in the
+        // background. libsteamclient.so authenticates a real Valve session
+        // we use to fetch real encrypted app tickets / DLC / depot keys for
+        // the Goldberg steam_settings the game actually reads.
+        //
+        // IMPORTANT: we deliberately do NOT merge WnSteamLauncherHook's env
+        // pack (WINESTEAMCLIENTPATH / Steam3Master / SteamGameId / …) into
+        // the game's wine environment. The game loads the injected steampipe
+        // stub steam_api64.dll, which talks to our SteamPipeServer on
+        // localhost:34865 — it never loads Proton's lsteamclient.dll, so it
+        // never reads those vars. Injecting them only confused the steampipe
+        // stub and caused the game to exit early (status 143). The bootstrap
+        // still propagates the subset it needs into its OWN process env.
+        if (isSteamShortcut() && shortcut != null) {
+            int wnAppId = -1;
+            try {
+                String rawId = shortcut.getExtra("app_id");
+                if (rawId != null && !rawId.isEmpty()) {
+                    wnAppId = Integer.parseInt(rawId);
+                }
+            } catch (NumberFormatException ignore) { /* leave wnAppId=-1 */ }
+
+            // prepare() fires the libsteamclient.so bootstrap as a side
+            // effect; the returned env map is intentionally discarded (see
+            // comment above). Kept as a call so the auth session is live.
+            WnSteamLauncherHook.INSTANCE.prepare(this, container, shortcut, wnAppId);
+        }
+
+        // Defence-in-depth: when Launch-Steam-Client mode is on, ensure no
+        // bionic env vars leak in from a prior launch (stale pref, code
+        // refactor regression, or future bug). Real Steam runs steam.exe
+        // inside Wine and handles auth itself; the WINESTEAMCLIENTPATH /
+        // Steam3Master / SteamUser / etc. keys are bionic-only and confuse
+        // steam.exe ("Steam installation problem" loop).
+        if (launchRealSteamMode) {
+            final String[] bionicKeys = {
+                "WINESTEAMCLIENTPATH64", "WINESTEAMCLIENTPATH",
+                "_STEAM_SETENV_MANAGER", "BREAKPAD_DUMP_LOCATION",
+                "STEAM_BASE_FOLDER", "ENABLE_VK_LAYER_VALVE_steam_overlay_1",
+                "STEAMVIDEOTOKEN", "Steam3Master", "SteamClientService",
+                "SteamUser", "SteamAppUser", "SteamClientLaunch", "SteamEnv",
+                "SteamPath", "ValvePlatformMutex", "STEAMID",
+                "SteamGameId", "SteamAppId", "OWNED_DLCS",
+            };
+            int scrubbed = 0;
+            for (String k : bionicKeys) {
+                if (envVars.has(k)) { envVars.remove(k); scrubbed++; }
+            }
+            if (scrubbed > 0) {
+                Log.i("XServerDisplayActivity",
+                      "real-Steam mode: scrubbed " + scrubbed +
+                      " bionic env keys from envVars");
+            }
+        }
+
         // Pass final envVars to the launcher
         guestProgramLauncherComponent.setEnvVars(envVars);
         guestProgramLauncherComponent.setTerminationCallback((status) -> {
             Log.d("XServerDisplayActivity", "Guest process terminated with status: " + status);
+
+            // Bionic Steam teardown — fires AFTER wine has exited so the
+            // native side can release the pipe + global user without
+            // racing the in-Wine lsteamclient.dll. Idempotent.
+            WnSteamLauncherHook.INSTANCE.tearDown();
 
             // Keep A:\Steam persistence for Android 16 testing
             // User expressly requested: "don't remove the A:\Steam\ Folder unless the next game has the toggle off to not move it."
@@ -5672,6 +5746,11 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
                 boolean useColdClient = parseBoolean(getShortcutSetting("useColdClient", container.isUseColdClient() ? "1" : "0"));
                 boolean launchRealSteam = parseBoolean(getShortcutSetting("launchRealSteam", container.isLaunchRealSteam() ? "1" : "0"));
+                boolean launchBionicSteam = parseBoolean(getShortcutSetting("launchBionicSteam", container.isLaunchBionicSteam() ? "1" : "0"));
+                // Both Steam-launch modes are mutually exclusive on the model
+                // side, but a stale shortcut override could have both on —
+                // give bionic priority if the user explicitly enabled it.
+                if (launchBionicSteam) launchRealSteam = false;
 
                 // Pre-resolve: ensure game install path and steamapps/common symlink exist
                 // before ANY launch mode so the Steam directory structure is always valid.
@@ -5685,16 +5764,83 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 File containerSteamDir = new File(container.getRootDir(),
                         ".wine/drive_c/Program Files (x86)/Steam");
 
-                if (launchRealSteam) {
+                if (launchBionicSteam) {
+                    // Bionic Steam mode: wine runs the game's exe DIRECTLY.
+                    // No steam.exe in the picture — the game's bundled
+                    // steam_api64.dll calls into Proton's lsteamclient.dll,
+                    // which dlopens our embedded libsteamclient.so via the
+                    // WINESTEAMCLIENTPATH env vars. Our wn-steam-bootstrap
+                    // has already authenticated that libsteamclient.so with
+                    // the user's refresh token, so SteamAPI_Init returns
+                    // success and the game proceeds to render.
+                    //
+                    // Putting steam.exe in the middle (the early 8b.8/8b.9
+                    // attempt) broke: stock Steam.exe tries to do its own
+                    // bootstrap + UI init at launch, runs into "Steam
+                    // installation problem" because the prefix isn't a
+                    // real Steam install, and crashes via
+                    // steamerrorreporter.exe before the game ever spawns.
+                    String relativeExeBionic = resolveRelativeGameExe(appId, gameInstPath);
+                    String gameDirNameBionic = (gameInstPath != null) ? new File(gameInstPath).getName() : "";
+                    File bionicWorkDir = null;
+                    if (!gameDirNameBionic.isEmpty()) {
+                        File containerGameDirBionic = new File(containerSteamDir, "steamapps/common/" + gameDirNameBionic);
+                        try { bionicWorkDir = containerGameDirBionic.getCanonicalFile(); }
+                        catch (IOException e) { bionicWorkDir = containerGameDirBionic; }
+                        if (!relativeExeBionic.isEmpty()) {
+                            String exeRelNative = relativeExeBionic.replace("\\", "/");
+                            int lastSlash = exeRelNative.lastIndexOf("/");
+                            if (lastSlash > 0) {
+                                File exeParent = new File(bionicWorkDir, exeRelNative.substring(0, lastSlash));
+                                if (exeParent.exists()) bionicWorkDir = exeParent;
+                            }
+                        }
+                    }
+                    if (bionicWorkDir != null && bionicWorkDir.exists()) {
+                        launcherComponent.setWorkingDir(bionicWorkDir);
+                        Log.d("XServerDisplayActivity", "Bionic Steam working dir: " + bionicWorkDir.getPath());
+                    } else if (containerSteamDir.exists()) {
+                        launcherComponent.setWorkingDir(containerSteamDir);
+                    }
+                    String winRelExe = relativeExeBionic.replace("/", "\\").replaceFirst("^\\\\+", "");
+                    args = "\"C:\\Program Files (x86)\\Steam\\steamapps\\common\\"
+                            + gameDirNameBionic + "\\" + winRelExe + "\"";
+                    Log.d("XServerDisplayActivity",
+                            "Bionic Steam direct launch: \"" + winRelExe + "\" for appId=" + appId);
+                } else if (launchRealSteam) {
                     // Real Steam mode: launch steam.exe with -applaunch <appId> and let
                     // Steam handle the game launch normally (update check, cloud sync, exe
-                    // spawn). Cloud pending-ops are cleared pre-launch via javasteam's
-                    // signalAppLaunchIntent(ignorePendingOperations=true) (see
-                    // setupSteamEnvironment). No env var / DLL override hacks — matches the
-                    // reference implementation exactly.
+                    // spawn). Cloud pending-ops are cleared pre-launch via the
+                    // WN-Steam-Client's signalAppLaunchIntent(ignorePendingOperations=true) (see
+                    // setupSteamEnvironment).
+                    //
+                    // -cef-disable-gpu / -cef-disable-gpu-compositor: steamwebhelper.exe
+                    // (Steam's Chromium UI process) otherwise initialises a GPU/DXGI path.
+                    // With DXVK installed in the container, dxgi.dll resolves to DXVK's
+                    // game-oriented implementation; Chromium's GPU init calls into it and
+                    // jumps through a bad pointer to dxgi.dll+0 — EXECUTE access violation,
+                    // steamwebhelper dies, Steam shows the "#32770" error dialog and never
+                    // launches the game. Disabling steamwebhelper's GPU path keeps it off
+                    // DXVK's dxgi entirely (verified via WINEDEBUG=+seh crash backtrace).
+                    // -no-cef-sandbox: the CEF sandbox cannot work under Wine anyway.
+                    // Command mirrors the GameNative reference's real-Steam launch
+                    // (XServerScreen.kt:3706), including -tcp (GameNative keeps it; an
+                    // earlier removal here was a mistake). -no-browser is NOT used —
+                    // GameNative only adds it for the Light/Ultralight steamType presets,
+                    // and steam.exe's own CM connection does not depend on the webhelper.
+                    //
+                    // -cef-disable-gpu / -cef-disable-gpu-compositor / -no-cef-sandbox
+                    // substitute for the CEF args GameNative injects via box64rc WINEARGS:
+                    // this container runs under FEX (arm64ec), not box64, so box64rc is
+                    // never consulted; without these flags steamwebhelper crashes in
+                    // DXVK's dxgi.dll. NOTE: GameNative targets real-Steam at its GLIBC
+                    // x86_64/box64 variant — on arm64ec/FEX steamwebhelper (Chromium) is
+                    // still unstable; a box64 x86_64 container is the supported target.
                     if (containerSteamDir.exists()) launcherComponent.setWorkingDir(containerSteamDir);
                     args = "\"C:\\Program Files (x86)\\Steam\\steam.exe\" -silent -vgui -tcp "
-                            + "-nobigpicture -nofriendsui -nochatui -nointro -applaunch " + appId;
+                            + "-nobigpicture -nofriendsui -nochatui -nointro "
+                            + "-cef-disable-gpu -cef-disable-gpu-compositor -no-cef-sandbox "
+                            + "-applaunch " + appId;
                     Log.d("XServerDisplayActivity", "Real Steam launch via steam.exe for appId=" + appId);
                     scheduleRealSteamWatchdog(launcherComponent);
                 } else if (useColdClient) {
@@ -7953,20 +8099,26 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     }
                 }
 
-                // Unconditionally inhibit Steam's bootstrapper. This is what keeps the client
-                // from trying to self-update over the network on launch (the cause of the long
-                // cryptnet hangs we've seen in Wine).
+                // Unconditionally inhibit Steam's bootstrapper self-update on launch
+                // (prevents the long cryptnet hangs in Wine). Same content as the
+                // steam.cfg shipped inside steam.tzst and as GameNative's config.
                 File steamCfg = new File(steamDir, "steam.cfg");
                 FileUtils.writeString(steamCfg, "BootStrapperInhibitAll=Enable\nBootStrapperForceSelfUpdate=False\n");
 
-                // Seed the package/.installed completion markers so the Steam bootstrap stub,
-                // if it runs at all, sees a finished install and doesn't try to re-download.
+                // Remove any package/*.installed markers. A genuine marker holds the
+                // installed client's build-id; an earlier build of this code wrote a
+                // bogus "1" there. The bootstrapper reads that as a version mismatch,
+                // and with BootStrapperInhibitAll set it can then neither run the
+                // cached client nor update it — it deadlocks right after logging
+                // "Suppressing Steam update" (no client stage, no connection attempt).
+                // GameNative never writes these markers; neither do we now. Steam
+                // recreates them with the correct build-id after a successful boot.
                 File packageDir = new File(steamDir, "package");
-                if (!packageDir.exists()) packageDir.mkdirs();
                 for (String marker : new String[]{"steam_client_win32.installed", "steam_client_win64.installed"}) {
                     File mf = new File(packageDir, marker);
-                    if (!mf.exists() || mf.length() == 0) {
-                        FileUtils.writeString(mf, "1\n");
+                    if (mf.exists() && !mf.delete()) {
+                        Log.w("XServerDisplayActivity",
+                                "Could not remove stale Steam bootstrap marker " + marker);
                     }
                 }
             }
@@ -8041,7 +8193,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             // Create lightweight Steam config to reduce resource usage
             setupLightweightSteamConfig(steamDir, steamUserDataId);
 
-            // Pre-launch Steam Cloud handshake via javasteam. This is the key fix for
+            // Pre-launch Steam Cloud handshake via the C++ WN-Steam-Client. This is
+            // the key fix for
             // arm64ec Wine: the reference implementation calls beginLaunchApp BEFORE
             // invoking steam.exe, which triggers SteamAutoCloud.syncUserFiles + the
             // server-side signalAppLaunchIntent(ignorePendingOperations=true). That tells
@@ -8066,10 +8219,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                                         false, /* isOffline */
                                         null /* callback */);
                         Log.d("XServerDisplayActivity",
-                                "Pre-launch javasteam cloud sync complete for appId=" + appIdForSync);
+                                "Pre-launch Steam cloud sync complete for appId=" + appIdForSync);
                     } catch (Throwable t) {
                         Log.w("XServerDisplayActivity",
-                                "Pre-launch javasteam cloud sync failed (continuing)", t);
+                                "Pre-launch Steam cloud sync failed (continuing)", t);
                     } finally {
                         syncLatch.countDown();
                     }
@@ -8078,14 +8231,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 try {
                     if (!syncLatch.await(45, java.util.concurrent.TimeUnit.SECONDS)) {
                         Log.w("XServerDisplayActivity",
-                                "Pre-launch javasteam cloud sync timed out after 45s, proceeding");
+                                "Pre-launch Steam cloud sync timed out after 45s, proceeding");
                     }
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                 }
             }
 
-            // Local metadata cleanup — after javasteam has synced, Steam may still have
+            // Local metadata cleanup — after the cloud sync, Steam may still have
             // stale local state from previous sessions. Wipe both the metadata cache and
             // the remote/ save directory so Steam re-reads cleanly from the sync results.
             if (launchRealSteamMode && steamCloudSyncAllowed && steamAccountId > 0) {

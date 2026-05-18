@@ -14,9 +14,8 @@ import com.winlator.cmod.runtime.container.Container
 import com.winlator.cmod.runtime.display.environment.ImageFs
 import com.winlator.cmod.runtime.wine.WineUtils
 import com.winlator.cmod.runtime.wine.WineRegistryEditor
-import `in`.dragonbra.javasteam.enums.EOSType
-import `in`.dragonbra.javasteam.enums.EPersonaState
-import `in`.dragonbra.javasteam.types.KeyValue
+import com.winlator.cmod.feature.stores.steam.enums.EOSType
+import com.winlator.cmod.feature.stores.steam.enums.EPersonaState
 import kotlinx.coroutines.runBlocking
 import okhttp3.Call
 import okhttp3.Callback
@@ -1228,7 +1227,7 @@ object SteamUtils {
      * If any server-side pending remote operations exist for the app (one per partial/killed
      * session piles up on the server), Steam wants to show a cloud-conflict dialog via the
      * CEF webhelper. That dialog can't render on arm64ec Wine, so Steam suspends the launch
-     * indefinitely. Our own app already handles Steam Cloud sync via javasteam, so we turn
+     * indefinitely. Our own app already handles Steam Cloud sync via the WN-Steam-Client, so we turn
      * off Steam's own AutoCloud for the launched app — the server state isn't touched, we
      * just keep Steam from asking about it at launch.
      */

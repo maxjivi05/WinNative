@@ -1,0 +1,288 @@
+#include "wn_steam/cdn_client.h"
+
+#include <android/log.h>
+#include <curl/curl.h>
+#include <zlib.h>
+
+#include <algorithm>
+
+namespace wn_steam {
+
+namespace {
+constexpr const char* kLogTag = "WnSteamCdn";
+#define WN_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, kLogTag, __VA_ARGS__)
+#define WN_LOGI(...) __android_log_print(ANDROID_LOG_INFO,  kLogTag, __VA_ARGS__)
+
+// "Valve/Steam HTTP Client 1.0" — matches what the official client sends;
+// some CDN edges are picky about a missing/odd User-Agent.
+constexpr const char* kUserAgent = "Valve/Steam HTTP Client 1.0";
+
+size_t curl_write_cb(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    auto* body = static_cast<std::vector<uint8_t>*>(userdata);
+    const size_t n = size * nmemb;
+    body->insert(body->end(), ptr, ptr + n);
+    return n;
+}
+
+// Little-endian readers over a ZIP local file header.
+uint16_t rd_u16(std::span<const uint8_t> b, size_t off) {
+    return static_cast<uint16_t>(b[off]) |
+           (static_cast<uint16_t>(b[off + 1]) << 8);
+}
+uint32_t rd_u32(std::span<const uint8_t> b, size_t off) {
+    return static_cast<uint32_t>(b[off]) |
+           (static_cast<uint32_t>(b[off + 1]) << 8) |
+           (static_cast<uint32_t>(b[off + 2]) << 16) |
+           (static_cast<uint32_t>(b[off + 3]) << 24);
+}
+
+// Raw-deflate inflate (ZIP entries carry no zlib/gzip wrapper).
+std::optional<std::vector<uint8_t>> raw_inflate(std::span<const uint8_t> in,
+                                                size_t expected) {
+    std::vector<uint8_t> out;
+    out.resize(expected > 0 ? expected : std::max<size_t>(in.size() * 4, 1024));
+
+    z_stream zs{};
+    if (inflateInit2(&zs, -15) != Z_OK) {   // -15 = raw deflate
+        WN_LOGE("inflateInit2 failed");
+        return std::nullopt;
+    }
+    zs.next_in   = const_cast<Bytef*>(in.data());
+    zs.avail_in  = static_cast<uInt>(in.size());
+    zs.next_out  = out.data();
+    zs.avail_out = static_cast<uInt>(out.size());
+
+    while (true) {
+        int ret = inflate(&zs, Z_NO_FLUSH);
+        if (ret == Z_STREAM_END) break;
+        if (ret != Z_OK) {
+            WN_LOGE("inflate rc=%d", ret);
+            inflateEnd(&zs);
+            return std::nullopt;
+        }
+        if (zs.avail_out == 0) {
+            const size_t old = out.size();
+            out.resize(old * 2);
+            zs.next_out  = out.data() + old;
+            zs.avail_out = static_cast<uInt>(out.size() - old);
+        }
+    }
+    out.resize(zs.total_out);
+    inflateEnd(&zs);
+    return out;
+}
+
+}  // namespace
+
+CdnClient::CdnClient(std::string ca_bundle_path)
+    : ca_bundle_path_(std::move(ca_bundle_path)) {
+    curl_global_init(CURL_GLOBAL_DEFAULT);   // idempotent; cleanup is shared-process
+}
+
+std::optional<std::vector<uint8_t>>
+CdnClient::unzip_first_entry(std::span<const uint8_t> zip) noexcept {
+    // ZIP local file header: 30 fixed bytes, signature 0x04034b50.
+    if (zip.size() < 30) return std::nullopt;
+    if (rd_u32(zip, 0) != 0x04034b50u) return std::nullopt;
+
+    const uint16_t flags       = rd_u16(zip, 6);
+    const uint16_t method      = rd_u16(zip, 8);
+    const uint32_t comp_size   = rd_u32(zip, 18);
+    const uint32_t uncomp_size = rd_u32(zip, 22);
+    const uint16_t name_len    = rd_u16(zip, 26);
+    const uint16_t extra_len   = rd_u16(zip, 28);
+
+    // Bit 3 = sizes live in a trailing data descriptor, not the header.
+    // Steam's server-generated manifest zips never use this; reject rather
+    // than silently mis-read.
+    if (flags & 0x08) {
+        WN_LOGE("zip: streaming data-descriptor entries unsupported");
+        return std::nullopt;
+    }
+
+    const size_t data_off = 30u + name_len + extra_len;
+    if (data_off + comp_size > zip.size()) {
+        WN_LOGE("zip: entry data overruns archive");
+        return std::nullopt;
+    }
+    std::span<const uint8_t> data = zip.subspan(data_off, comp_size);
+
+    if (method == 0) {                       // stored
+        return std::vector<uint8_t>(data.begin(), data.end());
+    }
+    if (method == 8) {                       // deflate
+        return raw_inflate(data, uncomp_size);
+    }
+    WN_LOGE("zip: unsupported compression method %u", method);
+    return std::nullopt;
+}
+
+CdnManifestResult CdnClient::fetch_manifest(
+        const pb::CContentServerDirectory_ServerInfo& server,
+        uint32_t depot_id, uint64_t manifest_id, uint64_t request_code,
+        std::string_view cdn_auth_token, std::chrono::seconds timeout) {
+    CdnManifestResult result;
+
+    const std::string& host = !server.vhost.empty() ? server.vhost : server.host;
+    if (host.empty()) {
+        result.error = "cdn server has no host";
+        return result;
+    }
+
+    // <scheme>://<host>:<port>/depot/<id>/manifest/<gid>/5[/<code>][?<token>]
+    std::string url;
+    url.reserve(160);
+    url += server.use_https() ? "https://" : "http://";
+    url += host;
+    url += ':';
+    url += std::to_string(server.port());
+    url += "/depot/";
+    url += std::to_string(depot_id);
+    url += "/manifest/";
+    url += std::to_string(manifest_id);
+    url += "/5";
+    if (request_code != 0) {
+        url += '/';
+        url += std::to_string(request_code);
+    }
+    if (!cdn_auth_token.empty()) {
+        url += '?';
+        // token may already start with '?'; trim a leading one.
+        url.append(cdn_auth_token.front() == '?' ? cdn_auth_token.substr(1)
+                                                  : cdn_auth_token);
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        result.error = "curl_easy_init failed";
+        return result;
+    }
+
+    std::vector<uint8_t> body;
+    curl_easy_setopt(curl, CURLOPT_URL,            url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA,      &body);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,      kUserAgent);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT,        static_cast<long>(timeout.count()));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS,     1L);
+    if (server.use_https()) {
+        if (!ca_bundle_path_.empty()) {
+            curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle_path_.c_str());
+        }
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    }
+
+    const CURLcode rc = curl_easy_perform(curl);
+    long http_status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+    result.http_status = static_cast<int>(http_status);
+    curl_easy_cleanup(curl);
+
+    if (rc != CURLE_OK) {
+        result.error = std::string("curl_easy_perform: ") + curl_easy_strerror(rc);
+        WN_LOGE("manifest fetch failed: %s (host=%s)", result.error.c_str(), host.c_str());
+        return result;
+    }
+    if (http_status != 200) {
+        result.error = "non-200 HTTP status";
+        WN_LOGE("manifest fetch HTTP %ld depot=%u gid=%llu host=%s",
+                http_status, depot_id,
+                static_cast<unsigned long long>(manifest_id), host.c_str());
+        return result;
+    }
+
+    auto unzipped = unzip_first_entry(body);
+    if (!unzipped) {
+        result.error = "manifest unzip failed";
+        WN_LOGE("manifest unzip failed depot=%u gid=%llu (%zu bytes)",
+                depot_id, static_cast<unsigned long long>(manifest_id), body.size());
+        return result;
+    }
+    result.raw_manifest = std::move(*unzipped);
+    WN_LOGI("manifest fetched: depot=%u gid=%llu %zu bytes (unzipped)",
+            depot_id, static_cast<unsigned long long>(manifest_id),
+            result.raw_manifest.size());
+    return result;
+}
+
+CdnChunkResult CdnClient::fetch_chunk(
+        const pb::CContentServerDirectory_ServerInfo& server,
+        uint32_t depot_id, std::span<const uint8_t> chunk_sha,
+        std::string_view cdn_auth_token, std::chrono::seconds timeout) {
+    CdnChunkResult result;
+
+    const std::string& host = !server.vhost.empty() ? server.vhost : server.host;
+    if (host.empty()) { result.error = "cdn server has no host"; return result; }
+    if (chunk_sha.empty()) { result.error = "empty chunk sha"; return result; }
+
+    // Hex-encode the chunk SHA for the URL path.
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string sha_hex;
+    sha_hex.reserve(chunk_sha.size() * 2);
+    for (uint8_t b : chunk_sha) {
+        sha_hex.push_back(kHex[b >> 4]);
+        sha_hex.push_back(kHex[b & 0x0F]);
+    }
+
+    // <scheme>://<host>:<port>/depot/<id>/chunk/<sha-hex>[?<token>]
+    std::string url;
+    url.reserve(128);
+    url += server.use_https() ? "https://" : "http://";
+    url += host;
+    url += ':';
+    url += std::to_string(server.port());
+    url += "/depot/";
+    url += std::to_string(depot_id);
+    url += "/chunk/";
+    url += sha_hex;
+    if (!cdn_auth_token.empty()) {
+        url += '?';
+        url.append(cdn_auth_token.front() == '?' ? cdn_auth_token.substr(1)
+                                                  : cdn_auth_token);
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) { result.error = "curl_easy_init failed"; return result; }
+
+    std::vector<uint8_t> body;
+    curl_easy_setopt(curl, CURLOPT_URL,            url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA,      &body);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,      kUserAgent);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT,        static_cast<long>(timeout.count()));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS,     1L);
+    if (server.use_https()) {
+        if (!ca_bundle_path_.empty()) {
+            curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle_path_.c_str());
+        }
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    }
+
+    const CURLcode rc = curl_easy_perform(curl);
+    long http_status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+    result.http_status = static_cast<int>(http_status);
+    curl_easy_cleanup(curl);
+
+    if (rc != CURLE_OK) {
+        result.error = std::string("curl_easy_perform: ") + curl_easy_strerror(rc);
+        WN_LOGE("chunk fetch failed: %s (host=%s)", result.error.c_str(), host.c_str());
+        return result;
+    }
+    if (http_status != 200) {
+        result.error = "non-200 HTTP status";
+        WN_LOGE("chunk fetch HTTP %ld depot=%u chunk=%s", http_status, depot_id,
+                sha_hex.c_str());
+        return result;
+    }
+    result.data = std::move(body);
+    return result;
+}
+
+}  // namespace wn_steam

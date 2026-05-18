@@ -457,6 +457,8 @@ class ShortcutSettingsComposeDialog private constructor(
                 "useColdClient", if (container.isUseColdClient) "1" else "0") == "1"
             state.launchRealSteam.value = getShortcutSetting(
                 "launchRealSteam", if (container.isLaunchRealSteam) "1" else "0") == "1"
+            state.launchBionicSteam.value = getShortcutSetting(
+                "launchBionicSteam", if (container.isLaunchBionicSteam) "1" else "0") == "1"
             state.useSteamInput.value = shortcut.getExtra("useSteamInput", "0") == "1"
             state.forceDlc.value = getShortcutSetting(
                 "forceDlc", if (container.isForceDlc) "1" else "0") == "1"
@@ -1474,6 +1476,11 @@ class ShortcutSettingsComposeDialog private constructor(
                     if (container.isLaunchRealSteam) "1" else "0"
                 )
                 hasContainerOverride = hasContainerOverride or saveOverride(
+                    "launchBionicSteam",
+                    if (state.launchBionicSteam.value) "1" else "0",
+                    if (container.isLaunchBionicSteam) "1" else "0"
+                )
+                hasContainerOverride = hasContainerOverride or saveOverride(
                     "useSteamInput",
                     if (state.useSteamInput.value) "1" else "0",
                     container.getExtra("useSteamInput", "0")
@@ -2455,6 +2462,7 @@ class ShortcutSettingsComposeDialog private constructor(
         if (state.isSteamGame.value) {
             state.useColdClient.value = container.isUseColdClient
             state.launchRealSteam.value = container.isLaunchRealSteam
+            state.launchBionicSteam.value = container.isLaunchBionicSteam
             state.forceDlc.value = container.isForceDlc
             state.steamOfflineMode.value = container.isSteamOfflineMode
             state.unpackFiles.value = container.isUnpackFiles
