@@ -51,7 +51,7 @@ object SteamUtils {
     private fun steamClientFiles(): Array<String> =
         coreSteamClientFiles() +
             arrayOf(
-                "steamclient_loader_x32.exe",
+                "steamclient_loader_x86.exe",
                 "steamclient_loader_x64.exe",
             )
 
@@ -191,7 +191,10 @@ object SteamUtils {
                 }
             }
 
-            arrayOf("steamclient_loader_x32.exe.orig", "steamclient_loader_x64.exe.orig").forEach { loaderBackup ->
+            arrayOf(
+                "steamclient_loader_x32.exe.orig", "steamclient_loader_x86.exe.orig",
+                "steamclient_loader_x64.exe.orig",
+            ).forEach { loaderBackup ->
                 val staleBackup = File(backupDir, loaderBackup)
                 if (staleBackup.exists()) {
                     staleBackup.delete()
@@ -204,7 +207,10 @@ object SteamUtils {
             extraDllDir.deleteRecursively()
         }
 
-        arrayOf("steamclient_loader_x32.exe", "steamclient_loader_x64.exe").forEach { loaderExe ->
+        arrayOf(
+            "steamclient_loader_x32.exe", "steamclient_loader_x86.exe",
+            "steamclient_loader_x64.exe",
+        ).forEach { loaderExe ->
             val staleLoader = File(origDir, loaderExe)
             if (staleLoader.exists()) {
                 staleLoader.delete()
@@ -983,8 +989,9 @@ object SteamUtils {
      *  - steam_settings/steam_appid.txt
      *  - steam_settings/depots.txt
      *  - steam_settings/configs.user.ini  ([user::general] + conditional [user::saves])
-     *  - steam_settings/configs.app.ini   ([app::dlcs] with real IDs, [app::cloud_save::general/win])
+     *  - steam_settings/configs.app.ini   ([app::general] branch, [app::dlcs], [app::controller], [app::cloud_save])
      *  - steam_settings/configs.main.ini  ([main::connectivity] with offline support)
+     *  - steam_settings/branches.json     (branch list for GetCurrentBetaName/GetAppBuildId)
      *  - steam_settings/controller/       (Steam Input VDF config if useSteamInput=true)
      *  - steam_settings/supported_languages.txt
      *
@@ -1076,6 +1083,12 @@ object SteamUtils {
 
             val appIniContent =
                 buildString {
+                    // [app::general] — make Steam_Apps::GetCurrentBetaName()
+                    // deterministic; WinNative always installs the public branch.
+                    appendLine("[app::general]")
+                    appendLine("is_beta_branch=0")
+                    appendLine("branch_name=public")
+                    appendLine()
                     appendLine("[app::dlcs]")
                     appendLine("unlock_all=${if (forceDlc) 1 else 0}")
                     dlcIds?.sorted()?.forEach {
@@ -1095,6 +1108,14 @@ object SteamUtils {
                         ) {
                             appendLine("${hiddenDlcApp.id}=dlc${hiddenDlcApp.id}")
                         }
+                    }
+                    // [app::controller] — gbe_fork auto-enables SteamInput when
+                    // steam_settings/controller/ contains action sets; state it
+                    // explicitly so the generated config is self-describing.
+                    if (useSteamInput) {
+                        appendLine()
+                        appendLine("[app::controller]")
+                        appendLine("steam_input=1")
                     }
                     if (appInfo != null) {
                         appendLine()
@@ -1116,6 +1137,38 @@ object SteamUtils {
                     appendLine("allow_unknown_stats=1")
                 }
             File(settingsDir, "configs.main.ini").writeText(mainIniContent)
+
+            // --- branches.json ---
+            // gbe_fork reads this for Steam_Apps::GetCurrentBetaName() and
+            // GetAppBuildId(). Emit the real branch list from PICS appinfo
+            // when known (with build ids), else a minimal public branch.
+            runCatching {
+                val branchesArr = org.json.JSONArray()
+                val branchList = appInfo?.branches?.values?.toList().orEmpty()
+                fun putBranch(name: String, protected: Boolean, buildId: Long, timeUpdated: Long) {
+                    branchesArr.put(
+                        org.json.JSONObject()
+                            .put("name", name)
+                            .put("description", "")
+                            .put("protected", protected)
+                            .put("build_id", buildId)
+                            .put("time_updated", timeUpdated),
+                    )
+                }
+                if (branchList.isEmpty()) {
+                    putBranch("public", false, 0L, 0L)
+                } else {
+                    branchList.forEach { b ->
+                        putBranch(b.name, b.pwdRequired, b.buildId, (b.timeUpdated?.time ?: 0L) / 1000L)
+                    }
+                    // gbe_fork falls back to "public" when branch_name isn't in
+                    // the file, but make it explicit so GetAppBuildId() is sane.
+                    if (branchList.none { it.name.equals("public", ignoreCase = true) }) {
+                        putBranch("public", false, 0L, 0L)
+                    }
+                }
+                File(settingsDir, "branches.json").writeText(branchesArr.toString(2), Charsets.UTF_8)
+            }.onFailure { e -> Timber.w(e, "Failed writing branches.json for appId=$appId") }
 
             // --- controller config ---
             val controllerDir = File(settingsDir, "controller")

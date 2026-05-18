@@ -232,6 +232,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             ".shared\\\\steam-client-store",
             ".shared/steam-client-store",
             "steamclient_loader_x64.exe",
+            "steamclient_loader_x86.exe",
             "steamclient_loader_x32.exe"
     };
 
@@ -6034,7 +6035,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     "SteamUI.dll",
                     "steam.signatures",
                     "steamclient_loader_x64.exe",
-                    "extra_dlls/steamclient_extra_x64.dll"
+                    "extra_dlls/StubDRM64.dll"
                 }
                 : new String[] {
                     "steam.exe",
@@ -6186,11 +6187,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         String perGameExecArgs = shortcut != null ? shortcut.getSettingExtra("execArgs", container.getExecArgs()) : container.getExecArgs();
         String exeCommandLine = perGameExecArgs != null ? perGameExecArgs : "";
 
-        // IgnoreLoaderArchDifference=1 is always needed so the x64 loader can spawn
-        // x86 games. DllsToInjectFolder is only included when the user opts into the
-        // Runtime DRM Patcher — that's when extra_dlls/steamclient_extra_{x32,x64}.dll
-        // (Goldberg's runtime DRM patcher) is injected. Non-DRM games don't benefit
-        // from injection and pay per-frame hook overhead, hence the opt-in toggle.
+        // IgnoreLoaderArchDifference=1 lets the x64 loader SPAWN x86 games.
+        // DllsToInjectFolder is only included when the user opts into the
+        // Runtime DRM Patcher — that injects extra_dlls/StubDRM64.dll, the
+        // legacy in-memory SteamStub patcher. It is x64-only, so it patches
+        // 64-bit games only. (gbe_fork's newer "steamclient_extra" patcher is
+        // not used: it regressed SteamStub games — "Application load error
+        // 3:0000065432".) Non-DRM games don't benefit from injection and pay
+        // per-frame hook overhead, hence the opt-in toggle.
         StringBuilder injectionBuilder = new StringBuilder("[Injection]\nIgnoreLoaderArchDifference=1\n");
         if (runtimePatcher) {
             injectionBuilder.append("DllsToInjectFolder=extra_dlls\n");
@@ -6250,11 +6254,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         String perGameExecArgs = shortcut != null ? shortcut.getSettingExtra("execArgs", container.getExecArgs()) : container.getExecArgs();
         String exeCommandLine = perGameExecArgs != null ? perGameExecArgs : "";
 
-        // IgnoreLoaderArchDifference=1 is always needed so the x64 loader can spawn
-        // x86 games. DllsToInjectFolder is only included when the user opts into the
-        // Runtime DRM Patcher — that's when extra_dlls/steamclient_extra_{x32,x64}.dll
-        // (Goldberg's runtime DRM patcher) is injected. Non-DRM games don't benefit
-        // from injection and pay per-frame hook overhead, hence the opt-in toggle.
+        // IgnoreLoaderArchDifference=1 lets the x64 loader SPAWN x86 games.
+        // DllsToInjectFolder is only included when the user opts into the
+        // Runtime DRM Patcher — that injects extra_dlls/StubDRM64.dll, the
+        // legacy in-memory SteamStub patcher. It is x64-only, so it patches
+        // 64-bit games only. (gbe_fork's newer "steamclient_extra" patcher is
+        // not used: it regressed SteamStub games — "Application load error
+        // 3:0000065432".) Non-DRM games don't benefit from injection and pay
+        // per-frame hook overhead, hence the opt-in toggle.
         StringBuilder injectionBuilder = new StringBuilder("[Injection]\nIgnoreLoaderArchDifference=1\n");
         if (runtimePatcher) {
             injectionBuilder.append("DllsToInjectFolder=extra_dlls\n");

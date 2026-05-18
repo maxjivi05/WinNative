@@ -71,6 +71,13 @@ def appVersionName = providers.gradleProperty("VERSION_NAME")
         .orElse(providers.environmentVariable("VERSION_NAME"))
         .getOrElse("Nightly")
 
+// gbe_fork / ColdClient version bundled in assets/experimental-drm.tzst,
+// pinned by tools/gbe_fork.version. Baked into BuildConfig so the runtime
+// can detect an APK update that bumped the asset and refresh the extracted
+// ColdClient (see SteamClientManager.extractColdClientSupport).
+def coldClientVersionFile = rootProject.file("tools/gbe_fork.version")
+def coldClientVersion = coldClientVersionFile.exists() ? coldClientVersionFile.text.trim() : "unknown"
+
 android {
     namespace 'com.winlator.cmod'
     compileSdk 35
@@ -103,6 +110,7 @@ android {
         resConfigs "en", "da", "de", "es", "fr", "it", "ko", "pl", "pt-rBR", "ro", "uk", "zh-rCN", "zh-rTW"
 
         buildConfigField("boolean", "GOLD", "false")
+        buildConfigField("String", "COLD_CLIENT_VERSION", "\"${coldClientVersion}\"")
         buildConfigField("String", "POSTHOG_API_KEY", "\"\"")
         buildConfigField("String", "POSTHOG_HOST", "\"\"")
         buildConfigField("String", "SUPABASE_URL", "\"\"")
