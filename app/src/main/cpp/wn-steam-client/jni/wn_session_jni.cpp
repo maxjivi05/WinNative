@@ -711,7 +711,7 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeDownloa
         JNIEnv* env, jclass /*cls*/, jlong h,
         jint app_id, jintArray depot_ids, jlongArray manifest_ids,
         jstring jbranch, jstring jinstall_dir, jboolean fresh,
-        jstring jca_bundle, jobject listener) {
+        jstring jca_bundle, jint max_workers, jobject listener) {
     auto* s = from_handle(h);
     init_jni_session_globals(env);
 
@@ -772,10 +772,14 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeDownloa
     env->GetJavaVM(&vm);
     const uint32_t appid    = static_cast<uint32_t>(app_id);
     const bool     is_fresh = (fresh == JNI_TRUE);
+    // Worker count from the "Download Speed" setting. Guard against a
+    // nonsense value; write_depot re-clamps to [1, 64] anyway.
+    const unsigned workers =
+        max_workers > 0 ? static_cast<unsigned>(max_workers) : 8u;
 
     std::thread([vm, lis_global, client, cancel_flag, depots = std::move(depots),
                  branch = std::move(branch), install_dir = std::move(install_dir),
-                 ca_bundle = std::move(ca_bundle), appid, is_fresh]() mutable {
+                 ca_bundle = std::move(ca_bundle), appid, is_fresh, workers]() mutable {
         AttachScope scope(vm);
         if (!scope.env) {
             // Can't attach — nothing we can safely do; leak the global ref
@@ -798,7 +802,7 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeDownloa
                     scope.env->ExceptionClear();
                 }
             },
-            cancel_flag.get());
+            cancel_flag.get(), workers);
 
         jstring jerr = scope.env->NewStringUTF(result.error.c_str());
         scope.env->CallVoidMethod(

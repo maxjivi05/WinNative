@@ -47,6 +47,31 @@ struct CdnChunkResult {
     }
 };
 
+// A reusable CDN HTTP connection — wraps a persistent libcurl easy handle
+// so a sequence of fetch_chunk() calls reuse one TCP + TLS connection
+// (HTTP keep-alive) instead of paying a fresh DNS + handshake per chunk.
+// That handshake cost otherwise dominates throughput: depot chunks are at
+// most ~1 MiB, so a multi-GB game is tens of thousands of tiny GETs.
+//
+// NOT thread-safe — a single libcurl easy handle may only be used by one
+// thread at a time. Each parallel download worker must own its own.
+class CdnConnection {
+public:
+    CdnConnection();
+    ~CdnConnection();
+
+    CdnConnection(const CdnConnection&)            = delete;
+    CdnConnection& operator=(const CdnConnection&) = delete;
+    CdnConnection(CdnConnection&& other) noexcept;
+    CdnConnection& operator=(CdnConnection&& other) noexcept;
+
+    [[nodiscard]] bool valid() const noexcept { return handle_ != nullptr; }
+
+private:
+    friend class CdnClient;
+    void* handle_;   // CURL* — void* keeps <curl/curl.h> out of this header
+};
+
 class CdnClient {
 public:
     // ca_bundle_path: single-file PEM bundle for HTTPS verification (same
@@ -71,6 +96,18 @@ public:
     // the URL: /depot/<depotId>/chunk/<sha-hex>. The returned bytes are
     // still AES-encrypted + compressed — feed them to process_depot_chunk().
     [[nodiscard]] CdnChunkResult fetch_chunk(
+        const pb::CContentServerDirectory_ServerInfo& server,
+        uint32_t depot_id, std::span<const uint8_t> chunk_sha,
+        std::string_view cdn_auth_token = {},
+        std::chrono::seconds timeout = std::chrono::seconds{30});
+
+    // Same as fetch_chunk() above, but performed over `conn`'s persistent
+    // keep-alive connection instead of a throwaway handle. Use this from
+    // the parallel download workers — give each worker its own
+    // CdnConnection. A single CdnConnection must not be shared across
+    // threads concurrently.
+    [[nodiscard]] CdnChunkResult fetch_chunk(
+        CdnConnection& conn,
         const pb::CContentServerDirectory_ServerInfo& server,
         uint32_t depot_id, std::span<const uint8_t> chunk_sha,
         std::string_view cdn_auth_token = {},

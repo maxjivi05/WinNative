@@ -116,11 +116,25 @@ void JobManager::fail_all(const std::string& reason) {
 void JobManager::timeout_loop() {
     while (!stop_.load()) {
         std::vector<std::pair<uint64_t, JobContinuation>> expired;
-        Clock::time_point next_wake = Clock::now() + std::chrono::seconds{1};
 
         {
             std::unique_lock<std::mutex> lk(mu_);
-            cv_.wait_until(lk, next_wake, [this]() { return stop_.load(); });
+            // Sleep until the earliest job deadline, or indefinitely when no
+            // job is pending. A fixed 1s tick here woke the CPU ~86,400x/day
+            // for nothing — an idle session must not wake at all. track()
+            // notifies cv_ whenever a job is added, so a fresh job is picked
+            // up immediately even out of the indefinite wait.
+            if (pending_.empty()) {
+                cv_.wait(lk, [this]() {
+                    return stop_.load() || !pending_.empty();
+                });
+            } else {
+                Clock::time_point earliest = Clock::time_point::max();
+                for (const auto& kv : pending_) {
+                    if (kv.second.deadline < earliest) earliest = kv.second.deadline;
+                }
+                cv_.wait_until(lk, earliest, [this]() { return stop_.load(); });
+            }
             if (stop_.load()) return;
 
             const auto now = Clock::now();

@@ -208,26 +208,26 @@ CdnManifestResult CdnClient::fetch_manifest(
     return result;
 }
 
-CdnChunkResult CdnClient::fetch_chunk(
-        const pb::CContentServerDirectory_ServerInfo& server,
-        uint32_t depot_id, std::span<const uint8_t> chunk_sha,
-        std::string_view cdn_auth_token, std::chrono::seconds timeout) {
-    CdnChunkResult result;
+// ── chunk-fetch helpers (shared by the throwaway + keep-alive paths) ──────
+namespace {
 
-    const std::string& host = !server.vhost.empty() ? server.vhost : server.host;
-    if (host.empty()) { result.error = "cdn server has no host"; return result; }
-    if (chunk_sha.empty()) { result.error = "empty chunk sha"; return result; }
-
-    // Hex-encode the chunk SHA for the URL path.
+// Lowercase hex-encode a byte span (the chunk SHA1 for the CDN URL path).
+std::string hex_encode(std::span<const uint8_t> bytes) {
     static constexpr char kHex[] = "0123456789abcdef";
-    std::string sha_hex;
-    sha_hex.reserve(chunk_sha.size() * 2);
-    for (uint8_t b : chunk_sha) {
-        sha_hex.push_back(kHex[b >> 4]);
-        sha_hex.push_back(kHex[b & 0x0F]);
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (uint8_t b : bytes) {
+        out.push_back(kHex[b >> 4]);
+        out.push_back(kHex[b & 0x0F]);
     }
+    return out;
+}
 
-    // <scheme>://<host>:<port>/depot/<id>/chunk/<sha-hex>[?<token>]
+// <scheme>://<host>:<port>/depot/<id>/chunk/<sha-hex>[?<token>]
+std::string build_chunk_url(const pb::CContentServerDirectory_ServerInfo& server,
+                            const std::string& host, uint32_t depot_id,
+                            const std::string& sha_hex,
+                            std::string_view cdn_auth_token) {
     std::string url;
     url.reserve(128);
     url += server.use_https() ? "https://" : "http://";
@@ -243,9 +243,26 @@ CdnChunkResult CdnClient::fetch_chunk(
         url.append(cdn_auth_token.front() == '?' ? cdn_auth_token.substr(1)
                                                   : cdn_auth_token);
     }
+    return url;
+}
 
-    CURL* curl = curl_easy_init();
-    if (!curl) { result.error = "curl_easy_init failed"; return result; }
+// Configure `curl` for a chunk GET and perform it. The handle is NOT reset
+// afterwards, so a persistent handle keeps its keep-alive connection cache
+// for the next call — that is the whole point of CdnConnection.
+CdnChunkResult do_fetch_chunk(CURL* curl, const std::string& ca_bundle,
+        const pb::CContentServerDirectory_ServerInfo& server,
+        uint32_t depot_id, std::span<const uint8_t> chunk_sha,
+        std::string_view cdn_auth_token, std::chrono::seconds timeout) {
+    CdnChunkResult result;
+    if (!curl) { result.error = "curl handle null"; return result; }
+
+    const std::string& host = !server.vhost.empty() ? server.vhost : server.host;
+    if (host.empty())      { result.error = "cdn server has no host"; return result; }
+    if (chunk_sha.empty()) { result.error = "empty chunk sha";        return result; }
+
+    const std::string sha_hex = hex_encode(chunk_sha);
+    const std::string url =
+        build_chunk_url(server, host, depot_id, sha_hex, cdn_auth_token);
 
     std::vector<uint8_t> body;
     curl_easy_setopt(curl, CURLOPT_URL,            url.c_str());
@@ -257,8 +274,8 @@ CdnChunkResult CdnClient::fetch_chunk(
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS,     1L);
     if (server.use_https()) {
-        if (!ca_bundle_path_.empty()) {
-            curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle_path_.c_str());
+        if (!ca_bundle.empty()) {
+            curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle.c_str());
         }
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
@@ -268,7 +285,6 @@ CdnChunkResult CdnClient::fetch_chunk(
     long http_status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
     result.http_status = static_cast<int>(http_status);
-    curl_easy_cleanup(curl);
 
     if (rc != CURLE_OK) {
         result.error = std::string("curl_easy_perform: ") + curl_easy_strerror(rc);
@@ -283,6 +299,62 @@ CdnChunkResult CdnClient::fetch_chunk(
     }
     result.data = std::move(body);
     return result;
+}
+
+}  // namespace
+
+// ── CdnConnection — persistent keep-alive handle ──────────────────────────
+CdnConnection::CdnConnection() : handle_(nullptr) {
+    curl_global_init(CURL_GLOBAL_DEFAULT);   // idempotent
+    handle_ = curl_easy_init();
+}
+
+CdnConnection::~CdnConnection() {
+    if (handle_) curl_easy_cleanup(static_cast<CURL*>(handle_));
+}
+
+CdnConnection::CdnConnection(CdnConnection&& other) noexcept
+    : handle_(other.handle_) {
+    other.handle_ = nullptr;
+}
+
+CdnConnection& CdnConnection::operator=(CdnConnection&& other) noexcept {
+    if (this != &other) {
+        if (handle_) curl_easy_cleanup(static_cast<CURL*>(handle_));
+        handle_       = other.handle_;
+        other.handle_ = nullptr;
+    }
+    return *this;
+}
+
+CdnChunkResult CdnClient::fetch_chunk(
+        const pb::CContentServerDirectory_ServerInfo& server,
+        uint32_t depot_id, std::span<const uint8_t> chunk_sha,
+        std::string_view cdn_auth_token, std::chrono::seconds timeout) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        CdnChunkResult r;
+        r.error = "curl_easy_init failed";
+        return r;
+    }
+    CdnChunkResult r = do_fetch_chunk(curl, ca_bundle_path_, server, depot_id,
+                                      chunk_sha, cdn_auth_token, timeout);
+    curl_easy_cleanup(curl);
+    return r;
+}
+
+CdnChunkResult CdnClient::fetch_chunk(
+        CdnConnection& conn,
+        const pb::CContentServerDirectory_ServerInfo& server,
+        uint32_t depot_id, std::span<const uint8_t> chunk_sha,
+        std::string_view cdn_auth_token, std::chrono::seconds timeout) {
+    if (!conn.valid()) {
+        CdnChunkResult r;
+        r.error = "cdn connection invalid";
+        return r;
+    }
+    return do_fetch_chunk(static_cast<CURL*>(conn.handle_), ca_bundle_path_,
+                          server, depot_id, chunk_sha, cdn_auth_token, timeout);
 }
 
 }  // namespace wn_steam

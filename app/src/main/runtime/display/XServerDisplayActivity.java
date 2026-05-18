@@ -62,7 +62,6 @@ import com.winlator.cmod.feature.stores.steam.enums.Marker;
 import com.winlator.cmod.feature.stores.steam.utils.MarkerUtils;
 import com.winlator.cmod.feature.stores.steam.utils.PrefManager;
 import com.winlator.cmod.feature.stores.steam.utils.SteamUtils;
-import com.winlator.cmod.feature.stores.steam.wnsteam.WnSteamLauncherHook;
 
 import androidx.preference.PreferenceManager;
 import com.winlator.cmod.R;
@@ -2948,9 +2947,21 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 : container != null && container.isLaunchRealSteam();
     }
 
+    private boolean isBionicSteamEnabledForShortcut() {
+        if (!isSteamShortcut()) return false;
+        return shortcut != null
+                ? parseBoolean(getShortcutSetting("launchBionicSteam", container.isLaunchBionicSteam() ? "1" : "0"))
+                : container != null && container.isLaunchBionicSteam();
+    }
+
     private boolean isColdClientEnabledForShortcut() {
         if (!isSteamShortcut()) return false;
         if (isRealSteamLaunchEnabledForShortcut()) return false; // mutually exclusive
+        // "Bionic Steam" mode is routed through the ColdClient/Goldberg path:
+        // gbe_fork's steamclient.dll + StubDRM give DRM-wrapped games their
+        // DRM handshake and achievements — the old raw-exe + libsteamclient.so
+        // launch could not do either.
+        if (isBionicSteamEnabledForShortcut()) return true;
         return shortcut != null
                 ? parseBoolean(getShortcutSetting("useColdClient", container.isUseColdClient() ? "1" : "0"))
                 : container != null && container.isUseColdClient();
@@ -4172,9 +4183,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
                     if (gameDir.exists()) {
                         syncContainerSteamExecutableFromShortcut(appId, gameInstallPath);
-                        boolean useColdClient = shortcut != null
-                                ? parseBoolean(getShortcutSetting("useColdClient", container.isUseColdClient() ? "1" : "0"))
-                                : container.isUseColdClient();
+                        // Resolved via isColdClientEnabledForShortcut() so "Bionic Steam"
+                        // mode also takes the ColdClient setup branch (sidecar store +
+                        // ColdClientLoader.ini + gbe_fork DLLs), not the plain Goldberg one.
+                        boolean useColdClient = isColdClientEnabledForShortcut();
                         
                         if (launchRealSteamSetup) {
                             // ── Real Steam Mode ──────────────────────────────────────────────────
@@ -4586,35 +4598,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             environment.addComponent(new SteamClientComponent());
         }
 
-        // Bionic Steam hook: for Steam-launched shortcuts, fire off the JNI
-        // bootstrap (dlopen libsteamclient.so + refresh-token logon) in the
-        // background. libsteamclient.so authenticates a real Valve session
-        // we use to fetch real encrypted app tickets / DLC / depot keys for
-        // the Goldberg steam_settings the game actually reads.
-        //
-        // IMPORTANT: we deliberately do NOT merge WnSteamLauncherHook's env
-        // pack (WINESTEAMCLIENTPATH / Steam3Master / SteamGameId / …) into
-        // the game's wine environment. The game loads the injected steampipe
-        // stub steam_api64.dll, which talks to our SteamPipeServer on
-        // localhost:34865 — it never loads Proton's lsteamclient.dll, so it
-        // never reads those vars. Injecting them only confused the steampipe
-        // stub and caused the game to exit early (status 143). The bootstrap
-        // still propagates the subset it needs into its OWN process env.
-        if (isSteamShortcut() && shortcut != null) {
-            int wnAppId = -1;
-            try {
-                String rawId = shortcut.getExtra("app_id");
-                if (rawId != null && !rawId.isEmpty()) {
-                    wnAppId = Integer.parseInt(rawId);
-                }
-            } catch (NumberFormatException ignore) { /* leave wnAppId=-1 */ }
-
-            // prepare() fires the libsteamclient.so bootstrap as a side
-            // effect; the returned env map is intentionally discarded (see
-            // comment above). Kept as a call so the auth session is live.
-            WnSteamLauncherHook.INSTANCE.prepare(this, container, shortcut, wnAppId);
-        }
-
         // Defence-in-depth: when Launch-Steam-Client mode is on, ensure no
         // bionic env vars leak in from a prior launch (stale pref, code
         // refactor regression, or future bug). Real Steam runs steam.exe
@@ -4646,11 +4629,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         guestProgramLauncherComponent.setEnvVars(envVars);
         guestProgramLauncherComponent.setTerminationCallback((status) -> {
             Log.d("XServerDisplayActivity", "Guest process terminated with status: " + status);
-
-            // Bionic Steam teardown — fires AFTER wine has exited so the
-            // native side can release the pipe + global user without
-            // racing the in-Wine lsteamclient.dll. Idempotent.
-            WnSteamLauncherHook.INSTANCE.tearDown();
 
             // Keep A:\Steam persistence for Android 16 testing
             // User expressly requested: "don't remove the A:\Steam\ Folder unless the next game has the toggle off to not move it."
@@ -5750,7 +5728,16 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 // Both Steam-launch modes are mutually exclusive on the model
                 // side, but a stale shortcut override could have both on —
                 // give bionic priority if the user explicitly enabled it.
-                if (launchBionicSteam) launchRealSteam = false;
+                //
+                // "Bionic Steam" mode is routed through the ColdClient launch
+                // path: it runs steamclient_loader_x64.exe with gbe_fork's
+                // steamclient.dll + StubDRM so DRM-wrapped games clear their
+                // checks and achievements work. The old raw-exe +
+                // libsteamclient.so direct launch is gone.
+                if (launchBionicSteam) {
+                    launchRealSteam = false;
+                    useColdClient = true;
+                }
 
                 // Pre-resolve: ensure game install path and steamapps/common symlink exist
                 // before ANY launch mode so the Steam directory structure is always valid.
@@ -5764,50 +5751,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 File containerSteamDir = new File(container.getRootDir(),
                         ".wine/drive_c/Program Files (x86)/Steam");
 
-                if (launchBionicSteam) {
-                    // Bionic Steam mode: wine runs the game's exe DIRECTLY.
-                    // No steam.exe in the picture — the game's bundled
-                    // steam_api64.dll calls into Proton's lsteamclient.dll,
-                    // which dlopens our embedded libsteamclient.so via the
-                    // WINESTEAMCLIENTPATH env vars. Our wn-steam-bootstrap
-                    // has already authenticated that libsteamclient.so with
-                    // the user's refresh token, so SteamAPI_Init returns
-                    // success and the game proceeds to render.
-                    //
-                    // Putting steam.exe in the middle (the early 8b.8/8b.9
-                    // attempt) broke: stock Steam.exe tries to do its own
-                    // bootstrap + UI init at launch, runs into "Steam
-                    // installation problem" because the prefix isn't a
-                    // real Steam install, and crashes via
-                    // steamerrorreporter.exe before the game ever spawns.
-                    String relativeExeBionic = resolveRelativeGameExe(appId, gameInstPath);
-                    String gameDirNameBionic = (gameInstPath != null) ? new File(gameInstPath).getName() : "";
-                    File bionicWorkDir = null;
-                    if (!gameDirNameBionic.isEmpty()) {
-                        File containerGameDirBionic = new File(containerSteamDir, "steamapps/common/" + gameDirNameBionic);
-                        try { bionicWorkDir = containerGameDirBionic.getCanonicalFile(); }
-                        catch (IOException e) { bionicWorkDir = containerGameDirBionic; }
-                        if (!relativeExeBionic.isEmpty()) {
-                            String exeRelNative = relativeExeBionic.replace("\\", "/");
-                            int lastSlash = exeRelNative.lastIndexOf("/");
-                            if (lastSlash > 0) {
-                                File exeParent = new File(bionicWorkDir, exeRelNative.substring(0, lastSlash));
-                                if (exeParent.exists()) bionicWorkDir = exeParent;
-                            }
-                        }
-                    }
-                    if (bionicWorkDir != null && bionicWorkDir.exists()) {
-                        launcherComponent.setWorkingDir(bionicWorkDir);
-                        Log.d("XServerDisplayActivity", "Bionic Steam working dir: " + bionicWorkDir.getPath());
-                    } else if (containerSteamDir.exists()) {
-                        launcherComponent.setWorkingDir(containerSteamDir);
-                    }
-                    String winRelExe = relativeExeBionic.replace("/", "\\").replaceFirst("^\\\\+", "");
-                    args = "\"C:\\Program Files (x86)\\Steam\\steamapps\\common\\"
-                            + gameDirNameBionic + "\\" + winRelExe + "\"";
-                    Log.d("XServerDisplayActivity",
-                            "Bionic Steam direct launch: \"" + winRelExe + "\" for appId=" + appId);
-                } else if (launchRealSteam) {
+                if (launchRealSteam) {
                     // Real Steam mode: launch steam.exe with -applaunch <appId> and let
                     // Steam handle the game launch normally (update check, cloud sync, exe
                     // spawn). Cloud pending-ops are cleared pre-launch via the

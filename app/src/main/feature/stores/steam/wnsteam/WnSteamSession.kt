@@ -149,6 +149,9 @@ class WnSteamSession : AutoCloseable {
      *                    discards a stale depot.config so every depot is
      *                    re-validated; false enables per-depot resume.
      * @param caBundlePath PEM trust bundle for HTTPS CDN verification
+     * @param maxWorkers   parallel chunk-download worker count (the user's
+     *                     "Download Speed" setting — 8 / 16 / 24 / 32); the
+     *                     native engine clamps it to [1, 64]
      */
     fun downloadApp(
         appId: Int,
@@ -158,6 +161,7 @@ class WnSteamSession : AutoCloseable {
         installDir: String,
         fresh: Boolean,
         caBundlePath: String,
+        maxWorkers: Int,
         listener: WnDownloadListener,
     ) {
         require(depotIds.size == manifestIds.size) {
@@ -169,7 +173,7 @@ class WnSteamSession : AutoCloseable {
             return
         }
         nativeDownloadApp(h, appId, depotIds, manifestIds, branch, installDir,
-                          fresh, caBundlePath, listener)
+                          fresh, caBundlePath, maxWorkers, listener)
     }
 
     /**
@@ -796,6 +800,7 @@ class WnSteamSession : AutoCloseable {
             installDir: String,
             fresh: Boolean,
             caBundlePath: String,
+            maxWorkers: Int,
             listener: WnDownloadListener,
         )
         @JvmStatic private external fun nativeCancelDownload(handle: Long)

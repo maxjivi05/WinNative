@@ -63,7 +63,8 @@ DepotDownloadResult DepotDownloader::download(uint32_t app_id,
                                              std::string install_dir,
                                              bool fresh,
                                              DepotProgressCallback progress,
-                                             const std::atomic<bool>* cancel) {
+                                             const std::atomic<bool>* cancel,
+                                             unsigned max_workers) {
     if (install_dir.empty()) return fail("download: empty install dir");
     if (depots.empty())      return fail("download: no depots");
 
@@ -198,7 +199,7 @@ DepotDownloadResult DepotDownloader::download(uint32_t app_id,
                     progress(pr);
                 }
             },
-            cancel);
+            cancel, max_workers);
         if (!write_res.ok()) {
             return fail("download: depot " + std::to_string(d.depot_id)
                         + " write failed: " + write_res.error);

@@ -79,6 +79,15 @@ object DownloadCoordinator {
     private val recordChanges = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
     val changes = recordChanges.asSharedFlow()
 
+    /**
+     * True when at least one download is actively transferring. PAUSED and
+     * QUEUED records do not count — nothing is on the wire for them — so a
+     * paused download does not keep the Steam session awake in the
+     * background. Synchronous snapshot read of the current record state.
+     */
+    fun hasActiveDownload(): Boolean =
+        recordsState.value.any { it.status == DownloadRecord.STATUS_DOWNLOADING }
+
     fun init(database: PluviaDatabase) {
         if (dao != null) return
         dao = database.downloadRecordDao()

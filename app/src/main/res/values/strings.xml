@@ -304,7 +304,7 @@
     <string name="shortcuts_properties_exclusive_input">Exclusive Input</string>
     <string name="shortcuts_properties_custom_game_settings">Custom Game Settings</string>
     <string name="shortcuts_properties_use_cold_client">Use ColdClient Launcher</string>
-    <string name="shortcuts_properties_use_cold_client_description">Preferred Steam emulation method. Patches DRM at runtime without modifying files.</string>
+    <string name="shortcuts_properties_use_cold_client_description">The Steam emulation mode for Steam games — handles DRM, achievements and DLC. Recommended for all Steam games.</string>
     <string name="shortcuts_properties_unpack_files">Unpack Files</string>
     <string name="shortcuts_properties_unpack_files_description">Strips SteamStub DRM from the exe. One-time operation. Disable only if a game breaks.</string>
     <string name="shortcuts_properties_runtime_patcher">Runtime DRM Patcher</string>
@@ -313,8 +313,6 @@
     <string name="shortcuts_properties_force_dlc_description">Enable if DLCs aren\'t detected or DLC saves don\'t work.</string>
     <string name="shortcuts_properties_launch_steam_client_beta">Launch Steam Client (Beta)</string>
     <string name="shortcuts_properties_launch_steam_client_description">Runs the real Steam client in Wine. Requires an account. May reduce performance; not all games work.</string>
-    <string name="shortcuts_properties_launch_bionic_steam">Bionic Steam (Experimental)</string>
-    <string name="shortcuts_properties_launch_bionic_steam_description">Launches the game via wine + our embedded libsteamclient.so. Faster startup than the real Steam client and unlocks online play / DLC for many Proton titles. Mutually exclusive with Launch Steam Client.</string>
     <string name="shortcuts_properties_steam_type">Steam Client Performance</string>
     <string name="steam_section_title">Steam</string>
     <string name="steam_section_emulator">Steam Emulator (Goldberg)</string>

@@ -69,6 +69,10 @@ public:
     // `cancel` (optional) is polled before each depot and before each chunk
     // fetch; setting it true aborts the download promptly (used for
     // pause / cancel from the Kotlin side).
+    //
+    // `max_workers` is the parallel chunk-download worker count, forwarded
+    // to write_depot. It maps to the user's "Download Speed" setting
+    // (8 / 16 / 24 / 32); write_depot clamps it to [1, 64].
     [[nodiscard]] DepotDownloadResult download(
         uint32_t app_id,
         std::vector<DepotSpec> depots,
@@ -76,7 +80,8 @@ public:
         std::string install_dir,
         bool fresh,
         DepotProgressCallback progress = {},
-        const std::atomic<bool>* cancel = nullptr);
+        const std::atomic<bool>* cancel = nullptr,
+        unsigned max_workers = 8);
 
 private:
     CMClient&   cm_;

@@ -342,7 +342,6 @@ class GameSettingsStateHolder {
     val unpackFiles = mutableStateOf(false)
     val runtimePatcher = mutableStateOf(false)
     val launchRealSteam = mutableStateOf(false)
-    val launchBionicSteam = mutableStateOf(false)
     val steamTypeEntries = mutableStateOf<List<String>>(emptyList())
     val selectedSteamType = mutableIntStateOf(0)
 
@@ -2080,9 +2079,6 @@ private fun SteamSection(state: GameSettingsStateHolder) {
                     state.useColdClient.value = false
                     state.unpackFiles.value = false
                     state.runtimePatcher.value = false
-                    // Bionic Steam and Launch Steam Client are mutually exclusive —
-                    // they both bind libsteamclient.so but in incompatible modes.
-                    state.launchBionicSteam.value = false
                 }
             }
         )
@@ -2094,26 +2090,6 @@ private fun SteamSection(state: GameSettingsStateHolder) {
             lineHeight = 16.sp
         )
 
-        Spacer(Modifier.height(SettingItemGap))
-
-        SettingCheckbox(
-            label = stringResource(R.string.shortcuts_properties_launch_bionic_steam),
-            checked = state.launchBionicSteam.value,
-            onCheckedChange = {
-                state.launchBionicSteam.value = it
-                // Bionic Steam launches games via wine "steam.exe game.exe"
-                // backed by our embedded libsteamclient.so + wn-steam-bootstrap
-                // JNI bridge. Conflicts with the real Steam client mode.
-                if (it) state.launchRealSteam.value = false
-            }
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            stringResource(R.string.shortcuts_properties_launch_bionic_steam_description),
-            color = TextDim,
-            fontSize = 11.sp,
-            lineHeight = 16.sp
-        )
         Spacer(Modifier.height(SettingItemGap))
 
         if (state.steamTypeEntries.value.isNotEmpty()) {

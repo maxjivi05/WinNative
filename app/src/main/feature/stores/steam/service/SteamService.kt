@@ -194,6 +194,24 @@ class SteamService : Service() {
     // Auto-reconnect coroutine for the C++ WN-Steam-Client session (Phase 9).
     @Volatile private var connectJob: Job? = null
 
+    // Pending backoff-delayed reconnect scheduled by onWnDisconnected.
+    @Volatile private var reconnectJob: Job? = null
+
+    // Watches a freshly logged-on session: only once it has stayed up for
+    // STABLE_CONNECTION_MS is the retry budget (retryAttempt) reset to 0.
+    // A connection that logs on then drops within that window is NOT
+    // healthy — resetting immediately let a flapping connection reconnect
+    // without bound (the cause of the backgrounded-app battery drain).
+    @Volatile private var stableConnectionJob: Job? = null
+
+    // App-lifecycle gating for the Steam session. While the app is
+    // backgrounded with nothing that needs Steam (no active download, no
+    // running game) the session is suspended — disconnected, all reconnect
+    // / PICS loops cancelled — so it draws no power. It wakes when the user
+    // reopens the app. Driven from PluviaApp's activity-lifecycle callbacks.
+    @Volatile private var appInForeground = true
+    @Volatile private var suspendedForBackground = false
+
     private val appPicsChannel =
         Channel<List<PICSRequest>>(
             capacity = 1_000,
@@ -254,6 +272,19 @@ class SteamService : Service() {
         const val MAX_PICS_BUFFER = 256
 
         const val MAX_RETRY_ATTEMPTS = 20
+
+        // A session must stay logged on this long before its reconnect is
+        // considered successful and the retry budget is reset.
+        private const val STABLE_CONNECTION_MS = 60_000L
+
+        // Reconnect backoff cap — even a permanently-flapping connection
+        // reconnects no more than once per this interval.
+        private const val RECONNECT_BACKOFF_CAP_MS = 5 * 60_000L
+
+        // connectAndLogon gives up after this many consecutive failed
+        // bring-up attempts (with exponential backoff between them) rather
+        // than retrying a doomed logon forever.
+        private const val CONNECT_LOGON_MAX_ATTEMPTS = 8
 
         const val INVALID_APP_ID: Int = Int.MAX_VALUE
         const val INVALID_PKG_ID: Int = Int.MAX_VALUE
@@ -3606,6 +3637,9 @@ class SteamService : Service() {
                                                     appDirPath,
                                                     isFreshDownload,
                                                     caPath,
+                                                    // "Download Speed" setting → parallel
+                                                    // chunk-download worker count.
+                                                    PrefManager.downloadSpeed,
                                                     object : WnDownloadListener {
                                                         override fun onProgress(
                                                             depotId: Int,
@@ -5570,6 +5604,20 @@ class SteamService : Service() {
             }
         }
 
+        /**
+         * App-lifecycle hooks, called by PluviaApp when the app's last
+         * activity stops ([onAppBackgrounded]) or its first activity starts
+         * ([onAppForegrounded]). They let the Steam session sleep while the
+         * app is minimized and idle — see [handleAppBackgrounded].
+         */
+        fun onAppForegrounded() {
+            instance?.handleAppForegrounded()
+        }
+
+        fun onAppBackgrounded() {
+            instance?.handleAppBackgrounded()
+        }
+
         fun stop() {
             instance?.let { steamInstance ->
                 if (!isStopping) {
@@ -6056,6 +6104,17 @@ class SteamService : Service() {
 
         DownloadCoordinator.init(db)
         DownloadCoordinator.registerDispatcher(DownloadRecord.STORE_STEAM, coordinatorDispatcher)
+
+        // Re-evaluate the background-suspend decision whenever a download
+        // changes state. A download that kept the session awake while the
+        // app is backgrounded can finish / pause — the session should then
+        // be allowed to sleep. Event-driven (no polling): the collector
+        // suspends between emissions.
+        scope.launch {
+            DownloadCoordinator.changes.collect {
+                if (!appInForeground) maybeSuspendForBackground()
+            }
+        }
     }
 
     override fun onStartCommand(
@@ -6134,21 +6193,88 @@ class SteamService : Service() {
         connectJob =
             scope.launch {
                 PluviaApp.events.emit(SteamEvent.Connected(true))
+                var attempt = 0
                 while (isRunning && !isStopping && PrefManager.refreshToken.isNotBlank()) {
                     if (wnSession?.state() == 3) break
                     Timber.d("connectAndLogon: bringing up WN-Steam-Client session...")
                     val state = withWnSession { it.state() }
                     if (state == 3) break
-                    Timber.w("connectAndLogon: no logged-on session yet — retrying in 5s")
-                    delay(5000L)
+                    attempt++
+                    if (attempt >= CONNECT_LOGON_MAX_ATTEMPTS) {
+                        // Logon has failed this many times running — almost
+                        // certainly an expired/revoked refresh token or a
+                        // sustained outage. Stop here instead of spinning a
+                        // full WSS + logon attempt every few seconds forever
+                        // (a background battery drain). A foreground wake or
+                        // an explicit re-login re-triggers connectAndLogon.
+                        Timber.w("connectAndLogon: giving up after $attempt failed attempts")
+                        break
+                    }
+                    val backoffMs = reconnectBackoffMs(attempt)
+                    Timber.w("connectAndLogon: not logged on — retry $attempt in ${backoffMs}ms")
+                    delay(backoffMs)
                 }
             }
+    }
+
+    /**
+     * App returned to the foreground. Wake the Steam session if it was
+     * suspended for background — reconnect and let the logon observer
+     * restart the PICS loops via onWnLoggedOn.
+     */
+    private fun handleAppForegrounded() {
+        appInForeground = true
+        if (!suspendedForBackground) return
+        suspendedForBackground = false
+        Timber.i("App foregrounded — waking the WN-Steam-Client session")
+        retryAttempt = 0
+        if (isRunning && !isStopping && PrefManager.refreshToken.isNotBlank()) {
+            connectAndLogon()
+        }
+    }
+
+    /** App went to the background — evaluate whether the session may sleep. */
+    private fun handleAppBackgrounded() {
+        appInForeground = false
+        scope.launch { maybeSuspendForBackground() }
+    }
+
+    /**
+     * Suspend the Steam session while the app is backgrounded so it draws no
+     * power — UNLESS real work still needs it: a download actively
+     * transferring, or a running game session. Paused / queued downloads do
+     * not count (nothing is on the wire for them). Suspending disconnects
+     * the C++ session and cancels every reconnect / PICS loop; the session
+     * wakes again from [handleAppForegrounded]. Re-run whenever a condition
+     * changes (download finishes, game exits) so a session kept awake for
+     * work goes to sleep once that work is done.
+     */
+    private suspend fun maybeSuspendForBackground() {
+        if (appInForeground || isStopping || isLoggingOut || suspendedForBackground) return
+        if (DownloadCoordinator.hasActiveDownload()) {
+            Timber.i("App backgrounded but a download is active — staying connected")
+            return
+        }
+        if (PluviaApp.isGameSessionActive()) {
+            Timber.i("App backgrounded but a game is running — staying connected")
+            return
+        }
+        Timber.i("App backgrounded and idle — suspending WN-Steam-Client session to save battery")
+        suspendedForBackground = true
+        connectJob?.cancel()
+        reconnectJob?.cancel()
+        stableConnectionJob?.cancel()
+        picsChangesCheckerJob?.cancel()
+        picsGetProductInfoJob?.cancel()
+        wnSession?.let { s -> runCatching { s.disconnect() } }
     }
 
     private suspend fun stop() {
         Timber.i("Stopping Steam service")
         isStopping = true
         connectJob?.cancel()
+        reconnectJob?.cancel()
+        stableConnectionJob?.cancel()
         wnSession?.let { s ->
             runCatching { s.disconnect() }
             runCatching { s.close() }
@@ -6177,6 +6303,12 @@ class SteamService : Service() {
 
         isStopping = false
         retryAttempt = 0
+        reconnectJob?.cancel()
+        reconnectJob = null
+        stableConnectionJob?.cancel()
+        stableConnectionJob = null
+        suspendedForBackground = false
+        appInForeground = true
 
         PluviaApp.events.off<AndroidEvent.EndProcess, Unit>(onEndProcess)
         PluviaApp.events.clearAllListenersOf<SteamEvent<Any>>()
@@ -6190,15 +6322,46 @@ class SteamService : Service() {
      * remain; otherwise emits Disconnected and stops the service. Fired
      * from the [installWnLogonObserver] state observer.
      */
+    /**
+     * Exponential reconnect backoff: 2s, 4s, 8s … doubling per attempt and
+     * capped at [RECONNECT_BACKOFF_CAP_MS]. `attempt` is the 1-based retry
+     * count. Without this, a connection that briefly logs on then drops
+     * (typical when the app is backgrounded and Android throttles the
+     * heartbeat) reconnects in a tight loop and overheats the device.
+     */
+    private fun reconnectBackoffMs(attempt: Int): Long {
+        val shift = (attempt - 1).coerceIn(0, 8) // 2^0 .. 2^8
+        val seconds = (1L shl shift) * 2L // 2, 4, 8, …, 512
+        return (seconds * 1000L).coerceAtMost(RECONNECT_BACKOFF_CAP_MS)
+    }
+
     fun onWnDisconnected() {
         Timber.i("WN-Steam-Client channel disconnected")
         if (isStopping || isLoggingOut) return
+        // A disconnect we triggered ourselves to sleep the backgrounded app
+        // must NOT schedule a reconnect — that would defeat the suspend and
+        // is the storm this whole change set exists to stop.
+        if (suspendedForBackground) {
+            Timber.i("Channel disconnect was an intentional background suspend — not reconnecting")
+            return
+        }
+        // This drop means the just-ended session was NOT stable — cancel the
+        // pending stable-connection timer so the retry budget keeps climbing
+        // and the backoff below actually grows.
+        stableConnectionJob?.cancel()
+        stableConnectionJob = null
         if (retryAttempt < MAX_RETRY_ATTEMPTS && PrefManager.refreshToken.isNotBlank()) {
             retryAttempt++
-            Timber.w("Attempting to reconnect (retry $retryAttempt)")
+            val backoffMs = reconnectBackoffMs(retryAttempt)
+            Timber.w("Reconnect scheduled in ${backoffMs}ms (retry $retryAttempt/$MAX_RETRY_ATTEMPTS)")
             notificationHelper.notify("Retrying...")
             PluviaApp.events.emit(SteamEvent.RemotelyDisconnected)
-            connectAndLogon()
+            reconnectJob?.cancel()
+            reconnectJob =
+                scope.launch {
+                    delay(backoffMs)
+                    if (!isStopping && !isLoggingOut) connectAndLogon()
+                }
         } else {
             PluviaApp.events.emit(SteamEvent.Disconnected)
             clearValues()
@@ -6217,7 +6380,18 @@ class SteamService : Service() {
     fun onWnLoggedOn(session: WnSteamSession) {
         Timber.i("Logged onto Steam (WN-Steam-Client)")
 
-        retryAttempt = 0
+        // Do NOT reset retryAttempt here. A connection that logs on then
+        // drops within STABLE_CONNECTION_MS is not healthy; zeroing the
+        // budget immediately let a flapping connection reconnect without
+        // bound. Arm a timer instead — it resets retryAttempt only once the
+        // session has stayed up long enough; onWnDisconnected cancels it.
+        stableConnectionJob?.cancel()
+        stableConnectionJob =
+            scope.launch {
+                delay(STABLE_CONNECTION_MS)
+                retryAttempt = 0
+                Timber.d("Connection stable — reconnect retry budget reset")
+            }
         isLoggingOut = false
         _isLoggedInFlow.value = true
 

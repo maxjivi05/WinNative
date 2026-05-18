@@ -5,8 +5,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include "wn_steam/depot_chunk.h"
 
@@ -90,26 +96,44 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
                              const std::string& target_dir,
                              std::string_view cdn_auth_token,
                              const DepotWriteProgress& progress,
-                             const std::atomic<bool>* cancel) {
+                             const std::atomic<bool>* cancel,
+                             unsigned max_workers) {
     if (manifest.metadata.filenames_encrypted) {
         return fail("write_depot: manifest filenames are still encrypted");
     }
     if (depot_key.size() != 32) return fail("write_depot: bad depot key length");
 
-    const auto cancelled = [cancel]() {
-        return cancel && cancel->load();
-    };
+    const auto cancelled = [cancel]() { return cancel && cancel->load(); };
 
     uint64_t total_bytes = 0;
     for (const auto& f : manifest.files) total_bytes += f.size;
 
     DepotWriteResult result;
-    for (const auto& f : manifest.files) {
+
+    // One outstanding chunk to download: indices into manifest.files and
+    // that file's chunk list (zero-copy — the manifest outlives this call).
+    struct ChunkJob {
+        uint32_t file_idx;
+        uint32_t chunk_idx;
+    };
+    std::vector<std::string> file_paths(manifest.files.size());
+    std::vector<ChunkJob>    jobs;
+    // Decompressed bytes confirmed on disk: seeded by the resume scan in
+    // Phase A, then advanced by the workers in Phase B.
+    std::atomic<uint64_t> bytes_done{0};
+
+    // ── Phase A — single-threaded prep ──────────────────────────────────
+    // Create directories / symlinks, pre-size every regular file, and skip
+    // any chunk already correct on disk (resume). Every chunk that still
+    // needs a download becomes a ChunkJob for Phase B.
+    for (uint32_t fi = 0; fi < manifest.files.size(); ++fi) {
+        const auto& f = manifest.files[fi];
         if (cancelled()) return fail("write_depot: cancelled");
         if (!path_is_safe(f.filename)) {
             return fail("write_depot: unsafe path '" + f.filename + "'");
         }
         const std::string path = target_dir + "/" + f.filename;
+        file_paths[fi] = path;
 
         // Symlink — identified by a non-empty linktarget.
         if (!f.linktarget.empty()) {
@@ -134,7 +158,7 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
             continue;
         }
 
-        // Regular file.
+        // Regular file: create + pre-size to the manifest size.
         if (!make_parent_dirs(path)) return fail("write_depot: mkdir failed");
         const mode_t mode = (f.flags & kFlagExecutable) ? 0755 : 0644;
         // Resume: a pre-existing file with content may already hold some of
@@ -155,12 +179,8 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
             return fail("write_depot: ftruncate '" + f.filename + "'");
         }
 
-        for (const auto& chunk : f.chunks) {
-            if (cancelled()) {
-                ::close(fd);
-                return fail("write_depot: cancelled");
-            }
-
+        for (uint32_t ci = 0; ci < f.chunks.size(); ++ci) {
+            const auto& chunk = f.chunks[ci];
             // Resume fast-path: skip the CDN fetch + decode when the chunk's
             // exact decompressed bytes are already on disk (verified by
             // Steam's Adler32). This is what makes pause/resume continue
@@ -171,44 +191,128 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
                                      static_cast<off_t>(chunk.offset));
                 if (rd == static_cast<ssize_t>(on_disk.size()) &&
                     depot_adler_hash(on_disk) == chunk.crc) {
-                    result.bytes_written += chunk.cb_original;
-                    if (progress) progress(result.bytes_written, total_bytes);
+                    bytes_done.fetch_add(chunk.cb_original,
+                                         std::memory_order_relaxed);
                     continue;
                 }
             }
-
-            auto fetched = cdn.fetch_chunk(server, manifest.metadata.depot_id,
-                                           chunk.sha, cdn_auth_token);
-            if (!fetched.ok()) {
-                ::close(fd);
-                return fail("write_depot: chunk fetch failed for '" + f.filename
-                            + "': " + fetched.error);
-            }
-            auto processed = process_depot_chunk(fetched.data, depot_key,
-                                                 chunk.crc, chunk.cb_original);
-            if (!processed.ok()) {
-                ::close(fd);
-                return fail("write_depot: chunk decode failed for '" + f.filename
-                            + "': " + processed.error);
-            }
-            ssize_t w = ::pwrite(fd, processed.data.data(), processed.data.size(),
-                                 static_cast<off_t>(chunk.offset));
-            if (w < 0 || static_cast<size_t>(w) != processed.data.size()) {
-                ::close(fd);
-                return fail("write_depot: pwrite '" + f.filename + "': "
-                            + std::strerror(errno));
-            }
-            result.bytes_written += processed.data.size();
-            if (progress) progress(result.bytes_written, total_bytes);
+            jobs.push_back({fi, ci});
         }
         ::close(fd);
         ++result.files_written;
     }
 
-    WN_LOGI("write_depot: depot %u — %llu files, %llu bytes",
+    if (progress) {
+        progress(bytes_done.load(std::memory_order_relaxed), total_bytes);
+    }
+
+    // ── Phase B — parallel chunk download ───────────────────────────────
+    // N workers, each with its own keep-alive CdnConnection, pull jobs off a
+    // shared atomic cursor. pwrite() is positional, so concurrent writes to
+    // distinct offsets — even within one file — need no file locking.
+    unsigned workers_used = 0;
+    if (!jobs.empty() && !cancelled()) {
+        unsigned n = max_workers == 0 ? 1u : max_workers;
+        n = std::min<unsigned>(n, 64u);
+        n = std::min<unsigned>(n, static_cast<unsigned>(jobs.size()));
+        workers_used = n;
+
+        std::atomic<size_t> next_job{0};
+        std::atomic<int>    active{static_cast<int>(n)};
+        std::atomic<bool>   failed{false};
+        std::mutex          err_mtx;
+        std::string         err;
+
+        auto record_error = [&](std::string msg) {
+            std::lock_guard<std::mutex> lk(err_mtx);
+            if (err.empty()) err = std::move(msg);
+            failed.store(true, std::memory_order_release);
+        };
+
+        auto worker = [&]() {
+            CdnConnection conn;   // one reused TCP+TLS connection per worker
+            while (true) {
+                if (failed.load(std::memory_order_acquire) || cancelled()) break;
+                const size_t i =
+                    next_job.fetch_add(1, std::memory_order_relaxed);
+                if (i >= jobs.size()) break;
+
+                const ChunkJob     job   = jobs[i];
+                const auto&        f     = manifest.files[job.file_idx];
+                const auto&        chunk = f.chunks[job.chunk_idx];
+                const std::string& path  = file_paths[job.file_idx];
+
+                CdnChunkResult fetched =
+                    conn.valid()
+                        ? cdn.fetch_chunk(conn, server,
+                                          manifest.metadata.depot_id,
+                                          chunk.sha, cdn_auth_token)
+                        : cdn.fetch_chunk(server, manifest.metadata.depot_id,
+                                          chunk.sha, cdn_auth_token);
+                if (!fetched.ok()) {
+                    record_error("write_depot: chunk fetch failed for '"
+                                 + f.filename + "': " + fetched.error);
+                    break;
+                }
+                auto processed = process_depot_chunk(
+                    fetched.data, depot_key, chunk.crc, chunk.cb_original);
+                if (!processed.ok()) {
+                    record_error("write_depot: chunk decode failed for '"
+                                 + f.filename + "': " + processed.error);
+                    break;
+                }
+                int fd = ::open(path.c_str(), O_WRONLY);
+                if (fd < 0) {
+                    record_error("write_depot: open '" + f.filename + "': "
+                                 + std::strerror(errno));
+                    break;
+                }
+                ssize_t w = ::pwrite(fd, processed.data.data(),
+                                     processed.data.size(),
+                                     static_cast<off_t>(chunk.offset));
+                ::close(fd);
+                if (w < 0 ||
+                    static_cast<size_t>(w) != processed.data.size()) {
+                    record_error("write_depot: pwrite '" + f.filename + "': "
+                                 + std::strerror(errno));
+                    break;
+                }
+                bytes_done.fetch_add(processed.data.size(),
+                                     std::memory_order_relaxed);
+            }
+            active.fetch_sub(1, std::memory_order_acq_rel);
+        };
+
+        std::vector<std::thread> pool;
+        pool.reserve(n);
+        for (unsigned w = 0; w < n; ++w) pool.emplace_back(worker);
+
+        // The calling thread owns progress reporting: write_depot's progress
+        // callback ends up calling into the JVM, which is only legal on the
+        // thread that owns its JNIEnv (this one). Workers never touch it.
+        while (active.load(std::memory_order_acquire) > 0) {
+            if (progress) {
+                progress(bytes_done.load(std::memory_order_relaxed),
+                         total_bytes);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        }
+        for (auto& t : pool) t.join();
+
+        if (failed.load(std::memory_order_acquire)) {
+            return fail(err.empty() ? "write_depot: download failed" : err);
+        }
+        if (cancelled()) return fail("write_depot: cancelled");
+    }
+
+    result.bytes_written = bytes_done.load(std::memory_order_relaxed);
+    if (progress) progress(result.bytes_written, total_bytes);
+
+    WN_LOGI("write_depot: depot %u — %llu files, %llu bytes (%u workers)",
             manifest.metadata.depot_id,
             static_cast<unsigned long long>(result.files_written),
-            static_cast<unsigned long long>(result.bytes_written));
+            static_cast<unsigned long long>(result.bytes_written),
+            workers_used);
     return result;
 }
 

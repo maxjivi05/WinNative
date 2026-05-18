@@ -46,6 +46,12 @@ using DepotWriteProgress = std::function<void(uint64_t done, uint64_t total)>;
 // `cancel` (optional) is polled before every file and before every chunk
 // fetch; when it becomes true the write aborts promptly with a "cancelled"
 // error so a paused / cancelled download stops the native worker.
+//
+// `max_workers` is the number of parallel chunk-download workers. Each
+// worker owns its own keep-alive CdnConnection, so N workers means N
+// concurrent HTTPS connections to the CDN. Clamped to [1, 64] and never
+// exceeds the outstanding chunk count. This is what the user-facing
+// "Download Speed" setting maps to (8 / 16 / 24 / 32).
 [[nodiscard]] DepotWriteResult write_depot(
     const ContentManifest& manifest,
     std::span<const uint8_t> depot_key,
@@ -54,6 +60,7 @@ using DepotWriteProgress = std::function<void(uint64_t done, uint64_t total)>;
     const std::string& target_dir,
     std::string_view cdn_auth_token = {},
     const DepotWriteProgress& progress = {},
-    const std::atomic<bool>* cancel = nullptr);
+    const std::atomic<bool>* cancel = nullptr,
+    unsigned max_workers = 8);
 
 }  // namespace wn_steam

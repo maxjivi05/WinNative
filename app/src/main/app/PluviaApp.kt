@@ -8,6 +8,7 @@ import com.winlator.cmod.app.update.UpdateChecker
 import com.winlator.cmod.feature.stores.gog.service.GOGAuthManager
 import com.winlator.cmod.feature.stores.gog.service.GOGConstants
 import com.winlator.cmod.feature.stores.steam.events.EventDispatcher
+import com.winlator.cmod.feature.stores.steam.service.SteamService
 import com.winlator.cmod.feature.stores.steam.utils.PrefManager
 import com.winlator.cmod.runtime.display.XServerDisplayActivity
 import com.winlator.cmod.shared.android.RefreshRateUtils
@@ -74,6 +75,19 @@ class PluviaApp : Application() {
 
         @JvmField
         val events = EventDispatcher()
+
+        // Count of started (visible) activities — the app is in the
+        // foreground while this is > 0. Mutated only on the main thread.
+        @Volatile
+        private var startedActivityCount = 0
+
+        // Count of live XServerDisplayActivity instances (created and not yet
+        // destroyed) — i.e. a game session exists, possibly backgrounded.
+        @Volatile
+        private var gameActivityCount = 0
+
+        /** True while a game window exists — keeps the Steam session awake. */
+        fun isGameSessionActive(): Boolean = gameActivityCount > 0
     }
 
     private fun preloadSystemLibraries() {
@@ -102,6 +116,9 @@ class PluviaApp : Application() {
                     activity: Activity,
                     savedInstanceState: Bundle?,
                 ) {
+                    if (activity is XServerDisplayActivity) {
+                        gameActivityCount++
+                    }
                     if (shouldManageAppRefreshRate(activity)) {
                         RefreshRateUtils.onActivityCreated(activity)
                     }
@@ -114,7 +131,12 @@ class PluviaApp : Application() {
                     }
                 }
 
-                override fun onActivityStarted(activity: Activity) {}
+                override fun onActivityStarted(activity: Activity) {
+                    // 0 -> 1 means the app just entered the foreground.
+                    if (startedActivityCount++ == 0) {
+                        SteamService.onAppForegrounded()
+                    }
+                }
 
                 override fun onActivityPaused(activity: Activity) {
                     if (currentForegroundActivity === activity) {
@@ -122,7 +144,13 @@ class PluviaApp : Application() {
                     }
                 }
 
-                override fun onActivityStopped(activity: Activity) {}
+                override fun onActivityStopped(activity: Activity) {
+                    // 1 -> 0 means the app just went to the background.
+                    startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+                    if (startedActivityCount == 0) {
+                        SteamService.onAppBackgrounded()
+                    }
+                }
 
                 override fun onActivitySaveInstanceState(
                     activity: Activity,
@@ -135,6 +163,15 @@ class PluviaApp : Application() {
                     }
                     if (currentForegroundActivity === activity) {
                         currentForegroundActivity = null
+                    }
+                    if (activity is XServerDisplayActivity) {
+                        gameActivityCount = (gameActivityCount - 1).coerceAtLeast(0)
+                        // A game session ending while the app is already
+                        // backgrounded should let the Steam session sleep —
+                        // re-evaluate the suspend decision now.
+                        if (gameActivityCount == 0 && startedActivityCount == 0) {
+                            SteamService.onAppBackgrounded()
+                        }
                     }
                 }
             },
