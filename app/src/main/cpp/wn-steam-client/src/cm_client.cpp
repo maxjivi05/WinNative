@@ -712,6 +712,42 @@ void CMClient::cloud_get_app_file_changelist(uint32_t app_id,
         timeout);
 }
 
+void CMClient::inventory_get_item_def_meta(uint32_t app_id,
+                                           ItemDefMetaCallback cb,
+                                           std::chrono::seconds timeout) {
+    if (state_.load() != ClientState::LoggedOn) {
+        if (cb) cb(std::nullopt);
+        return;
+    }
+    pb::CInventory_GetItemDefMeta_Request req;
+    req.appid = app_id;
+
+    call_service_method(
+        "Inventory.GetItemDefMeta#1",
+        /*authed=*/true,
+        req.serialize(),
+        [app_id, cb = std::move(cb)](JobResult r) {
+            if (r.synthetic_failure || r.eresult != 1) {
+                WN_LOGE("itemdef meta: app %u failed eresult=%d",
+                        app_id, r.eresult);
+                if (cb) cb(std::nullopt);
+                return;
+            }
+            auto resp = pb::CInventory_GetItemDefMeta_Response::deserialize(r.body);
+            if (!resp) {
+                WN_LOGE("itemdef meta: parse failed for app %u (%zu bytes)",
+                        app_id, r.body.size());
+                if (cb) cb(std::nullopt);
+                return;
+            }
+            WN_LOGI("itemdef meta: app %u modified=%u digest=%s",
+                    app_id, resp->modified,
+                    resp->digest.empty() ? "<empty>" : resp->digest.c_str());
+            if (cb) cb(std::move(resp));
+        },
+        timeout);
+}
+
 void CMClient::cloud_get_file_download_info(uint32_t app_id, std::string filename,
                                             CloudFileDownloadCallback cb,
                                             std::chrono::seconds timeout) {

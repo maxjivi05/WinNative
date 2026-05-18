@@ -55,6 +55,7 @@ import com.winlator.cmod.feature.stores.common.StoreAuthStatus
 import com.winlator.cmod.feature.stores.common.StoreInstallPathSafety
 import com.winlator.cmod.feature.stores.steam.events.AndroidEvent
 import com.winlator.cmod.feature.stores.steam.events.SteamEvent
+import com.winlator.cmod.feature.stores.steam.inventorygen.InventoryItemsGenerator
 import com.winlator.cmod.feature.stores.steam.wnsteam.CaBundleExtractor
 import com.winlator.cmod.feature.stores.steam.wnsteam.WnAuthCallback
 import com.winlator.cmod.feature.stores.steam.wnsteam.WnDownloadListener
@@ -4616,6 +4617,35 @@ class SteamService : Service() {
             }
         }.onFailure { e ->
             Timber.w(e, "Failed to generate achievements for appId=$appId")
+        }
+
+        /**
+         * Fetch the app's Steam Inventory item definitions and write
+         * gbe_fork's `steam_settings/items.json` + `default_items.json` into
+         * [configDirectory]. Best-effort — silently no-ops when the app has no
+         * inventory, the user isn't logged on, or the fetch fails. Mirrors
+         * [generateAchievements].
+         */
+        suspend fun generateInventoryItems(
+            appId: Int,
+            configDirectory: String,
+        ) = runCatching {
+            // The GetItemDefArchive HTTPS GET needs the same PEM trust bundle
+            // CaBundleExtractor provides for the CM session.
+            val ctx = instance?.applicationContext ?: return@runCatching
+            val caPath = CaBundleExtractor.ensureBundle(ctx)
+            val archive =
+                withWnSession { session ->
+                    withContext(Dispatchers.IO) { session.getItemDefArchive(appId, caPath) }
+                }
+            if (archive == null) {
+                Timber.i("Inventory item-def archive unavailable for app $appId")
+                return@runCatching
+            }
+            val count = InventoryItemsGenerator.generate(archive, configDirectory)
+            Timber.i("Inventory items generated for app $appId: $count definition(s)")
+        }.onFailure { e ->
+            Timber.w(e, "Failed to generate inventory items for appId=$appId")
         }
 
         fun getGseSaveDirs(appId: Int): List<File> {

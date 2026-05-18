@@ -16,6 +16,7 @@
 
 #include "wn_steam/auth_session.h"
 #include "wn_steam/authenticator.h"
+#include "wn_steam/cdn_client.h"
 #include "wn_steam/cm_client.h"
 #include "wn_steam/cm_server_list.h"
 #include "wn_steam/depot_downloader.h"
@@ -945,6 +946,54 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeGetUser
     if (!arr) return nullptr;
     env->SetByteArrayRegion(arr, 0, static_cast<jsize>(schema.size()),
                             reinterpret_cast<const jbyte*>(schema.data()));
+    return arr;
+}
+
+// Blocking 2-step Steam Inventory item-def fetch:
+//   1. Inventory.GetItemDefMeta#1 (CM unified service) -> digest
+//   2. HTTPS GET IGameInventory/GetItemDefArchive/v1  -> raw item-def JSON
+// Returns the raw archive bytes as a byte[] (Kotlin's InventoryItemsGenerator
+// pivots it into Goldberg's steam_settings/items.json). null on transport
+// failure, not logged on, or when the app exposes no item definitions.
+// `jca_bundle` is the PEM trust-bundle path for the HTTPS GET. The CM job
+// carries its own 30s timeout so fut.get() cannot hang.
+JNIEXPORT jbyteArray JNICALL
+Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeGetItemDefArchive(
+        JNIEnv* env, jclass /*cls*/, jlong h, jint app_id, jstring jca_bundle) {
+    auto* s = from_handle(h);
+    if (!s || !s->client) return nullptr;
+    // Copy the shared_ptr so the CMClient outlives a concurrent close().
+    std::shared_ptr<wn_steam::CMClient> client = s->client;
+
+    std::string ca_bundle;
+    if (jca_bundle) {
+        const char* p = env->GetStringUTFChars(jca_bundle, nullptr);
+        if (p) { ca_bundle = p; env->ReleaseStringUTFChars(jca_bundle, p); }
+    }
+
+    // Step 1: Inventory.GetItemDefMeta#1 -> digest.
+    std::promise<std::optional<std::string>> prom;
+    auto fut = prom.get_future();
+    client->inventory_get_item_def_meta(
+        static_cast<uint32_t>(app_id),
+        [&prom](std::optional<wn_steam::pb::CInventory_GetItemDefMeta_Response> r) {
+            if (r && !r->digest.empty()) prom.set_value(r->digest);
+            else prom.set_value(std::nullopt);
+        });
+    std::optional<std::string> digest = fut.get();
+    if (!digest) return nullptr;  // not logged on / no inventory / failure
+
+    // Step 2: download the item-def archive over HTTPS.
+    wn_steam::CdnClient cdn(ca_bundle);
+    auto body = cdn.fetch_item_def_archive(static_cast<uint32_t>(app_id), *digest);
+    if (!body) return nullptr;
+
+    jbyteArray arr = env->NewByteArray(static_cast<jsize>(body->size()));
+    if (!arr) return nullptr;
+    if (!body->empty()) {
+        env->SetByteArrayRegion(arr, 0, static_cast<jsize>(body->size()),
+                                reinterpret_cast<const jbyte*>(body->data()));
+    }
     return arr;
 }
 

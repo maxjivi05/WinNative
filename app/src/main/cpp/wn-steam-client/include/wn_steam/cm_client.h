@@ -17,6 +17,7 @@
 #include "wn_steam/heartbeat.h"
 #include "wn_steam/job_manager.h"
 #include "wn_steam/pb/ccloud.h"
+#include "wn_steam/pb/cinventory.h"
 #include "wn_steam/pb/ccontentserverdirectory.h"
 #include "wn_steam/pb/cfamilygroups.h"
 #include "wn_steam/pb/cplayer.h"
@@ -348,6 +349,16 @@ public:
                                        uint64_t synced_change_number,
                                        CloudFileChangelistCallback cb,
                                        std::chrono::seconds timeout = std::chrono::seconds{30});
+
+    // Inventory item-def metadata: Inventory.GetItemDefMeta#1. Returns the
+    // current item-definition `digest` for an app — the input to the
+    // IGameInventory/GetItemDefArchive HTTPS download that backs
+    // steam_settings/items.json. nullopt on failure / not logged on.
+    using ItemDefMetaCallback = std::function<void(
+        std::optional<pb::CInventory_GetItemDefMeta_Response>)>;
+    void inventory_get_item_def_meta(uint32_t app_id,
+                                     ItemDefMetaCallback cb,
+                                     std::chrono::seconds timeout = std::chrono::seconds{30});
 
     // Cloud file download info: Cloud.ClientFileDownload#1. Returns the
     // HTTP(S) URL + headers to fetch a cloud file's body — the protocol

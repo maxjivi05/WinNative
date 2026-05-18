@@ -142,6 +142,7 @@ add_library(wnsteam SHARED
     src/pb/cmsg_client_playing_session_state.cpp
     src/pb/cmsg_client_get_depot_decryption_key.cpp
     src/pb/ccloud.cpp
+    src/pb/cinventory.cpp
     src/pb/cfamilygroups.cpp
     src/pb/cplayer.cpp
     src/pb/ccontentserverdirectory.cpp

@@ -208,6 +208,59 @@ CdnManifestResult CdnClient::fetch_manifest(
     return result;
 }
 
+std::optional<std::vector<uint8_t>>
+CdnClient::fetch_item_def_archive(uint32_t app_id, std::string_view digest,
+                                  std::chrono::seconds timeout) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        WN_LOGE("itemdef archive: curl_easy_init failed");
+        return std::nullopt;
+    }
+
+    // URL-encode the digest defensively (it is a hash string, but be safe).
+    char* esc = curl_easy_escape(curl, digest.data(),
+                                 static_cast<int>(digest.size()));
+    std::string url =
+        "https://api.steampowered.com/IGameInventory/GetItemDefArchive/v1/"
+        "?appid=" + std::to_string(app_id) +
+        "&digest=" + (esc ? std::string(esc) : std::string(digest));
+    if (esc) curl_free(esc);
+
+    std::vector<uint8_t> body;
+    curl_easy_setopt(curl, CURLOPT_URL,             url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,   curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA,       &body);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,       kUserAgent);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT,         static_cast<long>(timeout.count()));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,  15L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION,  1L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS,      1L);
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");  // transparent gzip
+    if (!ca_bundle_path_.empty()) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle_path_.c_str());
+    }
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+
+    const CURLcode rc = curl_easy_perform(curl);
+    long http_status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+    curl_easy_cleanup(curl);
+
+    if (rc != CURLE_OK) {
+        WN_LOGE("itemdef archive: curl_easy_perform: %s", curl_easy_strerror(rc));
+        return std::nullopt;
+    }
+    if (http_status != 200) {
+        WN_LOGE("itemdef archive: HTTP %ld for app %u", http_status, app_id);
+        return std::nullopt;
+    }
+    // The archive body carries a trailing NUL that breaks JSON parsing.
+    if (!body.empty() && body.back() == 0) body.pop_back();
+    WN_LOGI("itemdef archive: app %u — %zu bytes", app_id, body.size());
+    return body;
+}
+
 // ── chunk-fetch helpers (shared by the throwaway + keep-alive paths) ──────
 namespace {
 

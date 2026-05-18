@@ -119,6 +119,16 @@ public:
     [[nodiscard]] static std::optional<std::vector<uint8_t>>
     unzip_first_entry(std::span<const uint8_t> zip) noexcept;
 
+    // GET the Steam Inventory item-definition archive for `app_id`, using the
+    // digest from Inventory.GetItemDefMeta. Hits the keyless web endpoint
+    //   https://api.steampowered.com/IGameInventory/GetItemDefArchive/v1/
+    // The body is the raw item-def JSON array; a trailing NUL byte, if
+    // present, is stripped. nullopt on transport / non-200 failure; an empty
+    // vector means the app exposes no item definitions.
+    [[nodiscard]] std::optional<std::vector<uint8_t>> fetch_item_def_archive(
+        uint32_t app_id, std::string_view digest,
+        std::chrono::seconds timeout = std::chrono::seconds{30});
+
 private:
     std::string ca_bundle_path_;
 };

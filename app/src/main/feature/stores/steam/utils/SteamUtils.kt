@@ -446,6 +446,17 @@ object SteamUtils {
             Timber.d(e, "Achievements generation skipped for appId=$appId")
         }
 
+        // Steam Inventory item definitions → items.json (best-effort; requires
+        // Steam login). Gives inventory-driven games (TF2/CS-style) their item
+        // catalog so the in-game inventory isn't empty.
+        runCatching {
+            runBlocking {
+                SteamService.generateInventoryItems(appId, settingsDir.absolutePath)
+            }
+        }.onFailure { e ->
+            Timber.d(e, "Inventory items generation skipped for appId=$appId")
+        }
+
         // Special save-location symlinks
         ensureSaveLocationsForGames(context, appId)
     }

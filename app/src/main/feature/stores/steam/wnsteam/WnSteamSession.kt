@@ -268,6 +268,23 @@ class WnSteamSession : AutoCloseable {
     }
 
     /**
+     * Fetch the app's Steam Inventory item-definition archive. Two-step:
+     * Inventory.GetItemDefMeta#1 (CM) → digest, then a keyless HTTPS GET of
+     * IGameInventory/GetItemDefArchive/v1. Returns the raw archive JSON (a
+     * JSON array of item definitions) decoded as UTF-8 — [InventoryItemsGenerator]
+     * pivots it into Goldberg's steam_settings/items.json. BLOCKING (CM
+     * round-trip + HTTP) — call off the main thread. null when the app has no
+     * inventory / not logged on / on transport failure.
+     *
+     * @param caBundlePath PEM trust bundle for the HTTPS GetItemDefArchive GET
+     */
+    fun getItemDefArchive(appId: Int, caBundlePath: String): String? {
+        val h = nativeHandle.get(); if (h == 0L) return null
+        val bytes = nativeGetItemDefArchive(h, appId, caBundlePath) ?: return null
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    /**
      * Write stat / achievement values back to Steam (CMsgClientStoreUserStats2).
      * Fire-and-forget. [statIds] and [statValues] are paired and must be the
      * same length. [crcStats] must come from the matching [getUserStatsFull].
@@ -812,6 +829,11 @@ class WnSteamSession : AutoCloseable {
         @JvmStatic private external fun nativeRequestEncryptedAppTicket(handle: Long, appId: Int): ByteArray?
         @JvmStatic private external fun nativeGetUserStatsSchema(handle: Long, appId: Int): ByteArray?
         @JvmStatic private external fun nativeGetUserStatsFull(handle: Long, appId: Int): String?
+        @JvmStatic private external fun nativeGetItemDefArchive(
+            handle: Long,
+            appId: Int,
+            caBundlePath: String,
+        ): ByteArray?
         @JvmStatic private external fun nativeStoreUserStats(
             handle: Long, appId: Int, steamId: Long, crcStats: Int,
             statIds: IntArray, statValues: IntArray)
