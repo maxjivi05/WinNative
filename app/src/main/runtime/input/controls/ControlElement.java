@@ -97,9 +97,6 @@ public class ControlElement {
   private boolean wasExpandedOnDown = false;
   private int currentPointerId = -1;
   private final Rect boundingBox = new Rect();
-  /** Scratch rect for the GameHub layout override — kept separate so the cached saved-layout
-   * {@link #boundingBox} stays valid when the user toggles styles back and forth. */
-  private final Rect overrideBoundingBox = new Rect();
   private final Path path = new Path();
   private Path[] paths;
   private boolean[] states = new boolean[4];
@@ -315,30 +312,14 @@ public class ControlElement {
 
   public Rect getBoundingBox() {
     if (boundingBoxNeedsUpdate) computeBoundingBox();
-    // When the GameHub visual style is active (and we're not editing), known gamepad roles get
-    // relocated and resized to the GameHub reference layout. Override is written into a scratch
-    // rect so the cached saved-layout box stays valid for ORIGINAL renderings.
-    if (inputControlsView.getVisualStyle() == VisualStyle.GAMEHUB && !inputControlsView.isEditMode()) {
-      GameHubLayout.Override ov = currentGameHubOverride();
-      if (ov != null) {
-        int snappingSize = inputControlsView.getSnappingSize();
-        if (snappingSize > 0) {
-          int cx = (int) (ov.normX * inputControlsView.getMaxWidth());
-          int cy = (int) (ov.normY * inputControlsView.getMaxHeight());
-          int hw = (int) (ov.halfWidthSnap * snappingSize * ov.scale);
-          int hh = (int) (ov.halfHeightSnap * snappingSize * ov.scale);
-          overrideBoundingBox.set(cx - hw, cy - hh, cx + hw, cy + hh);
-          return overrideBoundingBox;
-        }
-      }
-    }
+    // Position and size always come from the ICP profile. VisualStyle (ORIGINAL vs GAMEHUB) only
+    // changes how an element is drawn, never where it sits — GameHub layouts ship as their own ICP.
     return boundingBox;
   }
 
-  /** Returns the current GameHub override for this element (cached lookup), or null. */
-  private GameHubLayout.Override currentGameHubOverride() {
-    GameHubLayout.Role role = GameHubLayout.roleFor(this);
-    return role != null ? GameHubLayout.overrideFor(role) : null;
+  /** Trigger/bumper silhouette for this element when drawn in the GameHub style, or null. */
+  private GameHubLayout.RenderShape gameHubTriggerShape() {
+    return GameHubLayout.triggerShapeFor(GameHubLayout.roleFor(this));
   }
 
   private Rect computeBoundingBox() {
@@ -903,7 +884,6 @@ return boundingBox;
     float overlayOpacity = inputControlsView.getOverlayOpacity();
     boolean engaged = isEngaged();
     Rect boundingBox = getBoundingBox();
-    GameHubLayout.Override layoutOverride = inputControlsView.isEditMode() ? null : currentGameHubOverride();
 
     // Resolve accent (user customColor → theme color → none).
     int accent = resolveAccentColor();
@@ -951,15 +931,14 @@ return boundingBox;
       case BUTTON: {
         float cx = boundingBox.centerX();
         float cy = boundingBox.centerY();
-        boolean isTrigger = layoutOverride != null
-            && (layoutOverride.shape == GameHubLayout.RenderShape.TRIGGER_LT
-                || layoutOverride.shape == GameHubLayout.RenderShape.TRIGGER_LB
-                || layoutOverride.shape == GameHubLayout.RenderShape.TRIGGER_RT
-                || layoutOverride.shape == GameHubLayout.RenderShape.TRIGGER_RB);
+        // L1/L2/R1/R2 buttons get the slanted GameHub trigger/bumper silhouette — a shape choice
+        // driven purely by the element's gamepad role, never by its position.
+        GameHubLayout.RenderShape triggerShape = gameHubTriggerShape();
+        boolean isTrigger = triggerShape != null;
 
         if (isTrigger) {
           GameHubLayout.buildTriggerPath(
-              path, layoutOverride.shape,
+              path, triggerShape,
               boundingBox.left, boundingBox.top, boundingBox.right, boundingBox.bottom);
           paint.setStyle(Paint.Style.FILL);
           paint.setColor(fillColor);
@@ -1030,25 +1009,13 @@ return boundingBox;
         canvas.drawCircle(cx, cy, ringRadius - strokeWidth * 0.5f, paint);
 
         // Inner thumb — substantial translucent white disc with a thin rim so it visually pops
-        // against the dark ring fill. When a GameHub layout override is active and the stick
-        // isn't being touched, snap the thumb to the overridden center; getCurrentPosition() is
-        // otherwise seeded from the saved profile coordinates and would draw off-center.
-        float thumbX;
-        float thumbY;
-        if (engaged) {
-          thumbX = getCurrentPosition().x;
-          thumbY = getCurrentPosition().y;
-        } else if (layoutOverride != null) {
-          thumbX = cx;
-          thumbY = cy;
-        } else {
-          thumbX = getCurrentPosition().x;
-          thumbY = getCurrentPosition().y;
-        }
-        // Thumb radius at ~48% of outer ring — the user reported the previous 45% looked too
-        // small. Matches GameHub's reference of roughly 0.43-0.50.
-        float thumbRadius =
-            layoutOverride != null ? ringRadius * 0.48f : snappingSize * 3.5f * scale;
+        // against the dark ring fill. While touched it tracks the finger; at rest it snaps to the
+        // ring center.
+        float thumbX = engaged ? getCurrentPosition().x : cx;
+        float thumbY = engaged ? getCurrentPosition().y : cy;
+        // Thumb radius at ~48% of the outer ring — matches GameHub's reference of roughly
+        // 0.43-0.50 regardless of which profile supplied the stick size.
+        float thumbRadius = ringRadius * 0.48f;
         int thumbFillAlpha = (int) ((engaged ? 100 : 77) * gameHubDim * effectiveOpacity);
         int thumbFill = hasAccent
             ? ColorUtils.setAlphaComponent(accent, thumbFillAlpha)
@@ -1065,75 +1032,32 @@ return boundingBox;
         float cx = boundingBox.centerX();
         float cy = boundingBox.centerY();
 
-        // GameHub override: draw 4 detached pentagonal arrows at the cardinal edges of the bbox.
-        if (layoutOverride != null && layoutOverride.shape == GameHubLayout.RenderShape.DPAD_CROSS) {
-          float radius = Math.min(boundingBox.width(), boundingBox.height()) * 0.5f;
-          // Per-arrow fill + glass vignette so each arrow has its own inner-shadow centroid;
-          // a single radial gradient across the whole cluster would put the bright spot in the
-          // gap between arrows rather than inside each one.
-          float[] arrowCenter = new float[2];
-          float arrowGradR = radius * 0.5f;
-          for (int side = 0; side < 4; side++) {
-            path.reset();
-            GameHubLayout.buildDpadArrow(path, side, cx, cy, radius);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(fillColor);
-            canvas.drawPath(path, paint);
-            if (engaged) {
-              paint.setColor(pressedFillColor);
-              canvas.drawPath(path, paint);
-            }
-            if (glassEdgeAlpha > 0) {
-              GameHubLayout.dpadArrowCenter(side, cx, cy, radius, arrowCenter);
-              drawGameHubGlassOnPath(
-                  canvas, paint, path, arrowCenter[0], arrowCenter[1], arrowGradR, glassEdgeAlpha);
-            }
-          }
-          // Combined stroke pass for all four arrows.
-          GameHubLayout.buildDpadArrows(path, cx, cy, radius);
-          paint.setStyle(Paint.Style.STROKE);
-          paint.setColor(engaged ? pressedStrokeColor : strokeColor);
-          canvas.drawPath(path, paint);
-          break;
-        } else {
-          // Same dpad geometry as ORIGINAL (used when no override applies — e.g. mixed profiles).
-          float offsetX = snappingSize * 2 * scale;
-          float offsetY = snappingSize * 3 * scale;
-          float start = snappingSize * scale;
+        // GameHub d-pad: 4 detached pentagonal arrows at the cardinal edges of the bbox. This is
+        // the GameHub style's d-pad shape — applied wherever the profile places the d-pad.
+        float radius = Math.min(boundingBox.width(), boundingBox.height()) * 0.5f;
+        // Per-arrow fill + glass vignette so each arrow has its own inner-shadow centroid;
+        // a single radial gradient across the whole cluster would put the bright spot in the
+        // gap between arrows rather than inside each one.
+        float[] arrowCenter = new float[2];
+        float arrowGradR = radius * 0.5f;
+        for (int side = 0; side < 4; side++) {
           path.reset();
-          path.moveTo(cx, cy - start);
-          path.lineTo(cx - offsetX, cy - offsetY);
-          path.lineTo(cx - offsetX, boundingBox.top);
-          path.lineTo(cx + offsetX, boundingBox.top);
-          path.lineTo(cx + offsetX, cy - offsetY);
-          path.close();
-          path.moveTo(cx - start, cy);
-          path.lineTo(cx - offsetY, cy - offsetX);
-          path.lineTo(boundingBox.left, cy - offsetX);
-          path.lineTo(boundingBox.left, cy + offsetX);
-          path.lineTo(cx - offsetY, cy + offsetX);
-          path.close();
-          path.moveTo(cx, cy + start);
-          path.lineTo(cx - offsetX, cy + offsetY);
-          path.lineTo(cx - offsetX, boundingBox.bottom);
-          path.lineTo(cx + offsetX, boundingBox.bottom);
-          path.lineTo(cx + offsetX, cy + offsetY);
-          path.close();
-          path.moveTo(cx + start, cy);
-          path.lineTo(cx + offsetY, cy - offsetX);
-          path.lineTo(boundingBox.right, cy - offsetX);
-          path.lineTo(boundingBox.right, cy + offsetX);
-          path.lineTo(cx + offsetY, cy + offsetX);
-          path.close();
-        }
-
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(fillColor);
-        canvas.drawPath(path, paint);
-        if (engaged) {
-          paint.setColor(pressedFillColor);
+          GameHubLayout.buildDpadArrow(path, side, cx, cy, radius);
+          paint.setStyle(Paint.Style.FILL);
+          paint.setColor(fillColor);
           canvas.drawPath(path, paint);
+          if (engaged) {
+            paint.setColor(pressedFillColor);
+            canvas.drawPath(path, paint);
+          }
+          if (glassEdgeAlpha > 0) {
+            GameHubLayout.dpadArrowCenter(side, cx, cy, radius, arrowCenter);
+            drawGameHubGlassOnPath(
+                canvas, paint, path, arrowCenter[0], arrowCenter[1], arrowGradR, glassEdgeAlpha);
+          }
         }
+        // Combined stroke pass for all four arrows.
+        GameHubLayout.buildDpadArrows(path, cx, cy, radius);
         paint.setStyle(Paint.Style.STROKE);
         paint.setColor(engaged ? pressedStrokeColor : strokeColor);
         canvas.drawPath(path, paint);

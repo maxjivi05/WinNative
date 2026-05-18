@@ -29,7 +29,7 @@ public enum LabelTheme {
   }
 
   public static String[] displayNames() {
-    return new String[] {"Default", "Xbox", "PlayStation"};
+    return new String[] {"Original", "Xbox", "PlayStation"};
   }
 
   /** Returns the override color for a binding, or {@code 0} if this theme doesn't override it. */

@@ -3359,19 +3359,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     @Override
                     public void onInputControlsEditClick() {
                         ControlsProfile activeProfile = inputControlsView != null ? inputControlsView.getProfile() : null;
-                        // Built-in (asset-shipped) profiles are read-only — we silently duplicate
-                        // them before opening the editor and switch the active selection to the
-                        // copy so subsequent saves don't try to mutate read-only state.
-                        if (InputControlsManager.isBuiltinProfile(activeProfile) && inputControlsManager != null) {
-                            ControlsProfile copy = inputControlsManager.duplicateProfile(activeProfile);
-                            if (copy != null) {
-                                showInputControls(copy);
-                                activeProfile = copy;
-                                android.widget.Toast.makeText(XServerDisplayActivity.this,
-                                        R.string.input_controls_edit_duplicating_builtin,
-                                        android.widget.Toast.LENGTH_SHORT).show();
-                            }
-                        }
+                        // Built-in profiles are edited in place — a pristine snapshot is kept so the
+                        // user can Reset them from the profile menu. Use Duplicate explicitly to
+                        // branch off a copy.
                         Intent intent = new Intent(XServerDisplayActivity.this, UnifiedActivity.class);
                         intent.putExtra("edit_input_controls", true);
                         intent.putExtra("selected_profile_id", activeProfile != null ? activeProfile.id : 0);
