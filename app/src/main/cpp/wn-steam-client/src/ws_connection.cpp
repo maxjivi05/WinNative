@@ -42,10 +42,17 @@ void safe_invoke(Cb& cb, Args&&... args) {
 }  // namespace
 
 WsConnection::WsConnection() : ws_(std::make_unique<ix::WebSocket>()) {
-    // Steam CM uses CMsgClientHeartBeat at the application layer for
-    // keepalive; running a second WS-level ping is redundant and wakes
-    // cellular radios needlessly.
-    ws_->setPingInterval(0);
+    // WS-level ping interval. This is NOT needed for keepalive — Steam CM
+    // uses its own app-layer CMsgClientHeartBeat — but IXWebSocket reuses
+    // this value as the transport poll() timeout: WebSocketTransport::poll()
+    // sets `lastingTimeoutDelayInMs = _pingIntervalSecs` while the socket is
+    // OPEN. A value of 0 therefore makes the transport worker thread call
+    // poll() with a 0 ms timeout, so ppoll() returns instantly and the run
+    // loop busy-spins a full CPU core (measured: 100% of one core, ~99 C).
+    // Keep it positive so poll() actually blocks. 60 s = one tiny ping frame
+    // per minute, which is negligible next to the ~9 s app heartbeat that
+    // already wakes the radio far more often.
+    ws_->setPingInterval(60);
 
     // Do NOT add a subprotocol — Steam rejects WebSocket upgrades that
     // include Sec-WebSocket-Protocol headers it did not request.
