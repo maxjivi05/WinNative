@@ -400,17 +400,30 @@ class WnSteamSession : AutoCloseable {
                 conn.disconnect()
             }
             // fileSize != rawFileSize → Steam served a single-entry zip.
-            if (fileSize != rawFileSize && raw.isNotEmpty()) {
-                java.util.zip.ZipInputStream(raw.inputStream()).use { zin ->
-                    zin.nextEntry ?: run {
-                        android.util.Log.w("WnSteamSession", "cloud file $filename: empty zip")
-                        return null
+            val body =
+                if (fileSize != rawFileSize && raw.isNotEmpty()) {
+                    java.util.zip.ZipInputStream(raw.inputStream()).use { zin ->
+                        zin.nextEntry ?: run {
+                            android.util.Log.w("WnSteamSession", "cloud file $filename: empty zip")
+                            return null
+                        }
+                        zin.readBytes()
                     }
-                    zin.readBytes()
+                } else {
+                    raw
                 }
-            } else {
-                raw
+            // Reject a short/truncated body before the caller can write it:
+            // rawFileSize is the file's true (decompressed) size, and a
+            // truncated HTTP read returns partial bytes without throwing.
+            // A partial save must never atomically replace a good local one.
+            if (body.size != rawFileSize) {
+                android.util.Log.w(
+                    "WnSteamSession",
+                    "cloud file $filename: size mismatch (got ${body.size}, expected $rawFileSize) — rejecting",
+                )
+                return null
             }
+            body
         } catch (e: Exception) {
             android.util.Log.w("WnSteamSession", "cloud file download failed: $filename", e)
             null
