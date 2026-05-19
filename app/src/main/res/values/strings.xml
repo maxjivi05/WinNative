@@ -118,6 +118,9 @@
     <string name="store_game_verify_files">Verify Files</string>
     <string name="store_game_verify_started">Verifying %1$s — check the Downloads tab</string>
     <string name="store_game_steam_options">Steam options</string>
+    <string name="store_game_verify_complete">Verify Files Complete</string>
+    <string name="store_game_verify_failed_notice">Verify Files Failed</string>
+    <string name="store_game_progress_background_hint">You can close this — it keeps running. Check the Downloads tab any time.</string>
     <string name="store_game_download_already_active">This game is already downloading. Cancel the current download before adding DLC.</string>
     <string name="common_ui_select">Select</string>
     <string name="common_ui_storage_roots">Storage Roots</string>

@@ -321,6 +321,27 @@ class UnifiedActivity :
     var libraryPlaytimeRefreshSignal by mutableIntStateOf(0)
     private var hasCompletedInitialResume = false
 
+    // Verify Files / task progress pop-up state, hosted at the activity root
+    // (see [TaskProgressHost]) so it survives game-detail dialog teardown — a
+    // verify completing fires LibraryInstallStatusChanged, which refreshes the
+    // library and would otherwise kill a dialog-scoped progress watcher before
+    // it observes COMPLETE.
+    private var taskProgressInfo by mutableStateOf<DownloadInfo?>(null)
+    private var taskProgressGameName by mutableStateOf("")
+    private var taskProgressLabel by mutableStateOf("")
+    private var taskProgressShown by mutableStateOf(false)
+    private var taskDoneMessage by mutableStateOf<String?>(null)
+    private var taskDoneFailed by mutableStateOf(false)
+
+    /** Opens the task progress pop-up for a freshly started verify/update task. */
+    private fun showTaskProgressPopup(info: DownloadInfo, gameName: String, label: String) {
+        taskProgressInfo = info
+        taskProgressGameName = gameName
+        taskProgressLabel = label
+        taskProgressShown = true
+        taskDoneMessage = null
+    }
+
     // Freezes the library/store card chasing borders while any full-screen
     // dialog is open, so the ~120 Hz animation cost isn't paid for content
     // the user can't see or interact with.
@@ -1084,6 +1105,11 @@ class UnifiedActivity :
                         BestConfigsScreen(onBack = { rootNavController?.popBackStack() })
                     }
                 }
+
+                // Verify Files progress pop-up + completion notice. Hosted here,
+                // outside the NavHost, so it survives both hub<->settings
+                // navigation and game-detail dialog teardown.
+                TaskProgressHost()
             }
         }
         scheduleDeferredStoreBootstrap()
@@ -4749,16 +4775,17 @@ class UnifiedActivity :
                                                 withContext(Dispatchers.IO) {
                                                     SteamService.downloadAppForVerify(app.id)
                                                 }
-                                            // On a conflict (a download already running)
-                                            // downloadApp surfaces its own toast — only
-                                            // confirm here when verification actually began.
                                             if (started != null) {
-                                                com.winlator.cmod.shared.ui.toast.WinToast.show(
-                                                    context,
-                                                    context.getString(R.string.store_game_verify_started, app.name),
-                                                    android.widget.Toast.LENGTH_LONG,
+                                                // Hand off to the activity-root host so the
+                                                // pop-up + completion notice outlive this dialog.
+                                                showTaskProgressPopup(
+                                                    started,
+                                                    app.name,
+                                                    getString(R.string.store_game_verify_files),
                                                 )
                                             }
+                                            // else: a download is already running —
+                                            // downloadApp surfaced its own conflict toast.
                                         }
                                     },
                                     onCheckForUpdate = {
@@ -7291,6 +7318,320 @@ class UnifiedActivity :
         }
     }
 
+    /**
+     * The live progress body (phase label, bar, percentage, byte counts) for a
+     * game's in-flight download / verify. Observes [info] directly so it
+     * refreshes live. Rendered inside [SteamTaskProgressDialog].
+     */
+    @Composable
+    private fun SteamTaskProgressBody(info: DownloadInfo) {
+        var progress by remember(info) { mutableFloatStateOf(info.getProgress()) }
+        DisposableEffect(info) {
+            val listener: (Float) -> Unit = { progress = it }
+            info.addProgressListener(listener)
+            onDispose { info.removeProgressListener(listener) }
+        }
+        val status by info.getStatusFlow().collectAsState()
+        // The status message carries a unique suffix every progress tick;
+        // keying the byte sample on it (and on `progress`) keeps the card
+        // refreshing live — the Downloads-tab row relies on the same.
+        val statusMessage by info.getStatusMessageFlow().collectAsState()
+        val fraction = progress.coerceIn(0f, 1f)
+        val animatedFraction by animateFloatAsState(
+            targetValue = fraction,
+            animationSpec = tween(durationMillis = 400),
+            label = "steamTaskProgress",
+        )
+        val (doneBytes, totalBytes) =
+            remember(progress, statusMessage) { info.getDisplayBytesProgress() }
+
+        val phaseText =
+            when (status) {
+                DownloadPhase.VERIFYING -> "Verifying…"
+                DownloadPhase.DOWNLOADING -> "Downloading…"
+                DownloadPhase.PAUSED -> "Paused"
+                DownloadPhase.QUEUED -> "Queued"
+                DownloadPhase.PREPARING -> "Preparing…"
+                DownloadPhase.PATCHING -> "Patching…"
+                DownloadPhase.APPLYING_DATA -> "Installing…"
+                DownloadPhase.UNPACKING -> "Unpacking…"
+                DownloadPhase.FINALIZING -> "Finalizing…"
+                DownloadPhase.COMPLETE -> "Complete"
+                DownloadPhase.FAILED -> "Failed"
+                DownloadPhase.CANCELLED -> "Cancelled"
+                else -> "Working…"
+            }
+        val phaseColor =
+            when (status) {
+                DownloadPhase.COMPLETE -> StatusOnline
+                DownloadPhase.FAILED, DownloadPhase.CANCELLED -> DangerRed
+                DownloadPhase.PAUSED, DownloadPhase.QUEUED -> StatusAway
+                else -> Accent
+            }
+
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(phaseText, color = phaseColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "${(fraction * 100).toInt()}%",
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            DownloadChasingProgressBar(
+                progress = animatedFraction,
+                status = status,
+                animationsActive = true,
+                modifier = Modifier.fillMaxWidth().height(10.dp),
+            )
+            Text(
+                if (totalBytes > 0L) {
+                    "${StorageUtils.formatBinarySize(doneBytes)} / " +
+                        StorageUtils.formatBinarySize(totalBytes)
+                } else {
+                    " "
+                },
+                color = TextSecondary,
+                fontSize = 11.sp,
+            )
+        }
+    }
+
+    /**
+     * Activity-root host for the Verify Files progress pop-up + completion
+     * notice. Rendered once near the NavHost so it outlives the game-detail
+     * dialogs that start the task — the verify-completion library refresh
+     * tears those down, and a dialog-scoped watcher would miss COMPLETE.
+     *
+     * Reads the `taskProgress*` activity fields; [showTaskProgressPopup]
+     * populates them. The watcher is keyed on [taskProgressInfo] so it
+     * re-attaches if recomposed and (because the status is a StateFlow)
+     * still observes a terminal phase that landed in between.
+     */
+    @Composable
+    private fun TaskProgressHost() {
+        val info = taskProgressInfo
+        LaunchedEffect(info) {
+            if (info == null) return@LaunchedEffect
+            info.getStatusFlow().collect { st ->
+                when (st) {
+                    DownloadPhase.COMPLETE -> {
+                        taskProgressShown = false
+                        taskDoneFailed = false
+                        taskDoneMessage = getString(R.string.store_game_verify_complete)
+                        taskProgressInfo = null
+                    }
+                    DownloadPhase.FAILED -> {
+                        taskProgressShown = false
+                        taskDoneFailed = true
+                        taskDoneMessage = getString(R.string.store_game_verify_failed_notice)
+                        taskProgressInfo = null
+                    }
+                    DownloadPhase.CANCELLED -> {
+                        taskProgressShown = false
+                        taskProgressInfo = null
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        if (info != null && taskProgressShown) {
+            SteamTaskProgressDialog(
+                info = info,
+                gameName = taskProgressGameName,
+                taskLabel = taskProgressLabel,
+                onDismissRequest = { taskProgressShown = false },
+            )
+        }
+        taskDoneMessage?.let { msg ->
+            TaskCompleteDialog(
+                message = msg,
+                failed = taskDoneFailed,
+                onClose = { taskDoneMessage = null },
+            )
+        }
+    }
+
+    /**
+     * Dismissable pop-up showing live progress for a Steam task (verify /
+     * update). Tapping outside closes it — the task keeps running and stays
+     * visible in the Downloads tab. The host watches the task to completion
+     * separately and shows [TaskCompleteDialog] when it finishes.
+     */
+    @Composable
+    private fun SteamTaskProgressDialog(
+        info: DownloadInfo,
+        gameName: String,
+        taskLabel: String,
+        onDismissRequest: () -> Unit,
+    ) {
+        Dialog(
+            onDismissRequest = onDismissRequest,
+            properties =
+                DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false,
+                ),
+        ) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.6f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onDismissRequest() }
+                        .windowInsetsPadding(WindowInsets.navigationBars),
+                contentAlignment = Alignment.Center,
+            ) {
+                Surface(
+                    modifier =
+                        Modifier
+                            .widthIn(min = 300.dp, max = 380.dp)
+                            .fillMaxWidth(0.92f)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) {},
+                    shape = RoundedCornerShape(16.dp),
+                    color = CardDark,
+                    border = BorderStroke(1.dp, CardBorder),
+                    tonalElevation = 8.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    taskLabel.uppercase(),
+                                    color = TextSecondary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.9.sp,
+                                )
+                                Text(
+                                    gameName,
+                                    color = TextPrimary,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            IconButton(onClick = onDismissRequest, modifier = Modifier.size(34.dp)) {
+                                Icon(
+                                    Icons.Outlined.Close,
+                                    contentDescription = "Close",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                        SteamTaskProgressBody(info)
+                        Text(
+                            stringResource(R.string.store_game_progress_background_hint),
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Small completion notice ("Verify Files Complete" / "… Failed") with a
+     * single Close button. Shown by the host once a watched task finishes.
+     */
+    @Composable
+    private fun TaskCompleteDialog(message: String, failed: Boolean, onClose: () -> Unit) {
+        Dialog(
+            onDismissRequest = onClose,
+            properties =
+                DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false,
+                ),
+        ) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.6f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onClose() }
+                        .windowInsetsPadding(WindowInsets.navigationBars),
+                contentAlignment = Alignment.Center,
+            ) {
+                Surface(
+                    modifier =
+                        Modifier
+                            .widthIn(min = 280.dp, max = 340.dp)
+                            .fillMaxWidth(0.86f)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) {},
+                    shape = RoundedCornerShape(16.dp),
+                    color = CardDark,
+                    border = BorderStroke(1.dp, CardBorder),
+                    tonalElevation = 8.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(22.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            if (failed) Icons.Outlined.Warning else Icons.Outlined.CheckCircle,
+                            contentDescription = null,
+                            tint = if (failed) DangerRed else StatusOnline,
+                            modifier = Modifier.size(42.dp),
+                        )
+                        Text(
+                            message,
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                        )
+                        Surface(
+                            modifier =
+                                Modifier
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .clickable(onClick = onClose),
+                            color = Accent.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(9.dp),
+                            border = BorderStroke(1.dp, Accent.copy(alpha = 0.4f)),
+                        ) {
+                            Text(
+                                "Close",
+                                color = Accent,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 10.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @Composable
     private fun DownloadCancelWarningMenu(
         expanded: Boolean,
@@ -7903,9 +8244,20 @@ class UnifiedActivity :
                             )
                             return@StoreGameDetailScreen
                         }
-                        scope.launch(Dispatchers.IO) {
-                            SteamService.downloadAppForVerify(app.id)
-                            withContext(Dispatchers.Main) { onDismissRequest() }
+                        scope.launch {
+                            val started =
+                                withContext(Dispatchers.IO) {
+                                    SteamService.downloadAppForVerify(app.id)
+                                }
+                            if (started != null) {
+                                // Hand off to the activity-root host so the
+                                // pop-up + completion notice outlive this dialog.
+                                showTaskProgressPopup(
+                                    started,
+                                    app.name,
+                                    getString(R.string.store_game_verify_files),
+                                )
+                            }
                         }
                     },
                     onDownloadUpdate = {

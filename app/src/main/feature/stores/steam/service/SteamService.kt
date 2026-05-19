@@ -2295,7 +2295,10 @@ class SteamService : Service() {
                     )
                 }
             }
-            return downloadJobs[appId]
+            // Return null so callers can tell the request was rejected. Returning the
+            // pre-existing job here would let a verify/update pop-up latch onto an
+            // unrelated in-flight download and mislabel it.
+            return null
         }
 
         fun downloadApp(
