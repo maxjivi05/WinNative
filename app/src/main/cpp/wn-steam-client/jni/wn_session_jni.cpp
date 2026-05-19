@@ -373,7 +373,10 @@ struct SessionHandle {
         if (cs) cs->cancel();
         if (qs) qs->cancel();
 
-        // 4. Drop the Kotlin observer ref.
+        // 4. Drop the Kotlin state-observer ref. Step 1 already disconnected
+        //    the client, so it can no longer be invoked. (The library
+        //    observer owns its global ref via a shared_ptr deleter — see
+        //    nativeSetLibraryObserver — so it needs no teardown here.)
         if (state_observer && g_vm) {
             AttachScope a(g_vm);
             if (a.env) a.env->DeleteGlobalRef(state_observer);
@@ -401,6 +404,11 @@ jobject build_auth_result(JNIEnv* env, const wn_steam::AuthSessionResult& r) {
     jstring jguard    = make_str(r.new_guard_data);
     jstring jagree    = make_str(r.agreement_session_url);
 
+    // A NewStringUTF OOM leaves a pending exception; calling NewObject (or any
+    // further JNI call) with one pending is undefined behaviour. Clear it —
+    // the null jstrings simply become null fields on the result object.
+    if (env->ExceptionCheck()) env->ExceptionClear();
+
     jobject obj = env->NewObject(
         g_sess.auth_result_cls, g_sess.auth_result_ctor,
         r.success ? JNI_TRUE : JNI_FALSE,
@@ -409,6 +417,7 @@ jobject build_auth_result(JNIEnv* env, const wn_steam::AuthSessionResult& r) {
         static_cast<jlong>(r.steamid),
         r.had_remote_interaction ? JNI_TRUE : JNI_FALSE,
         jagree);
+    if (env->ExceptionCheck()) env->ExceptionClear();
 
     if (jerr)     env->DeleteLocalRef(jerr);
     if (jaccount) env->DeleteLocalRef(jaccount);
@@ -665,7 +674,10 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativePrepare
         if (cb && g_sess.prepare_cb_on) {
             jstring err = env->NewStringUTF("session closed");
             env->CallVoidMethod(cb, g_sess.prepare_cb_on, JNI_FALSE, err);
-            env->DeleteLocalRef(err);
+            // Clear a Kotlin-thrown exception so it doesn't propagate into an
+            // unrelated frame when this JNI call returns.
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (err) env->DeleteLocalRef(err);
         }
         return;
     }
@@ -723,7 +735,10 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeDownloa
             env->CallVoidMethod(listener, g_sess.download_complete,
                                 JNI_FALSE, jerr, static_cast<jlong>(0),
                                 static_cast<jint>(0), static_cast<jint>(0));
-            env->DeleteLocalRef(jerr);
+            // Clear a Kotlin-thrown exception so it doesn't propagate into an
+            // unrelated frame when this JNI call returns.
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (jerr) env->DeleteLocalRef(jerr);
         }
     };
     if (!s || !s->client) { fail_now("session closed"); return; }
@@ -2106,15 +2121,6 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeGetLibr
     return env->NewStringUTF(s->client->library().snapshot_json().c_str());
 }
 
-// Holder for the per-session library observer global ref. WnSteamSession is
-// the unique owner; we just store the ref on the wrapped session struct.
-// (Observer is stored as a single global ref — only the latest set_observer
-//  call wins.)
-struct LibraryObserverHolder {
-    JavaVM* vm = nullptr;
-    jobject obs = nullptr;
-};
-
 JNIEXPORT void JNICALL
 Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeSetLibraryObserver(
         JNIEnv* env, jclass /*cls*/, jlong h, jobject observer) {
@@ -2124,26 +2130,33 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeSetLibr
 
     JavaVM* vm = nullptr;
     env->GetJavaVM(&vm);
-    // Capture the observer into the C++ store's SnapshotObserver. The store
-    // calls it from whichever thread invoked the ingest_* method (channel
-    // worker in practice). We attach to the JVM, invoke onLibraryChanged,
-    // detach.
+
     if (!observer) {
         s->client->library().set_observer(nullptr);
         return;
     }
-    jobject obs_global = env->NewGlobalRef(observer);
-    s->client->library().set_observer([vm, obs_global]() {
+
+    // The observer global ref is owned by a shared_ptr whose deleter runs
+    // DeleteGlobalRef. The installed lambda holds one share; WnLibraryStore::
+    // notify_() copies the lambda (and thus the share) under its lock before
+    // invoking, so an in-flight callback keeps the ref alive even if the
+    // observer is swapped or cleared concurrently. The ref is freed exactly
+    // once — when the last share drops (the store replacing/destroying the
+    // observer, after any in-flight notify finishes). No leak, no UAF.
+    std::shared_ptr<_jobject> obs_ref(
+        env->NewGlobalRef(observer),
+        [vm](jobject ref) {
+            if (!ref || !vm) return;
+            AttachScope scope(vm);
+            if (scope.env) scope.env->DeleteGlobalRef(ref);
+        });
+    s->client->library().set_observer([vm, obs_ref]() {
+        if (!obs_ref) return;
         AttachScope scope(vm);
         if (!scope.env) return;
-        scope.env->CallVoidMethod(obs_global, g_sess.library_obs_changed);
+        scope.env->CallVoidMethod(obs_ref.get(), g_sess.library_obs_changed);
         if (scope.env->ExceptionCheck()) scope.env->ExceptionClear();
     });
-    // Note: previous observer's global ref (if any) leaks once per swap. The
-    // typical use case sets the observer ONCE per session, so this is fine.
-    // A future refactor can store the ref on the session struct and free it
-    // on destroy / re-set.
-    (void)obs_global;
 }
 
 JNIEXPORT jint JNICALL

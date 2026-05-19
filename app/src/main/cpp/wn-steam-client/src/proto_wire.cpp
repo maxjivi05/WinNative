@@ -70,7 +70,10 @@ bool Reader::skip(WireType wt) noexcept {
         case WireType::LengthDelimited: {
             auto len = varint();
             if (!len) return false;
-            if (pos_ + *len > buf_.size()) { ok_ = false; return false; }
+            // Overflow-safe bounds check: *len is an untrusted 64-bit varint,
+            // so `pos_ + *len` can wrap. pos_ <= buf_.size() is an invariant
+            // (every advance is bounds-checked), so the subtraction is safe.
+            if (*len > buf_.size() - pos_) { ok_ = false; return false; }
             pos_ += *len;
             return true;
         }
@@ -106,7 +109,9 @@ std::optional<uint64_t> Reader::fixed64() noexcept {
 std::optional<std::span<const uint8_t>> Reader::bytes() noexcept {
     auto len = varint();
     if (!len) return std::nullopt;
-    if (pos_ + *len > buf_.size()) { ok_ = false; return std::nullopt; }
+    // Overflow-safe bounds check (see skip()): *len is an untrusted 64-bit
+    // varint; `pos_ + *len` can wrap. pos_ <= buf_.size() always holds.
+    if (*len > buf_.size() - pos_) { ok_ = false; return std::nullopt; }
     auto out = buf_.subspan(pos_, *len);
     pos_ += *len;
     return out;

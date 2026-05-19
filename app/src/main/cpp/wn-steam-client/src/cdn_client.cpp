@@ -178,6 +178,8 @@ CdnManifestResult CdnClient::fetch_manifest(
     const CURLcode rc = curl_easy_perform(curl);
     long http_status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+    curl_off_t content_length = -1;
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
     result.http_status = static_cast<int>(http_status);
     curl_easy_cleanup(curl);
 
@@ -191,6 +193,17 @@ CdnManifestResult CdnClient::fetch_manifest(
         WN_LOGE("manifest fetch HTTP %ld depot=%u gid=%llu host=%s",
                 http_status, depot_id,
                 static_cast<unsigned long long>(manifest_id), host.c_str());
+        return result;
+    }
+    // Reject a truncated body: when the server declared a Content-Length the
+    // received byte count must match it exactly. A connection dropped
+    // mid-transfer can still return CURLE_OK with a short body, which would
+    // otherwise hand a partial manifest to ContentManifest::parse.
+    if (content_length >= 0 &&
+        static_cast<curl_off_t>(body.size()) != content_length) {
+        result.error = "manifest body truncated (length mismatch)";
+        WN_LOGE("manifest length mismatch depot=%u: got %zu expected %lld",
+                depot_id, body.size(), static_cast<long long>(content_length));
         return result;
     }
 
@@ -337,6 +350,8 @@ CdnChunkResult do_fetch_chunk(CURL* curl, const std::string& ca_bundle,
     const CURLcode rc = curl_easy_perform(curl);
     long http_status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+    curl_off_t content_length = -1;
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
     result.http_status = static_cast<int>(http_status);
 
     if (rc != CURLE_OK) {
@@ -348,6 +363,17 @@ CdnChunkResult do_fetch_chunk(CURL* curl, const std::string& ca_bundle,
         result.error = "non-200 HTTP status";
         WN_LOGE("chunk fetch HTTP %ld depot=%u chunk=%s", http_status, depot_id,
                 sha_hex.c_str());
+        return result;
+    }
+    // Reject a truncated body before it reaches the chunk decryptor — a short
+    // body that still returned CURLE_OK must not be treated as a valid chunk.
+    // (The Adler-32 check downstream also catches this; this fails faster.)
+    if (content_length >= 0 &&
+        static_cast<curl_off_t>(body.size()) != content_length) {
+        result.error = "chunk body truncated (length mismatch)";
+        WN_LOGE("chunk length mismatch depot=%u chunk=%s: got %zu expected %lld",
+                depot_id, sha_hex.c_str(), body.size(),
+                static_cast<long long>(content_length));
         return result;
     }
     result.data = std::move(body);
