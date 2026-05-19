@@ -214,6 +214,10 @@ class SteamService : Service() {
     @Volatile private var appInForeground = true
     @Volatile private var suspendedForBackground = false
 
+    // Cancellable timer that defers the background suspend decision by
+    // BACKGROUND_IDLE_GRACE_MS — see scheduleBackgroundSuspendCheck.
+    @Volatile private var backgroundIdleJob: Job? = null
+
     private val appPicsChannel =
         Channel<List<PICSRequest>>(
             capacity = 1_000,
@@ -287,6 +291,14 @@ class SteamService : Service() {
         // bring-up attempts (with exponential backoff between them) rather
         // than retrying a doomed logon forever.
         private const val CONNECT_LOGON_MAX_ATTEMPTS = 8
+
+        // Grace period after the app is backgrounded before the Steam session
+        // is allowed to suspend. A brief app-switch (well under this) never
+        // disconnects the session, so it isn't forced to reconnect on return —
+        // that disconnect/reconnect thrash is the unnecessary battery drain.
+        // While a connection-critical operation is running the suspend check
+        // simply repeats once per interval until the work is done.
+        private const val BACKGROUND_IDLE_GRACE_MS = 60_000L
 
         const val INVALID_APP_ID: Int = Int.MAX_VALUE
         const val INVALID_PKG_ID: Int = Int.MAX_VALUE
@@ -6315,14 +6327,14 @@ class SteamService : Service() {
         DownloadCoordinator.init(db)
         DownloadCoordinator.registerDispatcher(DownloadRecord.STORE_STEAM, coordinatorDispatcher)
 
-        // Re-evaluate the background-suspend decision whenever a download
-        // changes state. A download that kept the session awake while the
-        // app is backgrounded can finish / pause — the session should then
-        // be allowed to sleep. Event-driven (no polling): the collector
-        // suspends between emissions.
+        // Re-arm the background idle timer whenever a download changes state.
+        // A download that kept the session awake while the app is backgrounded
+        // can finish / pause — re-arming ensures the session is re-evaluated
+        // (and suspended once idle) without waiting on the running timer's
+        // current interval. The grace delay still applies.
         scope.launch {
             DownloadCoordinator.changes.collect {
-                if (!appInForeground) maybeSuspendForBackground()
+                if (!appInForeground) scheduleBackgroundSuspendCheck()
             }
         }
     }
@@ -6434,6 +6446,10 @@ class SteamService : Service() {
      */
     private fun handleAppForegrounded() {
         appInForeground = true
+        // Cancel any pending suspend timer — the app is back, so the session
+        // must stay up regardless of how long it was minimized.
+        backgroundIdleJob?.cancel()
+        backgroundIdleJob = null
         if (!suspendedForBackground) return
         suspendedForBackground = false
         Timber.i("App foregrounded — waking the WN-Steam-Client session")
@@ -6443,31 +6459,66 @@ class SteamService : Service() {
         }
     }
 
-    /** App went to the background — evaluate whether the session may sleep. */
+    /** App went to the background — arm the deferred suspend check. */
     private fun handleAppBackgrounded() {
         appInForeground = false
-        scope.launch { maybeSuspendForBackground() }
+        scheduleBackgroundSuspendCheck()
     }
 
     /**
-     * Suspend the Steam session while the app is backgrounded so it draws no
-     * power — UNLESS real work still needs it: a download actively
-     * transferring, or a running game session. Paused / queued downloads do
-     * not count (nothing is on the wire for them). Suspending disconnects
-     * the C++ session and cancels every reconnect / PICS loop; the session
-     * wakes again from [handleAppForegrounded]. Re-run whenever a condition
-     * changes (download finishes, game exits) so a session kept awake for
-     * work goes to sleep once that work is done.
+     * Arm (or re-arm) the background idle timer. After [BACKGROUND_IDLE_GRACE_MS]
+     * of the app staying backgrounded, [maybeSuspendForBackground] decides
+     * whether the Steam session may sleep. If a connection-critical operation
+     * is still running at that point the check simply repeats once per grace
+     * interval until the work finishes — so nothing has to hook every
+     * operation's completion. A foreground event cancels this timer.
      */
-    private suspend fun maybeSuspendForBackground() {
-        if (appInForeground || isStopping || isLoggingOut || suspendedForBackground) return
-        if (DownloadCoordinator.hasActiveDownload()) {
-            Timber.i("App backgrounded but a download is active — staying connected")
-            return
+    private fun scheduleBackgroundSuspendCheck() {
+        backgroundIdleJob?.cancel()
+        if (appInForeground || isStopping || isLoggingOut) return
+        backgroundIdleJob =
+            scope.launch {
+                while (isActive) {
+                    delay(BACKGROUND_IDLE_GRACE_MS)
+                    if (appInForeground || isStopping || isLoggingOut || suspendedForBackground) {
+                        return@launch
+                    }
+                    // Suspended → done. Still busy → loop and re-check later.
+                    if (maybeSuspendForBackground()) return@launch
+                }
+            }
+    }
+
+    /**
+     * Returns a human-readable reason the Steam connection must stay open, or
+     * null when it is safe to suspend. Covers everything that would break or
+     * corrupt data if the CM session dropped mid-operation:
+     *  - an actively transferring game download (paused/queued do not count),
+     *  - a running game session,
+     *  - an in-flight cloud save sync — a download/restore or an upload, which
+     *    must never be interrupted or the save file can be left corrupt.
+     */
+    private fun connectionCriticalWork(): String? =
+        when {
+            DownloadCoordinator.hasActiveDownload() -> "a download is active"
+            PluviaApp.isGameSessionActive() -> "a game session is running"
+            syncInProgressApps.values.any { it.get() } -> "a cloud save sync is in progress"
+            else -> null
         }
-        if (PluviaApp.isGameSessionActive()) {
-            Timber.i("App backgrounded but a game is running — staying connected")
-            return
+
+    /**
+     * Suspend the Steam session while the app is backgrounded so it draws no
+     * power — UNLESS [connectionCriticalWork] reports work that still needs
+     * the connection. Suspending disconnects the C++ session and cancels
+     * every reconnect / PICS loop; the session wakes again from
+     * [handleAppForegrounded]. Returns true if the session was suspended.
+     */
+    private fun maybeSuspendForBackground(): Boolean {
+        if (appInForeground || isStopping || isLoggingOut || suspendedForBackground) return false
+        val keepAliveReason = connectionCriticalWork()
+        if (keepAliveReason != null) {
+            Timber.i("App backgrounded but %s — keeping the Steam session connected", keepAliveReason)
+            return false
         }
         Timber.i("App backgrounded and idle — suspending WN-Steam-Client session to save battery")
         suspendedForBackground = true
@@ -6477,6 +6528,7 @@ class SteamService : Service() {
         picsChangesCheckerJob?.cancel()
         picsGetProductInfoJob?.cancel()
         wnSession?.let { s -> runCatching { s.disconnect() } }
+        return true
     }
 
     private suspend fun stop() {
@@ -6517,6 +6569,8 @@ class SteamService : Service() {
         reconnectJob = null
         stableConnectionJob?.cancel()
         stableConnectionJob = null
+        backgroundIdleJob?.cancel()
+        backgroundIdleJob = null
         suspendedForBackground = false
         appInForeground = true
 
