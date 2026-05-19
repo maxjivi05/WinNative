@@ -457,6 +457,16 @@ object SteamUtils {
             Timber.d(e, "Inventory items generation skipped for appId=$appId")
         }
 
+        // Steam Workshop mods → mods.json + mods/<id>/ + mod_images/<id>/
+        // (best-effort). Links any content staged by the Workshop browser into
+        // this steam_settings dir so gbe_fork's emulated ISteamUGC sees it.
+        runCatching {
+            com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
+                .generate(context, appId, settingsDir)
+        }.onFailure { e ->
+            Timber.d(e, "Workshop mods generation skipped for appId=$appId")
+        }
+
         // Special save-location symlinks
         ensureSaveLocationsForGames(context, appId)
     }

@@ -65,6 +65,7 @@ import com.winlator.cmod.feature.stores.steam.wnsteam.WnLibraryStore
 import com.winlator.cmod.feature.stores.steam.wnsteam.WnQrCallback
 import com.winlator.cmod.feature.stores.steam.wnsteam.WnSteamSession
 import com.winlator.cmod.feature.stores.steam.wnsteam.WnSteamStateObserver
+import com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.resume
@@ -4703,6 +4704,128 @@ class SteamService : Service() {
             Timber.i("Inventory items generated for app $appId: $count definition(s)")
         }.onFailure { e ->
             Timber.w(e, "Failed to generate inventory items for appId=$appId")
+        }
+
+        /**
+         * Fetch the signed-in account's subscribed Steam Workshop items for
+         * [appId] as a JSON array string (see
+         * [WnSteamSession.getSubscribedWorkshopItems]). Brings up a CM session
+         * if needed. null when not logged on / on transport failure; "[]" when
+         * the account has no subscriptions for the app.
+         */
+        suspend fun getSubscribedWorkshopItems(appId: Int): String? =
+            withWnSession { session ->
+                withContext(Dispatchers.IO) { session.getSubscribedWorkshopItems(appId) }
+            }
+
+        // Published-file-ids with an install in flight — guards against two
+        // concurrent installs of the same item wiping each other's content dir.
+        private val workshopInstallsInFlight =
+            java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+
+        /**
+         * Download and stage one subscribed Steam Workshop item for [appId].
+         * The content is fetched via the depot pipeline into the persistent
+         * staging area ([WorkshopModsGenerator]); the preview image is fetched
+         * over HTTPS; the meta marker is written LAST so a partial download is
+         * never mistaken for an installed item. Returns true on success.
+         * BLOCKING — runs on Dispatchers.IO.
+         */
+        suspend fun installWorkshopItem(
+            appId: Int,
+            publishedFileId: Long,
+            manifestId: Long,
+            title: String,
+            fileSizeBytes: Long,
+            timeUpdated: Long,
+            previewUrl: String,
+        ): Boolean =
+            withContext(Dispatchers.IO) {
+                if (manifestId == 0L) {
+                    Timber.w("Workshop item $publishedFileId has no content manifest — cannot install")
+                    return@withContext false
+                }
+                if (!workshopInstallsInFlight.add(publishedFileId)) {
+                    Timber.w("Workshop item $publishedFileId — install already in progress")
+                    return@withContext false
+                }
+                try {
+                    val ctx = instance?.applicationContext ?: return@withContext false
+                    val caPath = CaBundleExtractor.ensureBundle(ctx)
+                    val content = WorkshopModsGenerator.contentDir(ctx, appId, publishedFileId)
+                    val meta = WorkshopModsGenerator.metaFile(ctx, appId, publishedFileId)
+                    val preview = WorkshopModsGenerator.previewFile(ctx, appId, publishedFileId)
+                    // A (re)install starts clean: drop any stale marker / content / preview.
+                    meta.delete()
+                    preview.delete()
+                    content.deleteRecursively()
+                    content.mkdirs()
+
+                    val bytes =
+                        withWnSession { session ->
+                            session.downloadWorkshopItem(appId, manifestId, content.absolutePath, caPath)
+                        } ?: -1L
+                    if (bytes < 0L) {
+                        Timber.w("Workshop content download failed for item $publishedFileId (app $appId)")
+                        content.deleteRecursively()
+                        return@withContext false
+                    }
+                    // The depot downloader leaves a .DepotDownloader resume folder in
+                    // the install dir — drop it so it isn't exposed as mod content.
+                    File(content, ".DepotDownloader").deleteRecursively()
+
+                    // Preview image — best-effort; a missing preview must not fail the install.
+                    if (previewUrl.isNotBlank()) {
+                        runCatching { downloadWorkshopPreview(previewUrl, preview) }
+                            .onFailure { Timber.d(it, "Workshop preview download skipped for $publishedFileId") }
+                    }
+
+                    // Meta marker written LAST — its presence means "fully installed".
+                    meta.writeText(
+                        org.json.JSONObject()
+                            .put("title", title)
+                            .put("fileSize", fileSizeBytes)
+                            .put("timeUpdated", timeUpdated)
+                            .put("manifestId", manifestId)
+                            .toString(),
+                        Charsets.UTF_8,
+                    )
+                    Timber.i("Workshop item $publishedFileId installed for app $appId ($bytes bytes)")
+                    true
+                } finally {
+                    workshopInstallsInFlight.remove(publishedFileId)
+                }
+            }
+
+        private fun downloadWorkshopPreview(url: String, dest: File) {
+            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 30_000
+            conn.instanceFollowRedirects = true
+            try {
+                if (conn.responseCode !in 200..299) return
+                val type = conn.contentType.orEmpty()
+                if (type.isNotEmpty() && !type.startsWith("image/")) return
+                dest.parentFile?.mkdirs()
+                val maxBytes = 16L * 1024 * 1024  // cap — a preview image is never this large
+                var over = false
+                conn.inputStream.use { input ->
+                    dest.outputStream().use { out ->
+                        val buf = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            total += n
+                            if (total > maxBytes) { over = true; break }
+                            out.write(buf, 0, n)
+                        }
+                    }
+                }
+                if (over) dest.delete()
+            } finally {
+                conn.disconnect()
+            }
         }
 
         fun getGseSaveDirs(appId: Int): List<File> {

@@ -18,6 +18,7 @@
 #include "wn_steam/job_manager.h"
 #include "wn_steam/pb/ccloud.h"
 #include "wn_steam/pb/cinventory.h"
+#include "wn_steam/pb/cpublishedfile.h"
 #include "wn_steam/pb/ccontentserverdirectory.h"
 #include "wn_steam/pb/cfamilygroups.h"
 #include "wn_steam/pb/cplayer.h"
@@ -359,6 +360,18 @@ public:
     void inventory_get_item_def_meta(uint32_t app_id,
                                      ItemDefMetaCallback cb,
                                      std::chrono::seconds timeout = std::chrono::seconds{30});
+
+    // Workshop subscriptions: PublishedFile.GetUserFiles#1 with
+    // type="mysubscriptions". Returns one page of the caller's subscribed
+    // Steam Workshop items for `app_id` — the full PublishedFileDetails are
+    // inlined in the response. `page` is 1-based. nullopt on failure / not
+    // logged on. The caller paginates using the response's `total`.
+    using PublishedFileUserFilesCallback = std::function<void(
+        std::optional<pb::CPublishedFile_GetUserFiles_Response>)>;
+    void published_file_get_subscribed(uint32_t app_id, uint32_t page,
+                                       uint32_t num_per_page,
+                                       PublishedFileUserFilesCallback cb,
+                                       std::chrono::seconds timeout = std::chrono::seconds{30});
 
     // Cloud file download info: Cloud.ClientFileDownload#1. Returns the
     // HTTP(S) URL + headers to fetch a cloud file's body — the protocol

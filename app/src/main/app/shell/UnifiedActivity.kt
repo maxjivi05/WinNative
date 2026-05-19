@@ -7614,6 +7614,7 @@ class UnifiedActivity :
         var showCustomPathWarning by remember { mutableStateOf(false) }
         var isCheckingForUpdate by remember(app.id) { mutableStateOf(false) }
         var isUpdateCheckCoolingDown by remember(app.id) { mutableStateOf(false) }
+        var showWorkshopDialog by remember(app.id) { mutableStateOf(false) }
         var updateInfo by remember(app.id) { mutableStateOf<SteamService.SteamUpdateInfo?>(null) }
         var updateStatusText by remember(app.id) { mutableStateOf<String?>(null) }
         val downloadRecords by com.winlator.cmod.app.service.download.DownloadCoordinator.records.collectAsState(
@@ -7781,6 +7782,9 @@ class UnifiedActivity :
                     updateStatusText = updateStatusText,
                     isUpdateActionEnabled = updateActionEnabled,
                     isUpdateCheckCoolingDown = isUpdateCheckCoolingDown,
+                    // Shown for any installed game; titles without UGC simply
+                    // open to an empty Workshop window (handled gracefully).
+                    showWorkshop = isReallyInstalled,
                     dlcs = dlcItems,
                     selectedDlcIds = selectedDlcIds.toSet(),
                     isDlcSelectionEnabled = steamDownloadRecord == null,
@@ -7838,6 +7842,7 @@ class UnifiedActivity :
                             }
                         }
                     },
+                    onWorkshop = { showWorkshopDialog = true },
                     onDownloadUpdate = {
                         if (!updateActionEnabled || updateInfo?.hasUpdate != true) return@StoreGameDetailScreen
                         scope.launch(Dispatchers.IO) {
@@ -7911,6 +7916,138 @@ class UnifiedActivity :
                     },
                 )
             }
+        }
+
+        if (showWorkshopDialog) {
+            WorkshopDialog(
+                appId = app.id,
+                gameTitle = app.name,
+                onDismissRequest = { showWorkshopDialog = false },
+            )
+        }
+    }
+
+    @Composable
+    private fun WorkshopDialog(
+        appId: Int,
+        gameTitle: String,
+        onDismissRequest: () -> Unit,
+    ) {
+        var loadState by remember(appId) { mutableStateOf(WorkshopLoadState.LOADING) }
+        var errorMessage by remember(appId) { mutableStateOf<String?>(null) }
+        var allItems by remember(appId) { mutableStateOf<List<StoreWorkshopItem>>(emptyList()) }
+        var query by remember(appId) { mutableStateOf("") }
+        val installingIds = remember(appId) { mutableStateListOf<Long>() }
+        var reloadKey by remember(appId) { mutableStateOf(0) }
+        val scope = rememberCoroutineScope()
+
+        LaunchedEffect(appId, reloadKey) {
+            loadState = WorkshopLoadState.LOADING
+            errorMessage = null
+            // Drop any in-flight install spinners — a reload re-fetches the list.
+            installingIds.clear()
+            try {
+                val items =
+                    withContext(Dispatchers.IO) {
+                        val json = SteamService.getSubscribedWorkshopItems(appId)
+                        if (json == null) {
+                            null
+                        } else {
+                            val installed =
+                                com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
+                                    .installedItemIds(applicationContext, appId)
+                            parseWorkshopItemsJson(json, installed)
+                        }
+                    }
+                if (items == null) {
+                    errorMessage =
+                        "Couldn't load your Workshop subscriptions. " +
+                            "Make sure you're signed in to Steam and online."
+                    loadState = WorkshopLoadState.ERROR
+                } else {
+                    allItems = items
+                    loadState = WorkshopLoadState.READY
+                }
+            } catch (e: Exception) {
+                Log.w("UnifiedActivity", "Workshop load failed for appId=$appId", e)
+                errorMessage = e.message
+                loadState = WorkshopLoadState.ERROR
+            }
+        }
+
+        val filtered =
+            remember(allItems, query) {
+                val q = query.trim()
+                if (q.isBlank()) {
+                    allItems
+                } else {
+                    allItems.filter {
+                        it.title.contains(q, ignoreCase = true) ||
+                            it.author.contains(q, ignoreCase = true)
+                    }
+                }
+            }
+
+        Dialog(
+            onDismissRequest = onDismissRequest,
+            properties =
+                DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false,
+                ),
+        ) {
+            StoreWorkshopScreen(
+                gameTitle = gameTitle,
+                loadState = loadState,
+                errorMessage = errorMessage,
+                items = filtered,
+                query = query,
+                // Snapshotted here inside the Dialog content lambda: a mutation of
+                // the SnapshotStateList invalidates this scope, so .toSet() re-runs.
+                installingIds = installingIds.toSet(),
+                onQueryChange = { query = it },
+                onInstall = { id ->
+                    val item = allItems.firstOrNull { it.publishedFileId == id }
+                    if (item != null && id !in installingIds) {
+                        if (item.manifestId == 0L) {
+                            com.winlator.cmod.shared.ui.toast.WinToast.show(
+                                this@UnifiedActivity,
+                                "This Workshop item has no downloadable content",
+                                android.widget.Toast.LENGTH_SHORT,
+                            )
+                        } else {
+                            installingIds.add(id)
+                            scope.launch {
+                                val ok =
+                                    SteamService.installWorkshopItem(
+                                        appId = appId,
+                                        publishedFileId = item.publishedFileId,
+                                        manifestId = item.manifestId,
+                                        title = item.title,
+                                        fileSizeBytes = item.fileSizeBytes,
+                                        timeUpdated = item.timeUpdated,
+                                        previewUrl = item.previewImageUrl ?: "",
+                                    )
+                                if (ok) {
+                                    allItems =
+                                        allItems.map {
+                                            if (it.publishedFileId == id) it.copy(isInstalled = true) else it
+                                        }
+                                } else {
+                                    com.winlator.cmod.shared.ui.toast.WinToast.show(
+                                        this@UnifiedActivity,
+                                        "Workshop download failed — check your Steam connection",
+                                        android.widget.Toast.LENGTH_LONG,
+                                    )
+                                }
+                                installingIds.remove(id)
+                            }
+                        }
+                    }
+                },
+                onRetry = { reloadKey++ },
+                onClose = onDismissRequest,
+            )
         }
     }
 

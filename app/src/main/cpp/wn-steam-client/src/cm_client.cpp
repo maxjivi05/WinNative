@@ -748,6 +748,49 @@ void CMClient::inventory_get_item_def_meta(uint32_t app_id,
         timeout);
 }
 
+void CMClient::published_file_get_subscribed(uint32_t app_id, uint32_t page,
+                                             uint32_t num_per_page,
+                                             PublishedFileUserFilesCallback cb,
+                                             std::chrono::seconds timeout) {
+    if (state_.load() != ClientState::LoggedOn) {
+        if (cb) cb(std::nullopt);
+        return;
+    }
+    pb::CPublishedFile_GetUserFiles_Request req;
+    req.steamid    = steam_id_.load();
+    req.appid      = app_id;
+    req.page       = page;
+    req.numperpage = num_per_page;
+    req.type       = "mysubscriptions";
+    req.filetype   = 0xFFFFFFFFu;  // any Workshop file type
+
+    call_service_method(
+        "PublishedFile.GetUserFiles#1",
+        /*authed=*/true,
+        req.serialize(),
+        [app_id, page, cb = std::move(cb)](JobResult r) {
+            if (r.synthetic_failure || r.eresult != 1) {
+                WN_LOGE("workshop subs: app %u page %u failed eresult=%d",
+                        app_id, page, r.eresult);
+                if (cb) cb(std::nullopt);
+                return;
+            }
+            auto resp =
+                pb::CPublishedFile_GetUserFiles_Response::deserialize(r.body);
+            if (!resp) {
+                WN_LOGE("workshop subs: parse failed app %u page %u (%zu bytes)",
+                        app_id, page, r.body.size());
+                if (cb) cb(std::nullopt);
+                return;
+            }
+            WN_LOGI("workshop subs: app %u page %u total=%u items=%zu",
+                    app_id, page, resp->total,
+                    resp->publishedfiledetails.size());
+            if (cb) cb(std::move(resp));
+        },
+        timeout);
+}
+
 void CMClient::cloud_get_file_download_info(uint32_t app_id, std::string filename,
                                             CloudFileDownloadCallback cb,
                                             std::chrono::seconds timeout) {

@@ -285,6 +285,38 @@ class WnSteamSession : AutoCloseable {
     }
 
     /**
+     * Fetch the signed-in account's subscribed Steam Workshop items for [appId]
+     * via PublishedFile.GetUserFiles#1 (type="mysubscriptions"). Returns a JSON
+     * array string — one object per item with publishedFileId, appId, title,
+     * fileName, fileUrl, previewUrl, fileSizeBytes, hcontentFile, timeUpdated.
+     * BLOCKING (paged CM round-trips) — call off the main thread. Returns "[]"
+     * when the account has no subscriptions; null on transport failure / not
+     * logged on.
+     */
+    fun getSubscribedWorkshopItems(appId: Int): String? {
+        val h = nativeHandle.get(); if (h == 0L) return null
+        return nativeGetSubscribedWorkshopItems(h, appId)
+    }
+
+    /**
+     * Download one Steam Workshop item's content into [installDir]. The item's
+     * content is a SteamPipe depot, so this reuses the full depot pipeline;
+     * [manifestId] is the item's `hcontent_file`. BLOCKING (CM round-trips +
+     * CDN chunk transfer) — call off the main thread. Returns the bytes
+     * written, or -1 on failure / not logged on.
+     */
+    fun downloadWorkshopItem(
+        appId: Int,
+        manifestId: Long,
+        installDir: String,
+        caBundlePath: String,
+        maxWorkers: Int = 8,
+    ): Long {
+        val h = nativeHandle.get(); if (h == 0L) return -1L
+        return nativeDownloadWorkshopItem(h, appId, manifestId, installDir, caBundlePath, maxWorkers)
+    }
+
+    /**
      * Write stat / achievement values back to Steam (CMsgClientStoreUserStats2).
      * Fire-and-forget. [statIds] and [statValues] are paired and must be the
      * same length. [crcStats] must come from the matching [getUserStatsFull].
@@ -834,6 +866,18 @@ class WnSteamSession : AutoCloseable {
             appId: Int,
             caBundlePath: String,
         ): ByteArray?
+        @JvmStatic private external fun nativeGetSubscribedWorkshopItems(
+            handle: Long,
+            appId: Int,
+        ): String?
+        @JvmStatic private external fun nativeDownloadWorkshopItem(
+            handle: Long,
+            appId: Int,
+            manifestId: Long,
+            installDir: String,
+            caBundlePath: String,
+            maxWorkers: Int,
+        ): Long
         @JvmStatic private external fun nativeStoreUserStats(
             handle: Long, appId: Int, steamId: Long, crcStats: Int,
             statIds: IntArray, statValues: IntArray)

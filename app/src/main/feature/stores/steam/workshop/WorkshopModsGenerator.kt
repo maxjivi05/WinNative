@@ -1,0 +1,169 @@
+package com.winlator.cmod.feature.stores.steam.workshop
+
+import android.content.Context
+import android.system.Os
+import android.system.OsConstants
+import org.json.JSONObject
+import timber.log.Timber
+import java.io.File
+
+/**
+ * Manages installed Steam Workshop item content and generates the
+ * `steam_settings/mods.json` manifest that gbe_fork's emulated ISteamUGC reads.
+ *
+ * Downloaded content is staged persistently, OUTSIDE `steam_settings`, so it
+ * survives the per-launch regeneration of that directory:
+ *
+ *   <externalFiles>/wn_workshop/<appId>/<id>/             depot content
+ *   <externalFiles>/wn_workshop/<appId>/<id>.meta.json    install marker + metadata
+ *   <externalFiles>/wn_workshop/<appId>/<id>.preview.jpg  preview image
+ *
+ * At launch [generate] links each staged item into the game's `steam_settings`
+ * the way gbe_fork expects:
+ *
+ *   steam_settings/mods/<id>            -> symlink to the staged content
+ *   steam_settings/mod_images/<id>/preview.jpg
+ *   steam_settings/mods.json           the manifest, keyed by published-file-id
+ */
+object WorkshopModsGenerator {
+    private const val TAG = "WorkshopModsGen"
+    const val PREVIEW_FILENAME = "preview.jpg"
+
+    /** Persistent per-app staging root for downloaded Workshop content. */
+    fun stagingDir(context: Context, appId: Int): File =
+        File(context.getExternalFilesDir(null), "wn_workshop/$appId")
+
+    fun contentDir(context: Context, appId: Int, publishedFileId: Long): File =
+        File(stagingDir(context, appId), publishedFileId.toString())
+
+    fun metaFile(context: Context, appId: Int, publishedFileId: Long): File =
+        File(stagingDir(context, appId), "$publishedFileId.meta.json")
+
+    fun previewFile(context: Context, appId: Int, publishedFileId: Long): File =
+        File(stagingDir(context, appId), "$publishedFileId.preview.jpg")
+
+    /**
+     * Published-file-ids that are fully staged — a meta marker AND a content
+     * directory both present (a marker without content is a torn install and
+     * is not reported as installed).
+     */
+    fun installedItemIds(context: Context, appId: Int): Set<Long> {
+        val files = stagingDir(context, appId).listFiles() ?: return emptySet()
+        return files
+            .mapNotNull { f ->
+                if (f.isFile && f.name.endsWith(".meta.json")) {
+                    f.name.removeSuffix(".meta.json").toLongOrNull()
+                } else {
+                    null
+                }
+            }
+            .filter { contentDir(context, appId, it).isDirectory }
+            .toSet()
+    }
+
+    /**
+     * Build `steam_settings/mods.json` from the staged Workshop items and link
+     * their content + preview images into [settingsDir]. Returns the number of
+     * mods written. An empty install set writes `{}` (or removes a stale file).
+     */
+    fun generate(context: Context, appId: Int, settingsDir: File): Int {
+        val ids = installedItemIds(context, appId)
+        val modsJsonFile = File(settingsDir, "mods.json")
+        val modsDir = File(settingsDir, "mods")
+        val imagesDir = File(settingsDir, "mod_images")
+        // Drop links/images for items no longer installed so a removed mod
+        // never lingers in the game's view.
+        pruneOrphans(modsDir, ids)
+        pruneOrphans(imagesDir, ids)
+        if (ids.isEmpty()) {
+            if (modsJsonFile.exists()) modsJsonFile.writeText("{}", Charsets.UTF_8)
+            return 0
+        }
+        modsDir.mkdirs()
+        imagesDir.mkdirs()
+        val modsJson = JSONObject()
+        var written = 0
+        for (id in ids) {
+            val content = contentDir(context, appId, id)
+            if (!content.isDirectory) continue
+            val meta =
+                try {
+                    JSONObject(metaFile(context, appId, id).readText())
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Skipping workshop item %d — unreadable meta", id)
+                    continue
+                }
+
+            // Link the staged content into steam_settings/mods/<id>.
+            linkContent(content, File(modsDir, id.toString()))
+
+            // Copy the preview into steam_settings/mod_images/<id>/ (gbe_fork
+            // always resolves preview images relative to steam_settings).
+            val preview = previewFile(context, appId, id)
+            val hasPreview = preview.isFile
+            if (hasPreview) {
+                val destDir = File(imagesDir, id.toString()).apply { mkdirs() }
+                runCatching { preview.copyTo(File(destDir, PREVIEW_FILENAME), overwrite = true) }
+                    .onFailure { Timber.tag(TAG).w(it, "Preview copy failed for %d", id) }
+            }
+
+            modsJson.put(
+                id.toString(),
+                JSONObject().apply {
+                    put("title", meta.optString("title", id.toString()))
+                    put("preview_filename", if (hasPreview) PREVIEW_FILENAME else "")
+                    put("total_files_sizes", meta.optLong("fileSize", 0L))
+                    put("primary_filesize", meta.optLong("fileSize", 0L))
+                    put("time_created", meta.optLong("timeUpdated", 0L))
+                    put("time_updated", meta.optLong("timeUpdated", 0L))
+                    put(
+                        "workshop_item_url",
+                        "https://steamcommunity.com/sharedfiles/filedetails/?id=$id",
+                    )
+                },
+            )
+            written++
+        }
+        modsJsonFile.writeText(modsJson.toString(2), Charsets.UTF_8)
+        Timber.tag(TAG).i("Wrote mods.json with %d mod(s) for app %d", written, appId)
+        return written
+    }
+
+    /**
+     * Point [link] at [content] with a symlink so the (possibly large) staged
+     * content is not duplicated. Falls back to a recursive copy on filesystems
+     * that reject symlinks.
+     */
+    private fun linkContent(content: File, link: File) {
+        clearPath(link)
+        val linked = runCatching { Os.symlink(content.absolutePath, link.absolutePath) }.isSuccess
+        if (!linked) {
+            runCatching { content.copyRecursively(link, overwrite = true) }
+                .onFailure { Timber.tag(TAG).w(it, "Failed to stage mod content into %s", link) }
+        }
+    }
+
+    /** Remove every child of [dir] whose name is not a currently-installed id. */
+    private fun pruneOrphans(dir: File, ids: Set<Long>) {
+        val keep = ids.mapTo(HashSet()) { it.toString() }
+        dir.listFiles()?.forEach { child ->
+            if (child.name !in keep) clearPath(child)
+        }
+    }
+
+    /**
+     * Remove [path] whether it is a symlink, a file, or a real directory —
+     * WITHOUT ever recursing through a symlink. `lstat` (not `stat`) inspects
+     * the link itself, so a symlink is only ever unlinked, never followed:
+     * `deleteRecursively` is reached solely for a genuine directory.
+     */
+    private fun clearPath(path: File) {
+        val st = runCatching { Os.lstat(path.absolutePath) }.getOrNull() ?: return
+        when {
+            OsConstants.S_ISLNK(st.st_mode) || OsConstants.S_ISREG(st.st_mode) ->
+                runCatching { Os.remove(path.absolutePath) }
+            OsConstants.S_ISDIR(st.st_mode) ->
+                path.deleteRecursively()
+        }
+    }
+}

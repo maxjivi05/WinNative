@@ -1118,6 +1118,132 @@ static std::string cloud_to_hex(const std::vector<uint8_t>& b) {
     return o;
 }
 
+// Blocking PublishedFile.GetUserFiles#1 (type="mysubscriptions"). Walks every
+// page and returns the caller's subscribed Steam Workshop items for `app_id` as
+// a JSON array string — [{"publishedFileId","appId","title","fileName",
+// "fileUrl","previewUrl","fileSizeBytes","hcontentFile","timeUpdated"}, ...].
+// Kotlin parses it into the Workshop browser list. Returns "[]" when the
+// account has no subscriptions, or null on transport failure / not logged on.
+// Each page is a separate CM job with its own 30s timeout so fut.get() cannot
+// hang; pagination is capped so a misbehaving server cannot loop forever.
+JNIEXPORT jstring JNICALL
+Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeGetSubscribedWorkshopItems(
+        JNIEnv* env, jclass /*cls*/, jlong h, jint app_id) {
+    auto* s = from_handle(h);
+    if (!s || !s->client) return nullptr;
+    // Copy the shared_ptr so the CMClient outlives a concurrent close().
+    std::shared_ptr<wn_steam::CMClient> client = s->client;
+
+    constexpr uint32_t kPageSize = 100;
+    constexpr uint32_t kMaxPages = 50;
+
+    std::vector<wn_steam::pb::PublishedFileDetails> all;
+    uint32_t total = 0;  // latched from page 1 — a stable stop bound
+    for (uint32_t page = 1; page <= kMaxPages; ++page) {
+        std::promise<std::optional<wn_steam::pb::CPublishedFile_GetUserFiles_Response>> prom;
+        auto fut = prom.get_future();
+        // published_file_get_subscribed always invokes the callback — on
+        // success, parse failure, or the job's 30s timeout — so fut.get()
+        // cannot hang.
+        client->published_file_get_subscribed(
+            static_cast<uint32_t>(app_id), page, kPageSize,
+            [&prom](std::optional<wn_steam::pb::CPublishedFile_GetUserFiles_Response> r) {
+                prom.set_value(std::move(r));
+            });
+        auto resp = fut.get();
+        // A failure mid-paging fails the whole load: returning the pages
+        // collected so far would present a truncated list as complete.
+        if (!resp) return nullptr;
+        if (page == 1) total = resp->total;
+        for (auto& d : resp->publishedfiledetails) all.push_back(std::move(d));
+        if (resp->publishedfiledetails.empty() ||
+            (total != 0 && all.size() >= total)) {
+            break;
+        }
+    }
+
+    std::string j = "[";
+    for (size_t i = 0; i < all.size(); ++i) {
+        const auto& d = all[i];
+        if (i) j += ',';
+        j += "{\"publishedFileId\":";
+        j += std::to_string(d.publishedfileid);
+        j += ",\"appId\":";
+        j += std::to_string(d.consumer_appid != 0
+                                ? d.consumer_appid
+                                : static_cast<uint32_t>(app_id));
+        j += ",\"title\":\"";
+        j += cloud_json_escape(d.title);
+        j += "\",\"fileName\":\"";
+        j += cloud_json_escape(d.filename);
+        j += "\",\"fileUrl\":\"";
+        j += cloud_json_escape(d.file_url);
+        j += "\",\"previewUrl\":\"";
+        j += cloud_json_escape(d.preview_url);
+        j += "\",\"fileSizeBytes\":";
+        j += std::to_string(d.file_size);
+        j += ",\"hcontentFile\":";
+        j += std::to_string(d.hcontent_file);
+        j += ",\"timeUpdated\":";
+        j += std::to_string(d.time_updated);
+        j += '}';
+    }
+    j += ']';
+    return env->NewStringUTF(j.c_str());
+}
+
+// Blocking depot download of one Steam Workshop item's content. A workshop
+// item's content lives in the consumer app's SteamPipe depot — the depot id
+// is the consumer app id and the manifest id is the item's hcontent_file —
+// so the existing DepotDownloader pipeline (manifest fetch, depot key, CDN,
+// chunk writes) is reused unchanged. Returns the decompressed bytes written,
+// or -1 on failure / not logged on. `install_dir` receives the item's files
+// (flat layout, plus a .DepotDownloader resume marker). Blocking — the caller
+// runs this on a background thread (never the CM network thread).
+JNIEXPORT jlong JNICALL
+Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeDownloadWorkshopItem(
+        JNIEnv* env, jclass /*cls*/, jlong h, jint app_id, jlong manifest_id,
+        jstring jinstall_dir, jstring jca_bundle, jint max_workers) {
+    auto* s = from_handle(h);
+    if (!s || !s->client) return -1;
+    // Copy the shared_ptr so the CMClient outlives a concurrent close().
+    std::shared_ptr<wn_steam::CMClient> client = s->client;
+
+    auto jstr = [&](jstring js) -> std::string {
+        if (!js) return {};
+        const char* c = env->GetStringUTFChars(js, nullptr);
+        std::string out = c ? c : std::string();
+        if (c) env->ReleaseStringUTFChars(js, c);
+        return out;
+    };
+    const std::string install_dir = jstr(jinstall_dir);
+    const std::string ca_bundle   = jstr(jca_bundle);
+    if (install_dir.empty()) return -1;
+
+    const unsigned workers =
+        max_workers > 0 ? static_cast<unsigned>(max_workers) : 8u;
+
+    wn_steam::DepotSpec spec;
+    spec.depot_id    = static_cast<uint32_t>(app_id);          // workshop content depot
+    spec.manifest_id = static_cast<uint64_t>(manifest_id);     // hcontent_file
+
+    wn_steam::DepotDownloader dl(*client, ca_bundle);
+    auto result = dl.download(
+        static_cast<uint32_t>(app_id), {spec}, /*branch=*/"public",
+        install_dir, /*fresh=*/true, /*progress=*/{}, /*cancel=*/nullptr,
+        workers);
+    if (!result.success) {
+        WN_LOGE("workshop download: app %d manifest %llu failed: %s",
+                app_id, static_cast<unsigned long long>(manifest_id),
+                result.error.c_str());
+        return -1;
+    }
+    WN_LOGI("workshop download: app %d manifest %llu ok — %llu bytes",
+            app_id, static_cast<unsigned long long>(manifest_id),
+            static_cast<unsigned long long>(result.bytes_written));
+    return static_cast<jlong>(result.bytes_written);
+}
+
 // Blocking Cloud.GetAppFileChangelist#1. Returns the app's remote cloud-save
 // file list as a JSON object string (currentChangeNumber, pathPrefixes,
 // machineNames, files[]), or null on failure / not logged on. Like the other
