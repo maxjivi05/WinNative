@@ -37,7 +37,11 @@ struct DepotWriteResult {
 };
 
 // done/total are decompressed byte counts; total = sum of every file size.
-using DepotWriteProgress = std::function<void(uint64_t done, uint64_t total)>;
+// `verifying` is true while bytes advance from on-disk validation (the verify
+// hot path) and false while they advance from an actual CDN download — so the
+// UI can show "Verifying" vs "Downloading" accurately.
+using DepotWriteProgress =
+    std::function<void(uint64_t done, uint64_t total, bool verifying)>;
 
 // Write all files of `manifest` under `target_dir`. `manifest` must already
 // have had decrypt_filenames() applied. `depot_key` is the 32-byte AES key.

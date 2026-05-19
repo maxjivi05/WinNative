@@ -17,6 +17,10 @@ interface WnDownloadListener {
      * @param depotTotal   total file bytes of this depot
      * @param depotsDone   depots fully completed before this one
      * @param depotsTotal  total depots in this download
+     * @param verifying    true while bytes advance from on-disk validation
+     *                     (the verify pass), false while they advance from an
+     *                     actual CDN download — lets the UI show "Verifying"
+     *                     vs "Downloading" accurately
      */
     fun onProgress(
         depotId: Int,
@@ -24,6 +28,7 @@ interface WnDownloadListener {
         depotTotal: Long,
         depotsDone: Int,
         depotsTotal: Int,
+        verifying: Boolean,
     )
 
     /**

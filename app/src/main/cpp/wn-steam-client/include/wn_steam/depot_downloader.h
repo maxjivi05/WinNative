@@ -37,6 +37,8 @@ struct DepotDownloadProgress {
     uint64_t depot_total  = 0;  // total file bytes of this depot
     uint32_t depots_done  = 0;  // depots fully completed so far
     uint32_t depots_total = 0;
+    bool     verifying    = false;  // true while validating on-disk content,
+                                    // false while downloading from the CDN
 };
 
 struct DepotDownloadResult {

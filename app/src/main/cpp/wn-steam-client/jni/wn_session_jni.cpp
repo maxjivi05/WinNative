@@ -68,7 +68,7 @@ struct SessionGlobals {
     jmethodID prepare_cb_on      = nullptr;   // onPrepareResult(boolean, String)
 
     jclass    download_lis_cls   = nullptr;   // WnDownloadListener
-    jmethodID download_progress  = nullptr;   // onProgress(IJJII)V
+    jmethodID download_progress  = nullptr;   // onProgress(IJJIIZ)V
     jmethodID download_complete  = nullptr;   // onComplete(ZLjava/lang/String;JII)V
 
     jclass    library_obs_cls    = nullptr;   // WnLibraryObserver
@@ -163,7 +163,7 @@ void init_jni_session_globals_locked(JNIEnv* env) {
     g_sess.download_lis_cls = new_global_class(env, DOWNLOAD_LIS);
     if (g_sess.download_lis_cls) {
         g_sess.download_progress = env->GetMethodID(
-            g_sess.download_lis_cls, "onProgress", "(IJJII)V");
+            g_sess.download_lis_cls, "onProgress", "(IJJIIZ)V");
         g_sess.download_complete = env->GetMethodID(
             g_sess.download_lis_cls, "onComplete", "(ZLjava/lang/String;JII)V");
     }
@@ -797,7 +797,8 @@ Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSteamSession_nativeDownloa
                     static_cast<jlong>(p.depot_done),
                     static_cast<jlong>(p.depot_total),
                     static_cast<jint>(p.depots_done),
-                    static_cast<jint>(p.depots_total));
+                    static_cast<jint>(p.depots_total),
+                    p.verifying ? JNI_TRUE : JNI_FALSE);
                 if (scope.env->ExceptionCheck()) {
                     WN_LOGE("onProgress: Java listener threw — clearing");
                     scope.env->ExceptionClear();

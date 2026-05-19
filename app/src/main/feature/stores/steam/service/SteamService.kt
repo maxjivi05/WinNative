@@ -3718,6 +3718,7 @@ class SteamService : Service() {
                                                             depotTotal: Long,
                                                             depotsDone: Int,
                                                             depotsTotal: Int,
+                                                            verifying: Boolean,
                                                         ) {
                                                             // The native download worker runs on its own thread
                                                             // and may fire a few late callbacks after a pause /
@@ -3739,18 +3740,29 @@ class SteamService : Service() {
                                                             val g = wnDepotBytes.values.sum()
                                                             val delta = g - wnGlobalPrev.getAndSet(g)
                                                             if (delta > 0L) di.updateBytesDownloaded(delta)
-                                                            // Drive the phase to DOWNLOADING and make the
-                                                            // status message unique every tick (suffix g).
-                                                            // The Downloads row collects statusMessage via
-                                                            // collectAsState(); a StateFlow dedups equal
-                                                            // values, so a constant message only recomposes
-                                                            // the row once per depot — freezing the live
-                                                            // byte count / speed. A changing value forces
-                                                            // the recomposition that re-reads them. The
-                                                            // suffix is not shown for the DOWNLOADING phase.
+                                                            // Drive the phase from the native `verifying`
+                                                            // flag — VERIFYING while validating on-disk
+                                                            // content, DOWNLOADING while actually fetching
+                                                            // from the CDN — so a verify pass reads
+                                                            // "Verifying" and only flips to "Downloading"
+                                                            // once it starts pulling missing files. The
+                                                            // status message carries a unique suffix (g)
+                                                            // every tick: the Downloads row collects it via
+                                                            // collectAsState() and a StateFlow dedups equal
+                                                            // values, so a constant message would freeze
+                                                            // the live byte count / speed; a changing value
+                                                            // forces the recomposition that re-reads them.
                                                             di.updateStatus(
-                                                                DownloadPhase.DOWNLOADING,
-                                                                "Downloading depot $depotId ($g)",
+                                                                if (verifying) {
+                                                                    DownloadPhase.VERIFYING
+                                                                } else {
+                                                                    DownloadPhase.DOWNLOADING
+                                                                },
+                                                                if (verifying) {
+                                                                    "Verifying depot $depotId ($g)"
+                                                                } else {
+                                                                    "Downloading depot $depotId ($g)"
+                                                                },
                                                             )
                                                             // Also notify the progress-bar listeners.
                                                             di.emitProgressChange()

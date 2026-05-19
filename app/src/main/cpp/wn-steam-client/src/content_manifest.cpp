@@ -166,48 +166,59 @@ std::optional<ContentManifest> ContentManifest::parse(std::span<const uint8_t> r
 }
 
 bool ContentManifest::decrypt_filenames(std::span<const uint8_t> depot_key) {
-    if (!metadata.filenames_encrypted) return true;   // nothing to do
-    if (depot_key.size() != kSessionKeyLength) return false;  // AES-256 key required
+    if (metadata.filenames_encrypted) {
+        if (depot_key.size() != kSessionKeyLength) return false;  // AES-256 key required
 
-    SessionKey key{};
-    std::copy(depot_key.begin(), depot_key.end(), key.begin());
+        SessionKey key{};
+        std::copy(depot_key.begin(), depot_key.end(), key.begin());
 
-    // Decrypt one Steam-encrypted name: base64 → [16-byte ECB-wrapped IV]
-    // [AES-CBC body]. ECB-decrypt the IV, then CBC-decrypt the body.
-    auto decrypt_name = [&](const std::string& enc,
-                            std::string& out) -> bool {
-        auto blob = base64_decode(enc);
-        if (!blob || blob->size() < kAesBlockBytes * 2) return false;
+        // Decrypt one Steam-encrypted name: base64 → [16-byte ECB-wrapped IV]
+        // [AES-CBC body]. ECB-decrypt the IV, then CBC-decrypt the body.
+        auto decrypt_name = [&](const std::string& enc,
+                                std::string& out) -> bool {
+            auto blob = base64_decode(enc);
+            if (!blob || blob->size() < kAesBlockBytes * 2) return false;
 
-        AesBlock wrapped_iv{}, iv{};
-        std::copy_n(blob->begin(), kAesBlockBytes, wrapped_iv.begin());
-        if (!aes256_ecb_decrypt_block(key, wrapped_iv, iv)) return false;
+            AesBlock wrapped_iv{}, iv{};
+            std::copy_n(blob->begin(), kAesBlockBytes, wrapped_iv.begin());
+            if (!aes256_ecb_decrypt_block(key, wrapped_iv, iv)) return false;
 
-        std::span<const uint8_t> body(blob->data() + kAesBlockBytes,
-                                      blob->size() - kAesBlockBytes);
-        auto plain = aes256_cbc_decrypt(key, iv, body);
-        if (!plain) return false;
+            std::span<const uint8_t> body(blob->data() + kAesBlockBytes,
+                                          blob->size() - kAesBlockBytes);
+            auto plain = aes256_cbc_decrypt(key, iv, body);
+            if (!plain) return false;
 
-        out.assign(plain->begin(), plain->end());
-        // Steam pads decrypted names with a trailing NUL; trim it, then
-        // normalise the Windows-style separators to '/' for on-disk use.
-        if (!out.empty() && out.back() == '\0') out.pop_back();
-        std::replace(out.begin(), out.end(), '\\', '/');
-        return true;
-    };
+            out.assign(plain->begin(), plain->end());
+            // Steam pads decrypted names with a trailing NUL; trim it.
+            if (!out.empty() && out.back() == '\0') out.pop_back();
+            return true;
+        };
 
-    for (auto& f : files) {
-        std::string clear;
-        if (!decrypt_name(f.filename, clear)) return false;
-        f.filename = std::move(clear);
-        if (!f.linktarget.empty()) {
-            std::string link;
-            if (!decrypt_name(f.linktarget, link)) return false;
-            f.linktarget = std::move(link);
+        for (auto& f : files) {
+            std::string clear;
+            if (!decrypt_name(f.filename, clear)) return false;
+            f.filename = std::move(clear);
+            if (!f.linktarget.empty()) {
+                std::string link;
+                if (!decrypt_name(f.linktarget, link)) return false;
+                f.linktarget = std::move(link);
+            }
         }
+        metadata.filenames_encrypted = false;
     }
 
-    // Steam sorts the file list case-insensitively by name after decryption.
+    // Normalise Windows-style '\' separators to '/' — for BOTH freshly
+    // decrypted names AND manifests that arrived with plaintext filenames
+    // (older depots leave filenames_encrypted=false and never reach the
+    // decrypt path). Android's FUSE-backed external storage rejects '\' in a
+    // filename, so a depot whose names still carry backslashes would fail
+    // write_depot's open()/mkdir() outright.
+    for (auto& f : files) {
+        std::replace(f.filename.begin(), f.filename.end(), '\\', '/');
+        std::replace(f.linktarget.begin(), f.linktarget.end(), '\\', '/');
+    }
+
+    // Steam sorts the file list case-insensitively by name.
     std::sort(files.begin(), files.end(),
               [](const FileMapping& a, const FileMapping& b) {
         return std::lexicographical_compare(
@@ -219,7 +230,6 @@ bool ContentManifest::decrypt_filenames(std::span<const uint8_t> depot_key) {
             });
     });
 
-    metadata.filenames_encrypted = false;
     return true;
 }
 

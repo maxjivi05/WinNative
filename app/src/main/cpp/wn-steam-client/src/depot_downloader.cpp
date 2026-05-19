@@ -188,7 +188,7 @@ DepotDownloadResult DepotDownloader::download(uint32_t app_id,
         const uint32_t depots_done = result.depots_completed;
         auto write_res = write_depot(
             *manifest, depot_key, cdn, server, install_dir, /*cdn_auth_token=*/{},
-            [&](uint64_t done, uint64_t total) {
+            [&](uint64_t done, uint64_t total, bool verifying) {
                 if (progress) {
                     DepotDownloadProgress pr;
                     pr.depot_id     = d.depot_id;
@@ -196,6 +196,7 @@ DepotDownloadResult DepotDownloader::download(uint32_t app_id,
                     pr.depot_total  = total;
                     pr.depots_done  = depots_done;
                     pr.depots_total = depots_total;
+                    pr.verifying    = verifying;
                     progress(pr);
                 }
             },

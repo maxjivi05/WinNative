@@ -4142,6 +4142,7 @@ class UnifiedActivity :
         var activePopup by remember { mutableStateOf<LibraryDetailPopup?>(null) }
         var shortcutRefreshKey by remember(app.id, gogGame?.id) { mutableStateOf(0) }
         var pinnedShortcutOverride by remember(app.id, gogGame?.id) { mutableStateOf<Boolean?>(null) }
+        var showWorkshopDialog by remember(app.id) { mutableStateOf(false) }
 
         val isCustom = app.id < 0
         val isEpic = app.id >= 2000000000
@@ -4739,6 +4740,47 @@ class UnifiedActivity :
                                     onSaves = { activePopup = LibraryDetailPopup.Saves },
                                     onCloudSaves = { activePopup = LibraryDetailPopup.CloudSaves },
                                     onUninstall = uninstallGame,
+                                    // The Steam source tag opens a menu (Verify Files /
+                                    // Check for Update / Workshop) for installed Steam games.
+                                    steamMenuEnabled = !isCustom && !isEpic && !isGog,
+                                    onVerifyFiles = {
+                                        scope.launch {
+                                            val started =
+                                                withContext(Dispatchers.IO) {
+                                                    SteamService.downloadAppForVerify(app.id)
+                                                }
+                                            // On a conflict (a download already running)
+                                            // downloadApp surfaces its own toast — only
+                                            // confirm here when verification actually began.
+                                            if (started != null) {
+                                                com.winlator.cmod.shared.ui.toast.WinToast.show(
+                                                    context,
+                                                    context.getString(R.string.store_game_verify_started, app.name),
+                                                    android.widget.Toast.LENGTH_LONG,
+                                                )
+                                            }
+                                        }
+                                    },
+                                    onCheckForUpdate = {
+                                        scope.launch {
+                                            val result = SteamService.checkForAppUpdate(app.id)
+                                            val msg =
+                                                when {
+                                                    result.hasUpdate ->
+                                                        context.getString(R.string.store_game_update_available)
+                                                    result.message != null ->
+                                                        context.getString(R.string.store_game_update_check_failed)
+                                                    else ->
+                                                        context.getString(R.string.store_game_no_update_available)
+                                                }
+                                            com.winlator.cmod.shared.ui.toast.WinToast.show(
+                                                context,
+                                                msg,
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            )
+                                        }
+                                    },
+                                    onWorkshop = { showWorkshopDialog = true },
                                 )
                             }
 
@@ -5297,6 +5339,14 @@ class UnifiedActivity :
                             Icon(Icons.Outlined.Close, contentDescription = "Close", tint = TextPrimary)
                         }
                     }
+                }
+
+                if (showWorkshopDialog) {
+                    WorkshopDialog(
+                        appId = app.id,
+                        gameTitle = app.name,
+                        onDismissRequest = { showWorkshopDialog = false },
+                    )
                 }
             }
         }
@@ -7785,6 +7835,7 @@ class UnifiedActivity :
                     // Shown for any installed game; titles without UGC simply
                     // open to an empty Workshop window (handled gracefully).
                     showWorkshop = isReallyInstalled,
+                    showVerifyFiles = isReallyInstalled,
                     dlcs = dlcItems,
                     selectedDlcIds = selectedDlcIds.toSet(),
                     isDlcSelectionEnabled = steamDownloadRecord == null,
@@ -7843,6 +7894,20 @@ class UnifiedActivity :
                         }
                     },
                     onWorkshop = { showWorkshopDialog = true },
+                    onVerifyFiles = {
+                        if (steamDownloadRecord != null) {
+                            com.winlator.cmod.shared.ui.toast.WinToast.show(
+                                context,
+                                activeSteamDownloadText,
+                                android.widget.Toast.LENGTH_SHORT,
+                            )
+                            return@StoreGameDetailScreen
+                        }
+                        scope.launch(Dispatchers.IO) {
+                            SteamService.downloadAppForVerify(app.id)
+                            withContext(Dispatchers.Main) { onDismissRequest() }
+                        }
+                    },
                     onDownloadUpdate = {
                         if (!updateActionEnabled || updateInfo?.hasUpdate != true) return@StoreGameDetailScreen
                         scope.launch(Dispatchers.IO) {

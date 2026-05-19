@@ -117,15 +117,19 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
         uint32_t chunk_idx;
     };
     std::vector<std::string> file_paths(manifest.files.size());
-    std::vector<ChunkJob>    jobs;
-    // Decompressed bytes confirmed on disk: seeded by the resume scan in
-    // Phase A, then advanced by the workers in Phase B.
+    std::vector<ChunkJob>    jobs;            // chunks that need a CDN download
+    std::vector<uint32_t>    validate_files;  // regular files with on-disk
+                                              // content whose chunks must be
+                                              // Adler-checked (Phase A2)
+    // Decompressed bytes confirmed present: advanced by the parallel
+    // validation in Phase A2 and the download workers in Phase B.
     std::atomic<uint64_t> bytes_done{0};
+    std::mutex            jobs_mtx;           // guards `jobs` appends from A2
 
     // ── Phase A — single-threaded prep ──────────────────────────────────
-    // Create directories / symlinks, pre-size every regular file, and skip
-    // any chunk already correct on disk (resume). Every chunk that still
-    // needs a download becomes a ChunkJob for Phase B.
+    // Create directories / symlinks and pre-size every regular file. A file
+    // with on-disk content is queued for the parallel validation (Phase A2);
+    // a brand-new file has all of its chunks queued straight for download.
     for (uint32_t fi = 0; fi < manifest.files.size(); ++fi) {
         const auto& f = manifest.files[fi];
         if (cancelled()) return fail("write_depot: cancelled");
@@ -158,14 +162,11 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
             continue;
         }
 
-        // Regular file: create + pre-size to the manifest size.
+        // Regular file: create + pre-size to the manifest size. A pre-existing
+        // file with content may already hold this depot's chunks (resume, or a
+        // verify pass) — do NOT O_TRUNC; ftruncate fixes it to the exact size.
         if (!make_parent_dirs(path)) return fail("write_depot: mkdir failed");
         const mode_t mode = (f.flags & kFlagExecutable) ? 0755 : 0644;
-        // Resume: a pre-existing file with content may already hold some of
-        // this depot's chunks (a paused / interrupted download). When so,
-        // each chunk is verified on disk below and skipped if already
-        // correct — so do NOT O_TRUNC, and open O_RDWR to read it back.
-        // ftruncate still fixes the file to the exact manifest size.
         struct stat prev_st {};
         const bool had_content =
             (::stat(path.c_str(), &prev_st) == 0 && prev_st.st_size > 0);
@@ -178,32 +179,104 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
             ::close(fd);
             return fail("write_depot: ftruncate '" + f.filename + "'");
         }
-
-        for (uint32_t ci = 0; ci < f.chunks.size(); ++ci) {
-            const auto& chunk = f.chunks[ci];
-            // Resume fast-path: skip the CDN fetch + decode when the chunk's
-            // exact decompressed bytes are already on disk (verified by
-            // Steam's Adler32). This is what makes pause/resume continue
-            // where it left off instead of re-downloading the depot.
-            if (had_content && chunk.cb_original > 0) {
-                std::vector<uint8_t> on_disk(chunk.cb_original);
-                ssize_t rd = ::pread(fd, on_disk.data(), on_disk.size(),
-                                     static_cast<off_t>(chunk.offset));
-                if (rd == static_cast<ssize_t>(on_disk.size()) &&
-                    depot_adler_hash(on_disk) == chunk.crc) {
-                    bytes_done.fetch_add(chunk.cb_original,
-                                         std::memory_order_relaxed);
-                    continue;
-                }
-            }
-            jobs.push_back({fi, ci});
-        }
         ::close(fd);
         ++result.files_written;
+
+        if (f.chunks.empty()) continue;
+        if (had_content) {
+            validate_files.push_back(fi);
+        } else {
+            for (uint32_t ci = 0; ci < f.chunks.size(); ++ci) {
+                jobs.push_back({fi, ci});
+            }
+        }
     }
 
     if (progress) {
-        progress(bytes_done.load(std::memory_order_relaxed), total_bytes);
+        progress(bytes_done.load(std::memory_order_relaxed), total_bytes, true);
+    }
+
+    // ── Phase A2 — parallel on-disk validation ──────────────────────────
+    // The verify hot path. Each worker takes whole files (open once, O_RDONLY)
+    // and Adler-checks every chunk: chunks already correct on disk are counted
+    // done, the rest become download jobs. Single-threaded this ran at
+    // ~20 MB/s; parallel it is bounded by storage read bandwidth.
+    if (!validate_files.empty() && !cancelled()) {
+        unsigned vn = max_workers == 0 ? 1u : max_workers;
+        vn = std::min<unsigned>(vn, 64u);
+        vn = std::min<unsigned>(vn, static_cast<unsigned>(validate_files.size()));
+
+        std::atomic<size_t> next_vf{0};
+        std::atomic<int>    v_active{static_cast<int>(vn)};
+
+        auto validator = [&]() {
+            std::vector<ChunkJob> local;
+            while (true) {
+                if (cancelled()) break;
+                const size_t vi =
+                    next_vf.fetch_add(1, std::memory_order_relaxed);
+                if (vi >= validate_files.size()) break;
+
+                const uint32_t fi = validate_files[vi];
+                const auto&    f  = manifest.files[fi];
+                local.clear();
+
+                int fd = ::open(file_paths[fi].c_str(), O_RDONLY);
+                if (fd < 0) {
+                    // Cannot read it back — every chunk needs a download.
+                    for (uint32_t ci = 0; ci < f.chunks.size(); ++ci)
+                        local.push_back({fi, ci});
+                } else {
+                    for (uint32_t ci = 0; ci < f.chunks.size(); ++ci) {
+                        const auto& chunk = f.chunks[ci];
+                        bool on_disk = false;
+                        if (chunk.cb_original > 0) {
+                            std::vector<uint8_t> buf(chunk.cb_original);
+                            ssize_t rd = ::pread(fd, buf.data(), buf.size(),
+                                                 static_cast<off_t>(chunk.offset));
+                            if (rd == static_cast<ssize_t>(buf.size()) &&
+                                depot_adler_hash(buf) == chunk.crc) {
+                                on_disk = true;
+                            }
+                        }
+                        if (on_disk) {
+                            bytes_done.fetch_add(chunk.cb_original,
+                                                 std::memory_order_relaxed);
+                        } else {
+                            local.push_back({fi, ci});
+                        }
+                    }
+                    ::close(fd);
+                }
+                if (!local.empty()) {
+                    std::lock_guard<std::mutex> lk(jobs_mtx);
+                    jobs.insert(jobs.end(), local.begin(), local.end());
+                }
+            }
+            v_active.fetch_sub(1, std::memory_order_acq_rel);
+        };
+
+        std::vector<std::thread> vpool;
+        vpool.reserve(vn);
+        for (unsigned w = 0; w < vn; ++w) vpool.emplace_back(validator);
+        while (v_active.load(std::memory_order_acquire) > 0) {
+            if (progress) {
+                progress(bytes_done.load(std::memory_order_relaxed),
+                         total_bytes, true);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        }
+        for (auto& t : vpool) t.join();
+        if (cancelled()) return fail("write_depot: cancelled");
+    }
+
+    const bool any_download = !jobs.empty();
+    // The validation→download boundary callback stays "verifying": Phase B's
+    // own progress loop flips the phase to "downloading" once it actually
+    // starts fetching, so the UI doesn't jump to "Downloading" at a near-full
+    // bar before a single byte has been pulled from the CDN.
+    if (progress) {
+        progress(bytes_done.load(std::memory_order_relaxed), total_bytes, true);
     }
 
     // ── Phase B — parallel chunk download ───────────────────────────────
@@ -293,7 +366,7 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
         while (active.load(std::memory_order_acquire) > 0) {
             if (progress) {
                 progress(bytes_done.load(std::memory_order_relaxed),
-                         total_bytes);
+                         total_bytes, /*verifying=*/false);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(150));
         }
@@ -306,13 +379,14 @@ DepotWriteResult write_depot(const ContentManifest& manifest,
     }
 
     result.bytes_written = bytes_done.load(std::memory_order_relaxed);
-    if (progress) progress(result.bytes_written, total_bytes);
+    if (progress) progress(result.bytes_written, total_bytes, !any_download);
 
-    WN_LOGI("write_depot: depot %u — %llu files, %llu bytes (%u workers)",
+    WN_LOGI("write_depot: depot %u — %llu files, %llu bytes "
+            "(%u dl workers, %zu validated files)",
             manifest.metadata.depot_id,
             static_cast<unsigned long long>(result.files_written),
             static_cast<unsigned long long>(result.bytes_written),
-            workers_used);
+            workers_used, validate_files.size());
     return result;
 }
 

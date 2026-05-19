@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.FactCheck
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SettingsSuggest
@@ -136,6 +137,7 @@ internal fun StoreGameDetailScreen(
     isUpdateActionEnabled: Boolean = true,
     isUpdateCheckCoolingDown: Boolean = false,
     showWorkshop: Boolean = false,
+    showVerifyFiles: Boolean = false,
     dlcs: List<StoreDlcItem> = emptyList(),
     selectedDlcIds: Set<Int> = emptySet(),
     isDlcSelectionEnabled: Boolean = true,
@@ -143,6 +145,7 @@ internal fun StoreGameDetailScreen(
     onInstall: () -> Unit = {},
     onCheckForUpdate: () -> Unit = {},
     onWorkshop: () -> Unit = {},
+    onVerifyFiles: () -> Unit = {},
     onDownloadUpdate: () -> Unit = {},
     onUninstall: () -> Unit = {},
     onCloudSync: () -> Unit = {},
@@ -172,9 +175,10 @@ internal fun StoreGameDetailScreen(
         val showUpdateCheckButton = showUpdateCheck && isInstalled
         val showUpdateCta = showUpdateCheckButton && isUpdateAvailable
         val showWorkshopButton = showWorkshop && isInstalled
+        val showVerifyFilesButton = showVerifyFiles && isInstalled
         val showDlcCard = dlcs.isNotEmpty() && (!isInstalled || dlcs.any { !it.isInstalled })
         val showActionColumn =
-            showDownloadCta || showUpdateCheckButton || showWorkshopButton ||
+            showDownloadCta || showUpdateCheckButton || showWorkshopButton || showVerifyFilesButton ||
                 (showCloudSync || showUninstall || showBestConfigs)
 
         if (heroImageUrl != null) {
@@ -409,6 +413,16 @@ internal fun StoreGameDetailScreen(
                                             !isCheckingForUpdate,
                                     loading = false,
                                     onClick = onDownloadUpdate,
+                                )
+                            }
+
+                            if (showVerifyFilesButton) {
+                                StoreSecondaryActionButton(
+                                    icon = Icons.Outlined.FactCheck,
+                                    label = stringResource(R.string.store_game_verify_files),
+                                    enabled = !isLoading && !isCheckingForUpdate,
+                                    loading = false,
+                                    onClick = onVerifyFiles,
                                 )
                             }
 
