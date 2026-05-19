@@ -71,18 +71,17 @@ object WorkshopModsGenerator {
         val modsJsonFile = File(settingsDir, "mods.json")
         val modsDir = File(settingsDir, "mods")
         val imagesDir = File(settingsDir, "mod_images")
-        // Drop links/images for items no longer installed so a removed mod
-        // never lingers in the game's view.
-        pruneOrphans(modsDir, ids)
-        pruneOrphans(imagesDir, ids)
         if (ids.isEmpty()) {
+            // Drop every stale link/image — nothing is installed.
+            pruneOrphans(modsDir, emptySet())
+            pruneOrphans(imagesDir, emptySet())
             if (modsJsonFile.exists()) modsJsonFile.writeText("{}", Charsets.UTF_8)
             return 0
         }
         modsDir.mkdirs()
         imagesDir.mkdirs()
         val modsJson = JSONObject()
-        var written = 0
+        val writtenIds = HashSet<Long>()
         for (id in ids) {
             val content = contentDir(context, appId, id)
             if (!content.isDirectory) continue
@@ -122,11 +121,15 @@ object WorkshopModsGenerator {
                     )
                 },
             )
-            written++
+            writtenIds.add(id)
         }
+        // Prune by what was actually written this pass — so a torn item
+        // (vanished content / unreadable meta) doesn't keep a stale link.
+        pruneOrphans(modsDir, writtenIds)
+        pruneOrphans(imagesDir, writtenIds)
         modsJsonFile.writeText(modsJson.toString(2), Charsets.UTF_8)
-        Timber.tag(TAG).i("Wrote mods.json with %d mod(s) for app %d", written, appId)
-        return written
+        Timber.tag(TAG).i("Wrote mods.json with %d mod(s) for app %d", writtenIds.size, appId)
+        return writtenIds.size
     }
 
     /**

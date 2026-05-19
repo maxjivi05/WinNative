@@ -4821,10 +4821,10 @@ class SteamService : Service() {
                 dest.parentFile?.mkdirs()
                 val maxBytes = 16L * 1024 * 1024  // cap — a preview image is never this large
                 var over = false
+                var total = 0L
                 conn.inputStream.use { input ->
                     dest.outputStream().use { out ->
                         val buf = ByteArray(64 * 1024)
-                        var total = 0L
                         while (true) {
                             val n = input.read(buf)
                             if (n < 0) break
@@ -4834,7 +4834,9 @@ class SteamService : Service() {
                         }
                     }
                 }
-                if (over) dest.delete()
+                // Discard an over-cap (truncated) or empty download — never
+                // let mods.json reference a corrupt preview.
+                if (over || total == 0L) dest.delete()
             } finally {
                 conn.disconnect()
             }
