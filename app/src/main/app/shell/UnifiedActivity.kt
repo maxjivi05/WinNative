@@ -321,25 +321,100 @@ class UnifiedActivity :
     var libraryPlaytimeRefreshSignal by mutableIntStateOf(0)
     private var hasCompletedInitialResume = false
 
-    // Verify Files / task progress pop-up state, hosted at the activity root
-    // (see [TaskProgressHost]) so it survives game-detail dialog teardown — a
-    // verify completing fires LibraryInstallStatusChanged, which refreshes the
-    // library and would otherwise kill a dialog-scoped progress watcher before
-    // it observes COMPLETE.
+    // Verify Files / Check for Update task pop-up state, hosted at the activity
+    // root (see [TaskProgressHost]) so it survives game-detail dialog teardown —
+    // a verify/update completing fires LibraryInstallStatusChanged, which
+    // refreshes the library and would otherwise kill a dialog-scoped progress
+    // watcher before it observes COMPLETE.
     private var taskProgressInfo by mutableStateOf<DownloadInfo?>(null)
     private var taskProgressGameName by mutableStateOf("")
     private var taskProgressLabel by mutableStateOf("")
+    private var taskProgressCompleteMsg by mutableStateOf("")
+    private var taskProgressFailedMsg by mutableStateOf("")
     private var taskProgressShown by mutableStateOf(false)
     private var taskDoneMessage by mutableStateOf<String?>(null)
     private var taskDoneFailed by mutableStateOf(false)
+    // Indeterminate "Checking for updates…" pop-up shown before a download
+    // task (if any) is known.
+    private var taskCheckingShown by mutableStateOf(false)
+    private var taskCheckingGameName by mutableStateOf("")
+    private var taskCheckingLabel by mutableStateOf("")
 
     /** Opens the task progress pop-up for a freshly started verify/update task. */
-    private fun showTaskProgressPopup(info: DownloadInfo, gameName: String, label: String) {
+    private fun showTaskProgressPopup(
+        info: DownloadInfo,
+        gameName: String,
+        label: String,
+        completeMsg: String,
+        failedMsg: String,
+    ) {
+        taskCheckingShown = false
         taskProgressInfo = info
         taskProgressGameName = gameName
         taskProgressLabel = label
+        taskProgressCompleteMsg = completeMsg
+        taskProgressFailedMsg = failedMsg
         taskProgressShown = true
         taskDoneMessage = null
+    }
+
+    // Re-entrancy guard for [startUpdateCheck] — taps after the checking
+    // pop-up is dismissed shouldn't launch overlapping checks.
+    private var updateCheckInProgress = false
+
+    /**
+     * Runs a Steam update check behind the "Checking for updates…" pop-up.
+     * On a hit it starts the update download and hands off to the progress
+     * pop-up; otherwise it shows a "No Updates Available" / failure notice.
+     * The check runs on [lifecycleScope] so it outlives the calling dialog.
+     */
+    private fun startUpdateCheck(appId: Int, gameName: String) {
+        if (updateCheckInProgress) return
+        updateCheckInProgress = true
+        taskCheckingGameName = gameName
+        taskCheckingLabel = getString(R.string.store_game_check_for_update)
+        taskCheckingShown = true
+        taskDoneMessage = null
+        lifecycleScope.launch {
+            val result =
+                runCatching {
+                    withContext(Dispatchers.IO) { SteamService.checkForAppUpdate(appId) }
+                }.getOrNull()
+            try {
+            when {
+                result == null || result.message != null -> {
+                    taskCheckingShown = false
+                    taskDoneFailed = true
+                    taskDoneMessage = getString(R.string.store_game_update_check_failed_notice)
+                }
+                result.hasUpdate -> {
+                    val started =
+                        withContext(Dispatchers.IO) {
+                            SteamService.downloadAppForUpdate(appId, result.depotIds)
+                        }
+                    if (started != null) {
+                        showTaskProgressPopup(
+                            started,
+                            gameName,
+                            getString(R.string.store_game_update),
+                            getString(R.string.store_game_update_complete),
+                            getString(R.string.store_game_update_failed_notice),
+                        )
+                    } else {
+                        // A download is already running — downloadApp showed its toast.
+                        taskCheckingShown = false
+                    }
+                }
+                else -> {
+                    taskCheckingShown = false
+                    taskDoneFailed = false
+                    taskDoneMessage = getString(R.string.store_game_no_updates_notice)
+                }
+            }
+            } finally {
+                updateCheckInProgress = false
+            }
+        }
     }
 
     // Freezes the library/store card chasing borders while any full-screen
@@ -4782,31 +4857,15 @@ class UnifiedActivity :
                                                     started,
                                                     app.name,
                                                     getString(R.string.store_game_verify_files),
+                                                    getString(R.string.store_game_verify_complete),
+                                                    getString(R.string.store_game_verify_failed_notice),
                                                 )
                                             }
                                             // else: a download is already running —
                                             // downloadApp surfaced its own conflict toast.
                                         }
                                     },
-                                    onCheckForUpdate = {
-                                        scope.launch {
-                                            val result = SteamService.checkForAppUpdate(app.id)
-                                            val msg =
-                                                when {
-                                                    result.hasUpdate ->
-                                                        context.getString(R.string.store_game_update_available)
-                                                    result.message != null ->
-                                                        context.getString(R.string.store_game_update_check_failed)
-                                                    else ->
-                                                        context.getString(R.string.store_game_no_update_available)
-                                                }
-                                            com.winlator.cmod.shared.ui.toast.WinToast.show(
-                                                context,
-                                                msg,
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            )
-                                        }
-                                    },
+                                    onCheckForUpdate = { startUpdateCheck(app.id, app.name) },
                                     onWorkshop = { showWorkshopDialog = true },
                                 )
                             }
@@ -7423,13 +7482,13 @@ class UnifiedActivity :
                     DownloadPhase.COMPLETE -> {
                         taskProgressShown = false
                         taskDoneFailed = false
-                        taskDoneMessage = getString(R.string.store_game_verify_complete)
+                        taskDoneMessage = taskProgressCompleteMsg
                         taskProgressInfo = null
                     }
                     DownloadPhase.FAILED -> {
                         taskProgressShown = false
                         taskDoneFailed = true
-                        taskDoneMessage = getString(R.string.store_game_verify_failed_notice)
+                        taskDoneMessage = taskProgressFailedMsg
                         taskProgressInfo = null
                     }
                     DownloadPhase.CANCELLED -> {
@@ -7439,6 +7498,13 @@ class UnifiedActivity :
                     else -> Unit
                 }
             }
+        }
+        if (taskCheckingShown) {
+            TaskCheckingDialog(
+                gameName = taskCheckingGameName,
+                taskLabel = taskCheckingLabel,
+                onDismissRequest = { taskCheckingShown = false },
+            )
         }
         if (info != null && taskProgressShown) {
             SteamTaskProgressDialog(
@@ -7454,6 +7520,107 @@ class UnifiedActivity :
                 failed = taskDoneFailed,
                 onClose = { taskDoneMessage = null },
             )
+        }
+    }
+
+    /**
+     * Indeterminate "Checking for updates…" pop-up — same frame as
+     * [SteamTaskProgressDialog] but without a known task to track. Dismissable;
+     * the underlying check keeps running and the host shows the result.
+     */
+    @Composable
+    private fun TaskCheckingDialog(
+        gameName: String,
+        taskLabel: String,
+        onDismissRequest: () -> Unit,
+    ) {
+        Dialog(
+            onDismissRequest = onDismissRequest,
+            properties =
+                DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false,
+                ),
+        ) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.6f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onDismissRequest() }
+                        .windowInsetsPadding(WindowInsets.navigationBars),
+                contentAlignment = Alignment.Center,
+            ) {
+                Surface(
+                    modifier =
+                        Modifier
+                            .widthIn(min = 300.dp, max = 380.dp)
+                            .fillMaxWidth(0.92f)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) {},
+                    shape = RoundedCornerShape(16.dp),
+                    color = CardDark,
+                    border = BorderStroke(1.dp, CardBorder),
+                    tonalElevation = 8.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    taskLabel.uppercase(),
+                                    color = TextSecondary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.9.sp,
+                                )
+                                Text(
+                                    gameName,
+                                    color = TextPrimary,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            IconButton(onClick = onDismissRequest, modifier = Modifier.size(34.dp)) {
+                                Icon(
+                                    Icons.Outlined.Close,
+                                    contentDescription = "Close",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                        Text(
+                            stringResource(R.string.store_game_checking_updates),
+                            color = TextPrimary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        LinearProgressIndicator(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                            color = Accent,
+                            trackColor = CardBorder,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -8198,42 +8365,7 @@ class UnifiedActivity :
                             withContext(Dispatchers.Main) { onDismissRequest() }
                         }
                     },
-                    onCheckForUpdate = {
-                        if (isCheckingForUpdate || isUpdateCheckCoolingDown) return@StoreGameDetailScreen
-                        scope.launch {
-                            try {
-                                isCheckingForUpdate = true
-                                updateStatusText = null
-                                val result =
-                                    withContext(Dispatchers.IO) {
-                                        SteamService.checkForAppUpdate(app.id)
-                                    }
-                                updateInfo = result
-                                updateStatusText =
-                                    when {
-                                        result.hasUpdate -> updateAvailableText
-                                        result.message != null -> updateFailedText
-                                        else -> null
-                                    }
-                                if (!result.hasUpdate && result.message == null) {
-                                    com.winlator.cmod.shared.ui.toast.WinToast.show(
-                                        context,
-                                        noUpdateAvailableText,
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    )
-                                }
-                                isUpdateCheckCoolingDown = true
-                                kotlinx.coroutines.delay(5_000L)
-                            } catch (e: Exception) {
-                                Log.w("UnifiedActivity", "Steam update check failed for appId=${app.id}", e)
-                                updateInfo = null
-                                updateStatusText = updateFailedText
-                            } finally {
-                                isCheckingForUpdate = false
-                                isUpdateCheckCoolingDown = false
-                            }
-                        }
-                    },
+                    onCheckForUpdate = { startUpdateCheck(app.id, app.name) },
                     onWorkshop = { showWorkshopDialog = true },
                     onVerifyFiles = {
                         if (steamDownloadRecord != null) {
@@ -8256,6 +8388,8 @@ class UnifiedActivity :
                                     started,
                                     app.name,
                                     getString(R.string.store_game_verify_files),
+                                    getString(R.string.store_game_verify_complete),
+                                    getString(R.string.store_game_verify_failed_notice),
                                 )
                             }
                         }
