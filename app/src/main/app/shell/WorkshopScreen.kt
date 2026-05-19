@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Construction
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Refresh
@@ -92,7 +93,6 @@ private val WsAccentGlow = Color(0xFF58A6FF)
 private val WsTextPrimary = Color(0xFFF0F4FF)
 private val WsTextSecondary = Color(0xFF93A6BC)
 private val WsTextDim = Color(0xFF6E7681)
-private val WsInstalled = Color(0xFF38D77A)
 private val WsInstalledTitle = Color(0xFFB7F8CE)
 private val WsDanger = Color(0xFFFF6B6B)
 private val WsScrim = Color(0xFF000000)
@@ -111,9 +111,10 @@ internal fun StoreWorkshopScreen(
     errorMessage: String?,
     items: List<StoreWorkshopItem>,
     query: String,
-    installingIds: Set<Long>,
+    busyIds: Set<Long>,
     onQueryChange: (String) -> Unit,
     onInstall: (Long) -> Unit,
+    onUninstall: (Long) -> Unit,
     onRetry: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -188,8 +189,9 @@ internal fun StoreWorkshopScreen(
                             } else {
                                 WorkshopList(
                                     items = items,
-                                    installingIds = installingIds,
+                                    busyIds = busyIds,
                                     onInstall = onInstall,
+                                    onUninstall = onUninstall,
                                 )
                             }
                     }
@@ -338,8 +340,9 @@ private fun WorkshopSearchBar(
 @Composable
 private fun WorkshopList(
     items: List<StoreWorkshopItem>,
-    installingIds: Set<Long>,
+    busyIds: Set<Long>,
     onInstall: (Long) -> Unit,
+    onUninstall: (Long) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -348,8 +351,9 @@ private fun WorkshopList(
         items(items, key = { it.publishedFileId }) { item ->
             WorkshopItemRow(
                 item = item,
-                installing = item.publishedFileId in installingIds,
+                busy = item.publishedFileId in busyIds,
                 onInstall = { onInstall(item.publishedFileId) },
+                onUninstall = { onUninstall(item.publishedFileId) },
             )
             HorizontalDivider(
                 color = Color.White.copy(alpha = 0.06f),
@@ -363,8 +367,9 @@ private fun WorkshopList(
 @Composable
 private fun WorkshopItemRow(
     item: StoreWorkshopItem,
-    installing: Boolean,
+    busy: Boolean,
     onInstall: () -> Unit,
+    onUninstall: () -> Unit,
 ) {
     val context = LocalContext.current
     Row(
@@ -430,8 +435,9 @@ private fun WorkshopItemRow(
         }
         WorkshopRowAction(
             isInstalled = item.isInstalled,
-            installing = installing,
+            busy = busy,
             onInstall = onInstall,
+            onUninstall = onUninstall,
         )
     }
 }
@@ -439,59 +445,75 @@ private fun WorkshopItemRow(
 @Composable
 private fun WorkshopRowAction(
     isInstalled: Boolean,
-    installing: Boolean,
+    busy: Boolean,
     onInstall: () -> Unit,
+    onUninstall: () -> Unit,
 ) {
     when {
-        isInstalled ->
-            Text(
-                "Installed",
-                color = WsInstalled,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 8.dp),
-            )
-        installing ->
+        busy ->
             CircularProgressIndicator(
                 modifier = Modifier.size(20.dp),
                 color = WsAccentGlow,
                 strokeWidth = 2.dp,
             )
+        isInstalled ->
+            WorkshopActionPill(
+                icon = Icons.Outlined.Delete,
+                label = "Uninstall",
+                tint = WsDanger,
+                onClick = onUninstall,
+            )
         else ->
-            // Outer Box keeps the touch target >= 44dp tall while the pill stays compact.
-            Box(
-                modifier =
-                    Modifier
-                        .heightIn(min = 44.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onInstall),
-                contentAlignment = Alignment.Center,
+            WorkshopActionPill(
+                icon = Icons.Outlined.Download,
+                label = "Install",
+                tint = WsAccentGlow,
+                onClick = onInstall,
+            )
+    }
+}
+
+/** Compact pill action used for a Workshop row's Install / Uninstall button. */
+@Composable
+private fun WorkshopActionPill(
+    icon: ImageVector,
+    label: String,
+    tint: Color,
+    onClick: () -> Unit,
+) {
+    // Outer Box keeps the touch target >= 44dp tall while the pill stays compact.
+    Box(
+        modifier =
+            Modifier
+                .heightIn(min = 44.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            color = tint.copy(alpha = 0.16f),
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, tint.copy(alpha = 0.4f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                Surface(
-                    color = WsAccent.copy(alpha = 0.16f),
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, WsAccentGlow.copy(alpha = 0.4f)),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        Icon(
-                            Icons.Outlined.Download,
-                            contentDescription = null,
-                            tint = WsAccentGlow,
-                            modifier = Modifier.size(15.dp),
-                        )
-                        Text(
-                            "Install",
-                            color = WsAccentGlow,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(15.dp),
+                )
+                Text(
+                    label,
+                    color = tint,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                )
             }
+        }
     }
 }
 

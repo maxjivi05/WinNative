@@ -8488,15 +8488,16 @@ class UnifiedActivity :
         var errorMessage by remember(appId) { mutableStateOf<String?>(null) }
         var allItems by remember(appId) { mutableStateOf<List<StoreWorkshopItem>>(emptyList()) }
         var query by remember(appId) { mutableStateOf("") }
-        val installingIds = remember(appId) { mutableStateListOf<Long>() }
+        // Published-file-ids with an install OR uninstall in flight.
+        val busyIds = remember(appId) { mutableStateListOf<Long>() }
         var reloadKey by remember(appId) { mutableStateOf(0) }
         val scope = rememberCoroutineScope()
 
         LaunchedEffect(appId, reloadKey) {
             loadState = WorkshopLoadState.LOADING
             errorMessage = null
-            // Drop any in-flight install spinners — a reload re-fetches the list.
-            installingIds.clear()
+            // Drop any in-flight spinners — a reload re-fetches the list.
+            busyIds.clear()
             try {
                 val items =
                     withContext(Dispatchers.IO) {
@@ -8555,11 +8556,11 @@ class UnifiedActivity :
                 query = query,
                 // Snapshotted here inside the Dialog content lambda: a mutation of
                 // the SnapshotStateList invalidates this scope, so .toSet() re-runs.
-                installingIds = installingIds.toSet(),
+                busyIds = busyIds.toSet(),
                 onQueryChange = { query = it },
                 onInstall = { id ->
                     val item = allItems.firstOrNull { it.publishedFileId == id }
-                    if (item != null && id !in installingIds) {
+                    if (item != null && id !in busyIds) {
                         if (item.manifestId == 0L) {
                             com.winlator.cmod.shared.ui.toast.WinToast.show(
                                 this@UnifiedActivity,
@@ -8567,7 +8568,7 @@ class UnifiedActivity :
                                 android.widget.Toast.LENGTH_SHORT,
                             )
                         } else {
-                            installingIds.add(id)
+                            busyIds.add(id)
                             scope.launch {
                                 val ok =
                                     SteamService.installWorkshopItem(
@@ -8591,8 +8592,33 @@ class UnifiedActivity :
                                         android.widget.Toast.LENGTH_LONG,
                                     )
                                 }
-                                installingIds.remove(id)
+                                busyIds.remove(id)
                             }
+                        }
+                    }
+                },
+                onUninstall = { id ->
+                    if (id !in busyIds) {
+                        busyIds.add(id)
+                        scope.launch {
+                            val ok =
+                                withContext(Dispatchers.IO) {
+                                    com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
+                                        .uninstall(applicationContext, appId, id)
+                                }
+                            if (ok) {
+                                allItems =
+                                    allItems.map {
+                                        if (it.publishedFileId == id) it.copy(isInstalled = false) else it
+                                    }
+                            } else {
+                                com.winlator.cmod.shared.ui.toast.WinToast.show(
+                                    this@UnifiedActivity,
+                                    "Couldn't uninstall this Workshop item",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                )
+                            }
+                            busyIds.remove(id)
                         }
                     }
                 },

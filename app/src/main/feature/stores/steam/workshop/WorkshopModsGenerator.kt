@@ -62,6 +62,26 @@ object WorkshopModsGenerator {
     }
 
     /**
+     * Remove one staged Workshop item — its content directory, install marker
+     * and preview image. After this [installedItemIds] no longer reports the
+     * item and the next [generate] pass drops its `mods.json` entry and prunes
+     * the stale `steam_settings` link. The item can simply be installed again.
+     * Returns true once the item is no longer staged.
+     */
+    fun uninstall(context: Context, appId: Int, publishedFileId: Long): Boolean {
+        runCatching { metaFile(context, appId, publishedFileId).delete() }
+        runCatching { previewFile(context, appId, publishedFileId).delete() }
+        runCatching { contentDir(context, appId, publishedFileId).deleteRecursively() }
+        val stillInstalled = publishedFileId in installedItemIds(context, appId)
+        if (stillInstalled) {
+            Timber.tag(TAG).w("Workshop item %d still staged after uninstall", publishedFileId)
+        } else {
+            Timber.tag(TAG).i("Workshop item %d uninstalled for app %d", publishedFileId, appId)
+        }
+        return !stillInstalled
+    }
+
+    /**
      * Build `steam_settings/mods.json` from the staged Workshop items and link
      * their content + preview images into [settingsDir]. Returns the number of
      * mods written. An empty install set writes `{}` (or removes a stale file).
