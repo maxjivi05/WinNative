@@ -227,6 +227,28 @@ class DownloadInfo(
         }
     }
 
+    /**
+     * Set the absolute downloaded-bytes total. Used by the native WN-Steam
+     * depot downloader: its per-depot cumulative counters are the source of
+     * truth, so the global is the *sum* of them, set directly. Adding a delta
+     * derived from the native counter (as [updateBytesDownloaded] would)
+     * double-counts on resume — the native counter restarts at 0 every
+     * write_depot call and re-counts already-verified bytes, which pushed the
+     * progress bar past 100% during the verify pass.
+     */
+    fun setBytesDownloaded(
+        totalBytes: Long,
+        timestampMs: Long = System.currentTimeMillis(),
+    ) {
+        if (!isActive) return
+        val clamped = if (totalBytes < 0L) 0L else totalBytes
+        bytesDownloaded.set(clamped)
+        if (timestampMs - lastSpeedSampleMs >= SPEED_SAMPLE_INTERVAL_MS) {
+            lastSpeedSampleMs = timestampMs
+            addSpeedSample(timestampMs, clamped)
+        }
+    }
+
     fun updateStatusMessage(message: String?) {
         statusMessage.value = message
     }
@@ -344,6 +366,12 @@ class DownloadInfo(
     fun getDisplayBytesProgress(): Pair<Long, Long> {
         val displayTotal = displayTotalExpectedBytes.get()
         if (displayTotal <= 0L) return getBytesProgress()
+
+        // A finished download is fully downloaded by definition. The byte
+        // accumulator can legitimately be 0 here — e.g. a resumed download
+        // whose depots were all already on disk and skipped, firing no
+        // progress callbacks — so derive the display value from the phase.
+        if (status.value == DownloadPhase.COMPLETE) return displayTotal to displayTotal
 
         val displayDownloaded = (getProgress().coerceIn(0f, 1f) * displayTotal.toFloat()).toLong()
         return displayDownloaded.coerceIn(0L, displayTotal) to displayTotal
