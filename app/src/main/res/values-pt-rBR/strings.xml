@@ -111,6 +111,18 @@
     <string name="store_game_update_available">Atualização disponível</string>
     <string name="store_game_update_check_failed">Falha ao verificar atualização</string>
     <string name="store_game_update">Atualizar</string>
+    <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_verify_files">Verificar arquivos</string>
+    <string name="store_game_verify_started">Verificando %1$s — confira a aba Downloads</string>
+    <string name="store_game_steam_options">Opções do Steam</string>
+    <string name="store_game_verify_complete">Verificação de arquivos concluída</string>
+    <string name="store_game_verify_failed_notice">Falha na verificação de arquivos</string>
+    <string name="store_game_progress_background_hint">Você pode fechar isto — continuará em segundo plano. Confira a aba Downloads quando quiser.</string>
+    <string name="store_game_checking_updates">Verificando atualizações…</string>
+    <string name="store_game_no_updates_notice">Nenhuma atualização disponível</string>
+    <string name="store_game_update_complete">Atualização concluída</string>
+    <string name="store_game_update_failed_notice">Falha na atualização</string>
+    <string name="store_game_update_check_failed_notice">Falha ao verificar atualizações</string>
     <string name="store_game_download_already_active">Este jogo já está sendo baixado. Cancele o download atual antes de adicionar DLC.</string>
     <string name="common_ui_select">Selecionar</string>
     <string name="common_ui_select_folder">Selecionar pasta</string>
@@ -170,7 +182,7 @@
     <string name="library_games_no_games_hub">Nenhum Jogo Instalado\nClique para abrir o Backend do Winlator</string>
     <string name="library_games_installed_badge">INSTALADO</string>
     <string name="library_games_unknown_game">Jogo Desconhecido</string>
-    <string name="library_games_layouts_header">LAYOUTS</string>
+    <string name="library_games_layouts_header">LAYOUTS DA BIBLIOTECA</string>
     <string name="library_games_layout_carousel">Carrossel</string>
     <string name="library_games_layout_list">Lista</string>
     <string name="library_games_custom_game">Jogo Personalizado</string>
@@ -268,13 +280,13 @@
     <string name="shortcuts_properties_exclusive_input">Entrada Exclusiva</string>
     <string name="shortcuts_properties_custom_game_settings">Configuracoes Personalizadas do Jogo</string>
     <string name="shortcuts_properties_use_cold_client">Usar ColdClient Launcher</string>
-    <string name="shortcuts_properties_use_cold_client_description">ColdClient é a forma preferida de lidar com emulação Steam e DRM. Ele corrige o DRM em tempo de execução sem modificar os arquivos do jogo.</string>
+    <string name="shortcuts_properties_use_cold_client_description">Modo de emulação Steam para jogos Steam — gerencia DRM, conquistas e DLC. Recomendado para todos os jogos Steam.</string>
     <string name="shortcuts_properties_unpack_files">DRM Legado</string>
-    <string name="shortcuts_properties_unpack_files_description">Remove o DRM SteamStub do exe no disco. Ative apenas se o jogo não iniciar sem isso. O patcher de runtime do ColdClient lida com a maioria dos jogos automaticamente.</string>
+    <string name="shortcuts_properties_unpack_files_description">Remove o DRM SteamStub do exe. Operação única. Desative apenas se um jogo quebrar.</string>
     <string name="shortcuts_properties_force_dlc">Forcar DLC</string>
-    <string name="shortcuts_properties_force_dlc_description">Ative apenas se as DLCs nao forem detectadas ou saves com DLC nao estiverem funcionando</string>
+    <string name="shortcuts_properties_force_dlc_description">Ative se as DLCs nao forem detectadas ou saves com DLC nao funcionarem.</string>
     <string name="shortcuts_properties_launch_steam_client_beta">Iniciar Cliente Steam (Beta)</string>
-    <string name="shortcuts_properties_launch_steam_client_description">Inicia o cliente real do Steam no Wine\nRequer uma conta Steam e pode reduzir o desempenho\nNem todos os jogos funcionam</string>
+    <string name="shortcuts_properties_launch_steam_client_description">Executa o cliente real do Steam no Wine. Requer uma conta. Pode reduzir o desempenho; nem todos os jogos funcionam.</string>
     <string name="shortcuts_properties_steam_type">Desempenho do cliente Steam</string>
     <string name="steam_section_emulator">Emulador Steam (Goldberg)</string>
     <string name="steam_section_real_client">Cliente Steam real</string>
@@ -828,6 +840,11 @@ Ex. <b>META</b> para <i>tecla META</i>, \n
     <string name="settings_content_extracting_detail">Extraindo… (%1$d arquivos)</string>
     <string name="settings_content_preparing_package">Preparando pacote…</string>
     <string name="settings_content_download_complete">Download concluido</string>
+    <string name="settings_content_already_installed_title">Componente ja instalado</string>
+    <string name="settings_content_already_installed_message">Este componente ja esta instalado. Remova a copia instalada antes de baixa-lo novamente.
+
+Caminho instalado:
+%1$s</string>
     <string name="settings_content_conflicting_title">Conteudo Conflitante Instalado</string>
     <string name="settings_content_conflicting_message">Por favor, desinstale o conteudo conflitante antes de baixar este pacote.
 
@@ -1212,7 +1229,7 @@ Caminho instalado:
     <string name="shortcuts_library_artwork_title">Arte da Biblioteca</string>
     <string name="shortcuts_list_readded_existing">Atalho existente readicionado</string>
     <string name="shortcuts_properties_runtime_patcher">Patcher DRM em Tempo de Execução</string>
-    <string name="shortcuts_properties_runtime_patcher_description">Injeta o patcher DRM em tempo de execução do Goldberg como DLL no jogo a cada inicialização. Contorna verificações anti-adulteração que sobrevivem ao processo de DRM Legado. Reduz significativamente o FPS — ative apenas se o jogo ainda falhar ao iniciar somente com DRM Legado.</string>
+    <string name="shortcuts_properties_runtime_patcher_description">Injeta uma DLL de patch DRM ao iniciar. Reduz FPS — use apenas se Unpack Files sozinho falhar.</string>
     <!-- Cloud Saves > Custom save folder picker -->
     <string name="cloud_saves_custom_select_folder">Selecionar pasta de saves</string>
     <string name="cloud_saves_custom_folder_label">Pasta de saves</string>

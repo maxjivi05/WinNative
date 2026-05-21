@@ -15,6 +15,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -39,11 +40,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.Construction
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.FactCheck
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SettingsSuggest
@@ -62,6 +65,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -73,7 +77,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -130,12 +136,16 @@ internal fun StoreGameDetailScreen(
     updateStatusText: String? = null,
     isUpdateActionEnabled: Boolean = true,
     isUpdateCheckCoolingDown: Boolean = false,
+    showWorkshop: Boolean = false,
+    showVerifyFiles: Boolean = false,
     dlcs: List<StoreDlcItem> = emptyList(),
     selectedDlcIds: Set<Int> = emptySet(),
     isDlcSelectionEnabled: Boolean = true,
     onBack: () -> Unit,
     onInstall: () -> Unit = {},
     onCheckForUpdate: () -> Unit = {},
+    onWorkshop: () -> Unit = {},
+    onVerifyFiles: () -> Unit = {},
     onDownloadUpdate: () -> Unit = {},
     onUninstall: () -> Unit = {},
     onCloudSync: () -> Unit = {},
@@ -145,13 +155,15 @@ internal fun StoreGameDetailScreen(
     onToggleSelectAllDlcs: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     var dlcExpanded by remember { mutableStateOf(false) }
+    var dlcHeaderHeightPx by remember { mutableIntStateOf(0) }
 
     StoreScreenCutoutMode()
 
     Box(Modifier.fillMaxSize()) {
         val edgePadding = 22.dp
-        val bottomPadding = 20.dp
+        val bottomPadding = 8.dp
         val actionIconSize = 48.dp
         val actionIconSpacing = 8.dp
         val actionWidth = actionIconSize * 5 + actionIconSpacing * 4
@@ -162,8 +174,12 @@ internal fun StoreGameDetailScreen(
         val showDownloadCta = !isInstalled || hasSelectedInstallableDlc
         val showUpdateCheckButton = showUpdateCheck && isInstalled
         val showUpdateCta = showUpdateCheckButton && isUpdateAvailable
+        val showWorkshopButton = showWorkshop && isInstalled
+        val showVerifyFilesButton = showVerifyFiles && isInstalled
         val showDlcCard = dlcs.isNotEmpty() && (!isInstalled || dlcs.any { !it.isInstalled })
-        val showActionColumn = showDownloadCta || showUpdateCheckButton || (showCloudSync || showUninstall || showBestConfigs)
+        val showActionColumn =
+            showDownloadCta || showUpdateCheckButton || showWorkshopButton || showVerifyFilesButton ||
+                (showCloudSync || showUninstall || showBestConfigs)
 
         if (heroImageUrl != null) {
             val heroRequest =
@@ -247,7 +263,7 @@ internal fun StoreGameDetailScreen(
                 onClick = onBack,
                 modifier =
                     Modifier
-                        .size(54.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(StoreBlack.copy(alpha = 0.5f))
                         .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape),
@@ -256,49 +272,57 @@ internal fun StoreGameDetailScreen(
                     Icons.AutoMirrored.Outlined.ArrowBack,
                     contentDescription = stringResource(R.string.common_ui_back),
                     tint = StoreTextPrimary,
-                    modifier = Modifier.size(30.dp),
+                    modifier = Modifier.size(24.dp),
                 )
             }
             Spacer(Modifier.weight(1f))
             StoreSourceTag(sourceLabel = sourceLabel)
         }
 
+        val dlcHeaderReserveHeight =
+            if (showDlcCard && dlcHeaderHeightPx > 0) {
+                with(density) { dlcHeaderHeightPx.toDp() } + 12.dp
+            } else {
+                0.dp
+            }
+
         Column(
             modifier =
                 Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(start = edgePadding, top = 68.dp, end = edgePadding, bottom = bottomPadding),
+                    .padding(
+                        start = edgePadding,
+                        top = 68.dp,
+                        end = edgePadding,
+                        bottom = bottomPadding + dlcHeaderReserveHeight,
+                    ),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.widthIn(max = 640.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Column(
-                    modifier = Modifier.widthIn(max = 640.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = StoreTextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (subtitle.isNotBlank()) {
                     Text(
-                        title,
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = StoreTextPrimary,
-                        fontWeight = FontWeight.Bold,
+                        subtitle,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = StoreTextPrimary.copy(alpha = 0.72f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (subtitle.isNotBlank()) {
-                        Text(
-                            subtitle,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = StoreTextPrimary.copy(alpha = 0.72f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                 }
+            }
 
-                Spacer(Modifier.height(contentGap))
-
+            Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(contentGap),
@@ -362,6 +386,13 @@ internal fun StoreGameDetailScreen(
                                     valueColor = if (!isInstallEnabled) StoreDanger else null,
                                 )
                             }
+                            if (showCustomPath) {
+                                StoreActionChip(
+                                    icon = Icons.Outlined.Folder,
+                                    label = customPathLabel,
+                                    onClick = onCustomPath,
+                                )
+                            }
                         }
                     }
 
@@ -371,17 +402,6 @@ internal fun StoreGameDetailScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            if (showDownloadCta) {
-                                StoreCtaButton(
-                                    height = ctaHeight,
-                                    icon = Icons.Outlined.Download,
-                                    label = stringResource(R.string.common_ui_download),
-                                    enabled = !isLoading && isDownloadActionEnabled,
-                                    loading = isLoading,
-                                    onClick = onInstall,
-                                )
-                            }
-
                             if (showUpdateCta) {
                                 StoreCtaButton(
                                     height = ctaHeight,
@@ -393,6 +413,16 @@ internal fun StoreGameDetailScreen(
                                             !isCheckingForUpdate,
                                     loading = false,
                                     onClick = onDownloadUpdate,
+                                )
+                            }
+
+                            if (showVerifyFilesButton) {
+                                StoreSecondaryActionButton(
+                                    icon = Icons.Outlined.FactCheck,
+                                    label = stringResource(R.string.store_game_verify_files),
+                                    enabled = !isLoading && !isCheckingForUpdate,
+                                    loading = false,
+                                    onClick = onVerifyFiles,
                                 )
                             }
 
@@ -430,6 +460,16 @@ internal fun StoreGameDetailScreen(
                                 }
                             }
 
+                            if (showWorkshopButton) {
+                                StoreSecondaryActionButton(
+                                    icon = Icons.Outlined.Construction,
+                                    label = stringResource(R.string.store_game_workshop),
+                                    enabled = !isLoading,
+                                    loading = false,
+                                    onClick = onWorkshop,
+                                )
+                            }
+
                             if (showDownloadCta && !isLoading && !isInstallEnabled && installSize > 0L) {
                                 val deficit = (installSize - availableBytes).coerceAtLeast(0L)
                                 if (deficit > 0L) {
@@ -451,14 +491,6 @@ internal fun StoreGameDetailScreen(
                                 horizontalArrangement = Arrangement.spacedBy(actionIconSpacing),
                                 verticalAlignment = Alignment.Top,
                             ) {
-                                if (showCustomPath && !isInstalled && !isLoading) {
-                                    StoreIconActionButton(
-                                        icon = Icons.Outlined.Folder,
-                                        contentDescription = customPathLabel,
-                                        size = actionIconSize,
-                                        onClick = onCustomPath,
-                                    )
-                                }
                                 if (showBestConfigs && isInstalled) {
                                     StoreIconActionButton(
                                         icon = Icons.Outlined.SettingsSuggest,
@@ -485,13 +517,38 @@ internal fun StoreGameDetailScreen(
                                     )
                                 }
                             }
+
+                            if (showDownloadCta) {
+                                StoreCtaButton(
+                                    height = ctaHeight,
+                                    icon = Icons.Outlined.Download,
+                                    label = stringResource(R.string.common_ui_download),
+                                    enabled = !isLoading && isDownloadActionEnabled,
+                                    loading = isLoading,
+                                    onClick = onInstall,
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
 
-            if (showDlcCard) {
-                Spacer(Modifier.height(12.dp))
+        if (showDlcCard) {
+            BoxWithConstraints(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .padding(
+                            start = edgePadding,
+                            top = 68.dp,
+                            end = edgePadding,
+                            bottom = bottomPadding,
+                        ),
+                contentAlignment = Alignment.BottomStart,
+            ) {
+                val maxListHeight = (maxHeight - 96.dp).coerceAtLeast(120.dp)
                 StoreDlcCard(
                     dlcs = dlcs,
                     selectedDlcIds = selectedDlcIds,
@@ -500,6 +557,8 @@ internal fun StoreGameDetailScreen(
                     onToggleExpanded = { dlcExpanded = !dlcExpanded },
                     onToggleDlc = onToggleDlc,
                     onToggleSelectAll = onToggleSelectAllDlcs,
+                    maxListHeight = maxListHeight,
+                    onHeaderMeasured = { dlcHeaderHeightPx = it },
                 )
             }
         }
@@ -515,6 +574,8 @@ private fun StoreDlcCard(
     onToggleExpanded: () -> Unit,
     onToggleDlc: (Int) -> Unit,
     onToggleSelectAll: () -> Unit,
+    maxListHeight: Dp = 280.dp,
+    onHeaderMeasured: (Int) -> Unit = {},
 ) {
     val selectableDlcs = remember(dlcs) { dlcs.filterNot { it.isInstalled } }
     val totalSize = remember(selectableDlcs) { selectableDlcs.sumOf { it.downloadSize.coerceAtLeast(0L) } }
@@ -527,36 +588,37 @@ private fun StoreDlcCard(
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = StoreBlack.copy(alpha = 0.62f),
+        color = StoreBlack,
         shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier =
                     Modifier
                         .fillMaxWidth()
+                        .onSizeChanged { onHeaderMeasured(it.height) }
                         .clickable(onClick = onToggleExpanded)
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Icon(
                     Icons.Outlined.Extension,
                     contentDescription = null,
                     tint = StoreAccentGlow,
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier.size(16.dp),
                 )
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
                     Text(
                         stringResource(R.string.library_games_dlcs).uppercase(),
                         color = StoreTextSecondary,
-                        fontSize = 10.sp,
+                        fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.8.sp,
+                        letterSpacing = 0.7.sp,
                     )
                     Text(
                         buildDlcSummary(
@@ -567,7 +629,7 @@ private fun StoreDlcCard(
                             totalSize = totalSize,
                         ),
                         color = StoreTextPrimary,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -577,7 +639,7 @@ private fun StoreDlcCard(
                     if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                     contentDescription = null,
                     tint = StoreTextPrimary,
-                    modifier = Modifier.size(22.dp),
+                    modifier = Modifier.size(18.dp),
                 )
             }
 
@@ -624,14 +686,14 @@ private fun StoreDlcCard(
                         modifier =
                             Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 280.dp)
+                                .heightIn(max = maxListHeight)
                                 .verticalScroll(rememberScrollState()),
                     ) {
                         dlcs.forEachIndexed { index, dlc ->
                             if (index > 0) {
                                 HorizontalDivider(
-                                    color = Color.White.copy(alpha = 0.06f),
-                                    thickness = 0.5.dp,
+                                    color = Color.White.copy(alpha = 0.16f),
+                                    thickness = 1.dp,
                                     modifier = Modifier.padding(horizontal = 12.dp),
                                 )
                             }
@@ -648,22 +710,21 @@ private fun StoreDlcCard(
                                                 Modifier.clickable { onToggleDlc(dlc.id) }
                                             },
                                         )
-                                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                                        .padding(horizontal = 6.dp, vertical = 0.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 if (dlc.isInstalled) {
-                                    Box(
-                                        modifier = Modifier.width(76.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            stringResource(R.string.common_ui_installed),
-                                            color = Color(0xFF38D77A),
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                        )
-                                    }
+                                    Checkbox(
+                                        checked = true,
+                                        onCheckedChange = null,
+                                        enabled = false,
+                                        colors =
+                                            CheckboxDefaults.colors(
+                                                checkedColor = Color(0xFF38D77A),
+                                                disabledCheckedColor = Color(0xFF38D77A),
+                                                checkmarkColor = Color.White,
+                                            ),
+                                    )
                                 } else {
                                     Checkbox(
                                         checked = dlc.id in selectedDlcIds,
@@ -685,13 +746,24 @@ private fun StoreDlcCard(
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                Text(
-                                    if (dlc.downloadSize > 0L) StorageUtils.formatBinarySize(dlc.downloadSize) else "—",
-                                    color = StoreTextSecondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.padding(horizontal = 10.dp),
-                                )
+                                if (dlc.isInstalled) {
+                                    Text(
+                                        stringResource(R.string.common_ui_installed),
+                                        color = Color(0xFF38D77A),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(horizontal = 10.dp),
+                                    )
+                                } else {
+                                    Text(
+                                        if (dlc.downloadSize > 0L) StorageUtils.formatBinarySize(dlc.downloadSize) else "—",
+                                        color = StoreTextSecondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -794,6 +866,36 @@ private fun StoreStatChip(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun StoreActionChip(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = StoreBlack.copy(alpha = 0.44f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, StoreAccentGlow.copy(alpha = 0.36f)),
+        modifier = Modifier.clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = StoreAccentGlow)
+            Text(
+                label,
+                color = StoreTextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -946,38 +1048,24 @@ private fun StoreIconActionButton(
     onClick: () -> Unit,
     tint: Color = Color.White,
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+    Surface(
+        modifier =
+            Modifier
+                .size(size)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick),
+        color = StoreBlack.copy(alpha = 0.46f),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, tint.copy(alpha = 0.18f)),
     ) {
-        Surface(
-            modifier =
-                Modifier
-                    .size(size)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onClick),
-            color = StoreBlack.copy(alpha = 0.46f),
-            shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(1.dp, tint.copy(alpha = 0.18f)),
-        ) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Icon(
-                    icon,
-                    contentDescription = contentDescription,
-                    modifier = Modifier.size(28.dp),
-                    tint = tint,
-                )
-            }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(
+                icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(28.dp),
+                tint = tint,
+            )
         }
-        Text(
-            contentDescription,
-            color = tint.copy(alpha = 0.85f),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = size + 12.dp),
-        )
     }
 }
 

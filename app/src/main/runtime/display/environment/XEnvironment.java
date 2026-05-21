@@ -10,7 +10,7 @@ import java.util.Iterator;
 
 public class XEnvironment implements Iterable<EnvironmentComponent> {
   private static final String TAG = "XEnvironment";
-  private final Context context;
+  private Context context;
   private final ImageFs imageFs;
   private final ArrayList<EnvironmentComponent> components = new ArrayList<>();
 
@@ -21,6 +21,10 @@ public class XEnvironment implements Iterable<EnvironmentComponent> {
 
   public Context getContext() {
     return context;
+  }
+
+  public void setContext(Context context) {
+    this.context = context;
   }
 
   public ImageFs getImageFs() {
@@ -87,14 +91,8 @@ public class XEnvironment implements Iterable<EnvironmentComponent> {
   }
 
   public void onPause() {
-    GuestProgramLauncherComponent guestProgramLauncherComponent =
-        getComponent(GuestProgramLauncherComponent.class);
-    if (guestProgramLauncherComponent != null) guestProgramLauncherComponent.suspendProcess();
   }
 
   public void onResume() {
-    GuestProgramLauncherComponent guestProgramLauncherComponent =
-        getComponent(GuestProgramLauncherComponent.class);
-    if (guestProgramLauncherComponent != null) guestProgramLauncherComponent.resumeProcess();
   }
 }
