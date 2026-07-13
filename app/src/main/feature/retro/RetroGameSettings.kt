@@ -692,33 +692,43 @@ private fun RetroGeneralSection(
         Spacer(Modifier.height(ItemGap))
         RetroSettingGroup {
             RetroGroupTitle("LIBRARY ARTWORK")
-            RetroArtworkRow(
-                title = "Game Card Image",
-                selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD] == true,
-                onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD) },
-                onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD) },
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(ItemGap)) {
+                Box(Modifier.weight(1f)) {
+                    RetroArtworkRow(
+                        title = "Game Card Image",
+                        selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD] == true,
+                        onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD) },
+                        onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD) },
+                    )
+                }
+                Box(Modifier.weight(1f)) {
+                    RetroArtworkRow(
+                        title = "Grid Image",
+                        selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.GRID] == true,
+                        onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GRID) },
+                        onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GRID) },
+                    )
+                }
+            }
             Spacer(Modifier.height(ItemGap))
-            RetroArtworkRow(
-                title = "Grid Image",
-                selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.GRID] == true,
-                onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GRID) },
-                onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GRID) },
-            )
-            Spacer(Modifier.height(ItemGap))
-            RetroArtworkRow(
-                title = "Carousel Image",
-                selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL] == true,
-                onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL) },
-                onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL) },
-            )
-            Spacer(Modifier.height(ItemGap))
-            RetroArtworkRow(
-                title = "List Image",
-                selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.LIST] == true,
-                onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.LIST) },
-                onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.LIST) },
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(ItemGap)) {
+                Box(Modifier.weight(1f)) {
+                    RetroArtworkRow(
+                        title = "Carousel Image",
+                        selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL] == true,
+                        onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL) },
+                        onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL) },
+                    )
+                }
+                Box(Modifier.weight(1f)) {
+                    RetroArtworkRow(
+                        title = "List Image",
+                        selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.LIST] == true,
+                        onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.LIST) },
+                        onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.LIST) },
+                    )
+                }
+            }
         }
     }
 }
