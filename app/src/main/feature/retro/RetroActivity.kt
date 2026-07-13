@@ -1,5 +1,6 @@
 package com.winlator.cmod.feature.retro
 
+import android.content.SharedPreferences
 import android.os.Bundle
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -8,7 +9,6 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -20,6 +20,7 @@ import com.swordfish.libretrodroid.ShaderConfig
 import com.swordfish.libretrodroid.Variable
 import com.winlator.cmod.runtime.container.ContainerManager
 import com.winlator.cmod.runtime.container.Shortcut
+import com.winlator.cmod.shared.android.FixedFontScaleAppCompatActivity
 import com.winlator.cmod.shared.theme.WinNativeTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.launchIn
@@ -27,7 +28,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import java.io.File
 
-class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
+class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener {
     companion object {
         const val EXTRA_ROM_PATH = "retro_rom_path"
         const val EXTRA_SYSTEM_ID = "retro_system_id"
@@ -57,6 +58,8 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
     private var currentDisk = 0
     private var system: RetroSystem? = null
     private var persistShortcut: Shortcut? = null
+    private var playtimePrefs: SharedPreferences? = null
+    private var sessionStart = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -164,8 +167,33 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
 
         setContentView(root)
         retroReady = true
+        recordLaunchStats()
         observeErrors()
         observeEvents()
+    }
+
+    private fun recordLaunchStats() {
+        val prefs = getSharedPreferences("playtime_stats", MODE_PRIVATE)
+        playtimePrefs = prefs
+        sessionStart = System.currentTimeMillis()
+        prefs
+            .edit()
+            .putInt("${gameName}_play_count", prefs.getInt("${gameName}_play_count", 0) + 1)
+            .putLong("${gameName}_last_played", sessionStart)
+            .apply()
+    }
+
+    private fun accumulatePlaytime() {
+        val prefs = playtimePrefs ?: return
+        val now = System.currentTimeMillis()
+        val delta = now - sessionStart
+        if (delta > 0) {
+            prefs
+                .edit()
+                .putLong("${gameName}_playtime", prefs.getLong("${gameName}_playtime", 0L) + delta)
+                .apply()
+        }
+        sessionStart = now
     }
 
     private fun observeEvents() {
@@ -483,6 +511,7 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
 
     override fun onPause() {
         persistSram()
+        accumulatePlaytime()
         super.onPause()
     }
 

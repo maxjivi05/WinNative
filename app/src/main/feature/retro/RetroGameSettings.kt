@@ -59,7 +59,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import com.winlator.cmod.feature.library.GameSettingsNav
+import com.winlator.cmod.feature.shortcuts.LibraryShortcutArtwork
 import com.winlator.cmod.runtime.container.Shortcut
+import java.io.File
 import com.winlator.cmod.shared.ui.nav.LocalPaneNav
 import com.winlator.cmod.shared.ui.nav.PaneNavRegistry
 import com.winlator.cmod.shared.ui.nav.paneHighlight
@@ -80,6 +82,7 @@ private val TextSecondary = Color(0xFF7A8FA8)
 private val TextDim = Color(0xFF6E7681)
 private val DividerColor = Color(0xFF2A2A3A)
 private val NavHighlight = Color(0xFF4FC3F7)
+private val DangerRed = Color(0xFFFF6B6B)
 
 private val LabelSize = 11.sp
 private val ValueSize = 12.sp
@@ -116,7 +119,19 @@ class RetroSettingsState(
                 )
             }
         }
+    val artworkSelected = mutableStateMapOf<LibraryShortcutArtwork.LibraryArtworkSlot, Boolean>()
     var currentSection by mutableIntStateOf(0)
+
+    init {
+        syncArtwork()
+    }
+
+    fun syncArtwork() {
+        LibraryShortcutArtwork.LibraryArtworkSlot.entries.forEach { slot ->
+            val path = shortcut.getExtra(slot.extraKey)
+            artworkSelected[slot] = path.isNotBlank() && File(path).isFile
+        }
+    }
 
     fun save() {
         shortcut.putExtra(RetroShortcuts.KEY_SHADER, shader)
@@ -153,6 +168,8 @@ private fun buildRetroSections(state: RetroSettingsState): List<RetroSection> {
 fun RetroGameSettingsContent(
     state: RetroSettingsState,
     nav: GameSettingsNav? = null,
+    onPickArtwork: ((LibraryShortcutArtwork.LibraryArtworkSlot) -> Unit)? = null,
+    onRemoveArtwork: ((LibraryShortcutArtwork.LibraryArtworkSlot) -> Unit)? = null,
     onSave: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -201,6 +218,8 @@ fun RetroGameSettingsContent(
                     hasSystemSection = hasSystemSection,
                     state = state,
                     nav = nav,
+                    onPickArtwork = onPickArtwork,
+                    onRemoveArtwork = onRemoveArtwork,
                 )
             }
         }
@@ -213,6 +232,8 @@ private fun RetroSectionContent(
     hasSystemSection: Boolean,
     state: RetroSettingsState,
     nav: GameSettingsNav? = null,
+    onPickArtwork: ((LibraryShortcutArtwork.LibraryArtworkSlot) -> Unit)? = null,
+    onRemoveArtwork: ((LibraryShortcutArtwork.LibraryArtworkSlot) -> Unit)? = null,
 ) {
     AnimatedContent(
         targetState = sectionIndex,
@@ -260,7 +281,7 @@ private fun RetroSectionContent(
             ) {
                 val systemIdx = 2
                 when {
-                    idx == 0 -> RetroGeneralSection(state)
+                    idx == 0 -> RetroGeneralSection(state, onPickArtwork, onRemoveArtwork)
                     idx == 1 -> RetroGraphicsSection(state)
                     hasSystemSection && idx == systemIdx -> RetroSystemSection(state)
                     idx == (if (hasSystemSection) 3 else 2) -> RetroInputSection(state)
@@ -655,13 +676,128 @@ private fun RetroSettingSwitch(
 }
 
 @Composable
-private fun RetroGeneralSection(state: RetroSettingsState) {
+private fun RetroGeneralSection(
+    state: RetroSettingsState,
+    onPickArtwork: ((LibraryShortcutArtwork.LibraryArtworkSlot) -> Unit)? = null,
+    onRemoveArtwork: ((LibraryShortcutArtwork.LibraryArtworkSlot) -> Unit)? = null,
+) {
     RetroSettingGroup {
         RetroGroupTitle("GAME")
         RetroInfoRow("Name", state.name)
         RetroInfoRow("System", state.system?.displayName ?: "")
         RetroInfoRow("Emulator Core", state.system?.coreFileName ?: "")
         RetroInfoRow("ROM Path", state.romPath)
+    }
+    if (onPickArtwork != null && onRemoveArtwork != null) {
+        Spacer(Modifier.height(ItemGap))
+        RetroSettingGroup {
+            RetroGroupTitle("LIBRARY ARTWORK")
+            RetroArtworkRow(
+                title = "Game Card Image",
+                selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD] == true,
+                onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD) },
+                onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD) },
+            )
+            Spacer(Modifier.height(ItemGap))
+            RetroArtworkRow(
+                title = "Grid Image",
+                selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.GRID] == true,
+                onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GRID) },
+                onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.GRID) },
+            )
+            Spacer(Modifier.height(ItemGap))
+            RetroArtworkRow(
+                title = "Carousel Image",
+                selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL] == true,
+                onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL) },
+                onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.CAROUSEL) },
+            )
+            Spacer(Modifier.height(ItemGap))
+            RetroArtworkRow(
+                title = "List Image",
+                selected = state.artworkSelected[LibraryShortcutArtwork.LibraryArtworkSlot.LIST] == true,
+                onPick = { onPickArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.LIST) },
+                onRemove = { onRemoveArtwork(LibraryShortcutArtwork.LibraryArtworkSlot.LIST) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RetroArtworkRow(
+    title: String,
+    selected: Boolean,
+    onPick: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(GroupCorner))
+                .background(InputSurface)
+                .border(1.dp, InputBorder, RoundedCornerShape(GroupCorner))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = TextPrimary,
+                    fontSize = ValueSize,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (selected) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "Custom image set",
+                        color = TextSecondary,
+                        fontSize = LabelSize,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!selected) {
+                    RetroArtworkActionButton("Set image", AccentBlue, onPick)
+                } else {
+                    RetroArtworkActionButton("Remove", DangerRed, onRemove)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RetroArtworkActionButton(
+    text: String,
+    tint: Color,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier =
+            Modifier
+                .clip(RoundedCornerShape(9.dp))
+                .background(tint.copy(alpha = 0.08f))
+                .border(1.dp, tint.copy(alpha = 0.2f), RoundedCornerShape(9.dp))
+                .paneNavItem(cornerRadius = 9.dp, onActivate = { onClick() }, highlightColor = NavHighlight)
+                .clickable { onClick() }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Text(
+            text = text,
+            color = tint,
+            fontSize = LabelSize,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 

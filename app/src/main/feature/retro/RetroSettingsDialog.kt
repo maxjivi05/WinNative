@@ -2,10 +2,15 @@ package com.winlator.cmod.feature.retro
 
 import android.app.Activity
 import android.app.Dialog
+import android.net.Uri
 import android.os.Build
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
@@ -17,19 +22,60 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.winlator.cmod.R
 import com.winlator.cmod.feature.library.GameSettingsNav
+import com.winlator.cmod.feature.shortcuts.LibraryShortcutArtwork
 import com.winlator.cmod.runtime.container.Shortcut
+import com.winlator.cmod.shared.android.ImageUtils
+import com.winlator.cmod.shared.io.FileUtils
 import com.winlator.cmod.shared.theme.WinNativeTheme
 import com.winlator.cmod.shared.ui.nav.PANE_DIR_ACTIVATE
 import com.winlator.cmod.shared.ui.nav.PaneNavWindowHandlers
 import com.winlator.cmod.shared.ui.nav.bindPaneNav
+import com.winlator.cmod.shared.ui.toast.WinToast
 
 class RetroSettingsDialog(
     private val activity: Activity,
-    shortcut: Shortcut,
+    private val shortcut: Shortcut,
 ) {
     private val state = RetroSettingsState(shortcut)
     private val nav = GameSettingsNav()
     private var restorePaneNav: (() -> Unit)? = null
+    private var pendingArtworkSlot = LibraryShortcutArtwork.LibraryArtworkSlot.GAME_CARD
+
+    private val artworkPickerLauncher: ActivityResultLauncher<Array<String>>? =
+        (activity as? ComponentActivity)?.activityResultRegistry?.register(
+            "retro_artwork_picker",
+            ActivityResultContracts.OpenDocument(),
+        ) { uri: Uri? ->
+            if (uri != null) saveSelectedArtwork(uri)
+        }
+
+    private fun saveSelectedArtwork(uri: Uri) {
+        val bitmap = ImageUtils.getBitmapFromUri(activity, uri, 1024)
+        if (bitmap == null) {
+            WinToast.show(activity, R.string.shortcuts_library_artwork_failed, Toast.LENGTH_SHORT)
+            return
+        }
+        val slot = pendingArtworkSlot
+        val previousPath = shortcut.getExtra(slot.extraKey)
+        val outputFile = LibraryShortcutArtwork.buildManagedViewArtworkFile(activity, shortcut, slot)
+        if (!FileUtils.saveBitmapToFile(bitmap, outputFile)) {
+            WinToast.show(activity, R.string.shortcuts_library_artwork_failed, Toast.LENGTH_SHORT)
+            return
+        }
+        if (previousPath.isNotBlank() && previousPath != outputFile.absolutePath) {
+            LibraryShortcutArtwork.deleteManagedArtwork(activity, previousPath)
+        }
+        shortcut.putExtra(slot.extraKey, outputFile.absolutePath)
+        shortcut.saveData()
+        state.syncArtwork()
+    }
+
+    private fun clearArtwork(slot: LibraryShortcutArtwork.LibraryArtworkSlot) {
+        LibraryShortcutArtwork.deleteManagedArtwork(activity, shortcut.getExtra(slot.extraKey))
+        shortcut.putExtra(slot.extraKey, null)
+        shortcut.saveData()
+        state.syncArtwork()
+    }
 
     private val dialog: Dialog =
         Dialog(activity, R.style.ContentDialog).apply {
@@ -75,6 +121,11 @@ class RetroSettingsDialog(
                             RetroGameSettingsContent(
                                 state = state,
                                 nav = nav,
+                                onPickArtwork = { slot ->
+                                    pendingArtworkSlot = slot
+                                    artworkPickerLauncher?.launch(arrayOf("image/*"))
+                                },
+                                onRemoveArtwork = { slot -> clearArtwork(slot) },
                                 onSave = {
                                     state.save()
                                     dialog.dismiss()

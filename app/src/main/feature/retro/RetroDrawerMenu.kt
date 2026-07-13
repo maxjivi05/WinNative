@@ -22,6 +22,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -276,65 +277,63 @@ class RetroMenuController {
 @Composable
 fun RetroDrawerMenu(controller: RetroMenuController) {
     val density = LocalDensity.current
-    AnimatedVisibility(
-        visible = controller.visible,
-        enter = fadeIn(tween(180)),
-        exit = fadeOut(tween(140)),
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.32f))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { controller.close() },
-        )
-    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val paneScale = (maxHeight.value / 520f).coerceIn(0.78f, 1f)
+        if (controller.visible) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { controller.close() },
+            )
+        }
 
-    val closedOffset = -(DrawerWidth + DrawerStartPadding + 8.dp)
-    val sheetOffset by animateDpAsState(
-        targetValue = if (controller.visible) 0.dp else closedOffset,
-        animationSpec = tween(durationMillis = 200, easing = LinearEasing),
-        label = "retroDrawerOffset",
-    )
-    if (sheetOffset > closedOffset) {
-        Box(
-            Modifier
-                .padding(start = DrawerStartPadding, top = DrawerVerticalPadding, bottom = DrawerVerticalPadding)
-                .fillMaxHeight()
-                .width(DrawerWidth)
-                .offset { androidx.compose.ui.unit.IntOffset(with(density) { sheetOffset.roundToPx() }, 0) }
-                .clip(RoundedCornerShape(20.dp))
-                .background(RetroSheetColor)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) {},
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                RetroTopRail(controller)
-                ThinDivider()
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    AnimatedContent(
-                        targetState = controller.pane,
-                        transitionSpec = {
-                            fadeIn(tween(220, easing = FastOutSlowInEasing)) togetherWith
-                                fadeOut(tween(220, easing = FastOutSlowInEasing))
-                        },
-                        label = "retroDrawerBody",
-                    ) { pane ->
-                        if (pane == null) {
-                            RetroActionGrid(controller)
-                        } else {
-                            RetroPaneList(controller)
+        val closedOffset = -(DrawerWidth + DrawerStartPadding + 8.dp)
+        val sheetOffset by animateDpAsState(
+            targetValue = if (controller.visible) 0.dp else closedOffset,
+            animationSpec = tween(durationMillis = 200, easing = LinearEasing),
+            label = "retroDrawerOffset",
+        )
+        if (sheetOffset > closedOffset) {
+            Box(
+                Modifier
+                    .padding(start = DrawerStartPadding, top = DrawerVerticalPadding, bottom = DrawerVerticalPadding)
+                    .fillMaxHeight()
+                    .width(DrawerWidth)
+                    .offset { androidx.compose.ui.unit.IntOffset(with(density) { sheetOffset.roundToPx() }, 0) }
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(RetroSheetColor)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) {},
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    RetroTopRail(controller, paneScale)
+                    ThinDivider()
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        AnimatedContent(
+                            targetState = controller.pane,
+                            transitionSpec = {
+                                fadeIn(tween(220, easing = FastOutSlowInEasing)) togetherWith
+                                    fadeOut(tween(220, easing = FastOutSlowInEasing))
+                            },
+                            label = "retroDrawerBody",
+                        ) { pane ->
+                            if (pane == null) {
+                                RetroActionGrid(controller, paneScale)
+                            } else {
+                                RetroPaneList(controller, paneScale)
+                            }
                         }
                     }
-                }
-                AnimatedVisibility(visible = controller.pane == null) {
-                    Column {
-                        ThinDivider()
-                        RetroBottomExit(controller)
+                    AnimatedVisibility(visible = controller.pane == null) {
+                        Column {
+                            ThinDivider()
+                            RetroBottomExit(controller, paneScale)
+                        }
                     }
                 }
             }
@@ -349,7 +348,10 @@ private data class RailTileBounds(
 )
 
 @Composable
-private fun RetroTopRail(controller: RetroMenuController) {
+private fun RetroTopRail(
+    controller: RetroMenuController,
+    paneScale: Float,
+) {
     val density = LocalDensity.current
     val tileBounds = remember { mutableStateMapOf<Int, RailTileBounds>() }
     val railScroll = rememberScrollState()
@@ -389,18 +391,23 @@ private fun RetroTopRail(controller: RetroMenuController) {
             Modifier
                 .fillMaxWidth()
                 .background(TopRailSurfaceColor)
-                .padding(start = 10.dp, end = 10.dp, top = 5.dp, bottom = 2.dp),
+                .padding(
+                    start = (10f * paneScale).dp,
+                    end = (10f * paneScale).dp,
+                    top = (5f * paneScale).dp,
+                    bottom = (2f * paneScale).dp,
+                ),
     ) {
         if (selectedBounds != null) {
             Box(
                 modifier =
                     Modifier
                         .offset(
-                            x = indicatorX - with(density) { railScroll.value.toDp() } + 6.dp,
-                            y = indicatorTileHeight - 2.dp,
+                            x = indicatorX - with(density) { railScroll.value.toDp() } + (6f * paneScale).dp,
+                            y = indicatorTileHeight - (2f * paneScale).dp,
                         )
-                        .width((indicatorWidth - 12.dp).coerceAtLeast(0.dp))
-                        .height(2.dp)
+                        .width((indicatorWidth - (12f * paneScale).dp).coerceAtLeast(0.dp))
+                        .height((2f * paneScale).dp)
                         .graphicsLayer { alpha = indicatorAlpha }
                         .clip(RoundedCornerShape(1.dp))
                         .background(DrawerAccent),
@@ -408,7 +415,7 @@ private fun RetroTopRail(controller: RetroMenuController) {
         }
         Row(
             modifier = Modifier.horizontalScroll(railScroll),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy((10f * paneScale).dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             controller.tabs.forEachIndexed { index, tab ->
@@ -422,6 +429,7 @@ private fun RetroTopRail(controller: RetroMenuController) {
                             controller.pane == tab.pane
                         },
                     highlighted = controller.controllerActive && controller.region == 0 && controller.railIndex == index,
+                    paneScale = paneScale,
                     onBoundsChanged = { tileBounds[index] = it },
                     onClick = {
                         controller.railIndex = index
@@ -439,6 +447,7 @@ private fun RetroRailTile(
     label: String,
     selected: Boolean,
     highlighted: Boolean,
+    paneScale: Float,
     onBoundsChanged: (RailTileBounds) -> Unit,
     onClick: () -> Unit,
 ) {
@@ -464,11 +473,12 @@ private fun RetroRailTile(
         animationSpec = tween(120),
         label = "retroTileTint",
     )
-    val shape = RoundedCornerShape(12.dp)
+    val cornerRadius = (12f * paneScale).dp
+    val shape = RoundedCornerShape(cornerRadius)
     Column(
         modifier =
             Modifier
-                .defaultMinSize(minWidth = 60.dp)
+                .defaultMinSize(minWidth = (60f * paneScale).dp)
                 .onGloballyPositioned { coords ->
                     val bounds = coords.boundsInParent()
                     onBoundsChanged(RailTileBounds(bounds.left, bounds.width, bounds.height))
@@ -481,22 +491,27 @@ private fun RetroRailTile(
                 .background(bgColor)
                 .then(
                     if (highlighted) {
-                        Modifier.chasingBorder(cornerRadius = 12.dp, borderWidth = 1.5.dp, animationDurationMs = 8200)
+                        Modifier.chasingBorder(cornerRadius = cornerRadius, borderWidth = 1.5.dp, animationDurationMs = 8200)
                     } else {
                         Modifier
                     },
                 )
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-                .padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 7.dp),
+                .padding(
+                    start = (10f * paneScale).dp,
+                    end = (10f * paneScale).dp,
+                    top = (10f * paneScale).dp,
+                    bottom = (7f * paneScale).dp,
+                ),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(imageVector = icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.height(2.dp))
+        Icon(imageVector = icon, contentDescription = label, tint = tint, modifier = Modifier.size((22f * paneScale).dp))
+        Spacer(Modifier.height((2f * paneScale).dp))
         Text(
             text = label,
             color = DrawerTextPrimary,
-            fontSize = 12.sp,
+            fontSize = (12f * paneScale).sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             letterSpacing = 0.2.sp,
             maxLines = 1,
@@ -506,20 +521,23 @@ private fun RetroRailTile(
 }
 
 @Composable
-private fun RetroActionGrid(controller: RetroMenuController) {
+private fun RetroActionGrid(
+    controller: RetroMenuController,
+    paneScale: Float,
+) {
     val actions = controller.entries
     Column(
         modifier =
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = (10f * paneScale).dp, vertical = (10f * paneScale).dp),
+        verticalArrangement = Arrangement.spacedBy((8f * paneScale).dp),
     ) {
         actions.chunked(controller.gridColumns).forEachIndexed { rowIndex, row ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy((8f * paneScale).dp),
             ) {
                 row.forEachIndexed { colIndex, entry ->
                     val flatIndex = rowIndex * controller.gridColumns + colIndex
@@ -530,7 +548,8 @@ private fun RetroActionGrid(controller: RetroMenuController) {
                                 controller.controllerActive &&
                                     controller.region == 1 &&
                                     controller.contentIndex == flatIndex,
-                            modifier = Modifier.weight(1f).height(64.dp),
+                            paneScale = paneScale,
+                            modifier = Modifier.weight(1f).height((64f * paneScale).dp),
                             onClick = {
                                 controller.contentIndex = flatIndex
                                 entry.onClick()
@@ -550,6 +569,7 @@ private fun RetroActionGrid(controller: RetroMenuController) {
 private fun RetroActionCard(
     entry: RetroMenuEntry.Action,
     highlighted: Boolean,
+    paneScale: Float,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -581,7 +601,8 @@ private fun RetroActionCard(
             entry.active -> DrawerActiveAccent
             else -> DrawerTextPrimary
         }
-    val shape = RoundedCornerShape(12.dp)
+    val cornerRadius = (12f * paneScale).dp
+    val shape = RoundedCornerShape(cornerRadius)
     val topColor =
         Color(
             red = (bgColor.red + (1f - bgColor.red) * DrawerGradientLift).coerceIn(0f, 1f),
@@ -601,7 +622,7 @@ private fun RetroActionCard(
                 .border(1.dp, borderColor, shape)
                 .then(
                     if (highlighted) {
-                        Modifier.chasingBorder(cornerRadius = 12.dp, borderWidth = 1.5.dp, animationDurationMs = 8200)
+                        Modifier.chasingBorder(cornerRadius = cornerRadius, borderWidth = 1.5.dp, animationDurationMs = 8200)
                     } else {
                         Modifier
                     },
@@ -610,12 +631,17 @@ private fun RetroActionCard(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(imageVector = entry.icon, contentDescription = entry.label, tint = tint, modifier = Modifier.size(24.dp))
-        Spacer(Modifier.height(4.dp))
+        Icon(
+            imageVector = entry.icon,
+            contentDescription = entry.label,
+            tint = tint,
+            modifier = Modifier.size((24f * paneScale).dp),
+        )
+        Spacer(Modifier.height((4f * paneScale).dp))
         Text(
             text = entry.label,
             color = DrawerTextPrimary,
-            fontSize = 12.sp,
+            fontSize = (12f * paneScale).sp,
             fontWeight = if (entry.active) FontWeight.SemiBold else FontWeight.Medium,
             letterSpacing = 0.2.sp,
             textAlign = TextAlign.Center,
@@ -626,14 +652,17 @@ private fun RetroActionCard(
 }
 
 @Composable
-private fun RetroPaneList(controller: RetroMenuController) {
+private fun RetroPaneList(
+    controller: RetroMenuController,
+    paneScale: Float,
+) {
     Column(
         modifier =
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = (10f * paneScale).dp, vertical = (10f * paneScale).dp),
+        verticalArrangement = Arrangement.spacedBy((8f * paneScale).dp),
     ) {
         controller.entries.forEachIndexed { index, entry ->
             val highlighted =
@@ -645,6 +674,7 @@ private fun RetroPaneList(controller: RetroMenuController) {
                     RetroBooleanRow(
                         entry = entry,
                         highlighted = highlighted,
+                        paneScale = paneScale,
                         onClick = {
                             controller.contentIndex = index
                             entry.onChange(!entry.checked)
@@ -654,6 +684,7 @@ private fun RetroPaneList(controller: RetroMenuController) {
                     RetroChoiceRow(
                         entry = entry,
                         highlighted = highlighted,
+                        paneScale = paneScale,
                         onClick = {
                             controller.contentIndex = index
                             entry.onCycle(1)
@@ -663,6 +694,7 @@ private fun RetroPaneList(controller: RetroMenuController) {
                     RetroRadioRow(
                         entry = entry,
                         highlighted = highlighted,
+                        paneScale = paneScale,
                         onClick = {
                             controller.contentIndex = index
                             entry.onSelect()
@@ -672,7 +704,8 @@ private fun RetroPaneList(controller: RetroMenuController) {
                     RetroActionCard(
                         entry = entry,
                         highlighted = highlighted,
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                        paneScale = paneScale,
+                        modifier = Modifier.fillMaxWidth().height((56f * paneScale).dp),
                         onClick = {
                             controller.contentIndex = index
                             entry.onClick()
@@ -687,6 +720,7 @@ private fun RetroPaneList(controller: RetroMenuController) {
 private fun RetroRowShell(
     highlighted: Boolean,
     activeBorder: Boolean,
+    paneScale: Float,
     onClick: () -> Unit,
     content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
 ) {
@@ -707,7 +741,8 @@ private fun RetroRowShell(
         animationSpec = tween(140),
         label = "retroRowBorder",
     )
-    val shape = RoundedCornerShape(14.dp)
+    val cornerRadius = (14f * paneScale).dp
+    val shape = RoundedCornerShape(cornerRadius)
     Row(
         modifier =
             Modifier
@@ -717,13 +752,13 @@ private fun RetroRowShell(
                 .border(1.dp, borderColor, shape)
                 .then(
                     if (highlighted) {
-                        Modifier.chasingBorder(cornerRadius = 14.dp, borderWidth = 1.5.dp, animationDurationMs = 8200)
+                        Modifier.chasingBorder(cornerRadius = cornerRadius, borderWidth = 1.5.dp, animationDurationMs = 8200)
                     } else {
                         Modifier
                     },
                 )
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = (12f * paneScale).dp, vertical = (8f * paneScale).dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         content()
@@ -734,21 +769,22 @@ private fun RetroRowShell(
 private fun RetroBooleanRow(
     entry: RetroMenuEntry.Toggle,
     highlighted: Boolean,
+    paneScale: Float,
     onClick: () -> Unit,
 ) {
-    RetroRowShell(highlighted = highlighted, activeBorder = entry.checked, onClick = onClick) {
+    RetroRowShell(highlighted = highlighted, activeBorder = entry.checked, paneScale = paneScale, onClick = onClick) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = entry.label,
                 color = DrawerTextPrimary,
-                fontSize = 14.sp,
+                fontSize = (14f * paneScale).sp,
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 text = entry.subtitle ?: if (entry.checked) "Enabled" else "Disabled",
                 color = DrawerTextSecondary,
-                fontSize = 12.sp,
+                fontSize = (12f * paneScale).sp,
             )
         }
         Switch(
@@ -763,28 +799,29 @@ private fun RetroBooleanRow(
 private fun RetroChoiceRow(
     entry: RetroMenuEntry.Choice,
     highlighted: Boolean,
+    paneScale: Float,
     onClick: () -> Unit,
 ) {
-    RetroRowShell(highlighted = highlighted, activeBorder = false, onClick = onClick) {
+    RetroRowShell(highlighted = highlighted, activeBorder = false, paneScale = paneScale, onClick = onClick) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = entry.label,
                 color = DrawerTextPrimary,
-                fontSize = 14.sp,
+                fontSize = (14f * paneScale).sp,
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 text = entry.valueLabel,
                 color = DrawerActiveAccent,
-                fontSize = 12.sp,
+                fontSize = (12f * paneScale).sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
         Text(
             text = "‹ ›",
             color = DrawerTextSecondary,
-            fontSize = 16.sp,
+            fontSize = (16f * paneScale).sp,
         )
     }
 }
@@ -793,13 +830,14 @@ private fun RetroChoiceRow(
 private fun RetroRadioRow(
     entry: RetroMenuEntry.Radio,
     highlighted: Boolean,
+    paneScale: Float,
     onClick: () -> Unit,
 ) {
-    RetroRowShell(highlighted = highlighted, activeBorder = entry.selected, onClick = onClick) {
+    RetroRowShell(highlighted = highlighted, activeBorder = entry.selected, paneScale = paneScale, onClick = onClick) {
         Text(
             text = entry.label,
             color = if (entry.selected) DrawerActiveAccent else DrawerTextPrimary,
-            fontSize = 14.sp,
+            fontSize = (14f * paneScale).sp,
             fontWeight = if (entry.selected) FontWeight.SemiBold else FontWeight.Medium,
             modifier = Modifier.weight(1f),
         )
@@ -807,7 +845,7 @@ private fun RetroRadioRow(
             Text(
                 text = "✓",
                 color = DrawerActiveAccent,
-                fontSize = 14.sp,
+                fontSize = (14f * paneScale).sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -815,7 +853,10 @@ private fun RetroRadioRow(
 }
 
 @Composable
-private fun RetroBottomExit(controller: RetroMenuController) {
+private fun RetroBottomExit(
+    controller: RetroMenuController,
+    paneScale: Float,
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed = interactionSource.collectIsPressedAsState().value
     val highlighted = controller.controllerActive && controller.region == 2
@@ -829,12 +870,13 @@ private fun RetroBottomExit(controller: RetroMenuController) {
         animationSpec = tween(120),
         label = "retroExitBg",
     )
-    val shape = RoundedCornerShape(14.dp)
+    val cornerRadius = (14f * paneScale).dp
+    val shape = RoundedCornerShape(cornerRadius)
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = (10f * paneScale).dp, vertical = (8f * paneScale).dp),
     ) {
         Row(
             modifier =
@@ -845,7 +887,7 @@ private fun RetroBottomExit(controller: RetroMenuController) {
                     .border(1.dp, GlassExitTint.copy(alpha = 0.34f), shape)
                     .then(
                         if (highlighted) {
-                            Modifier.chasingBorder(cornerRadius = 14.dp, borderWidth = 1.5.dp, animationDurationMs = 8200)
+                            Modifier.chasingBorder(cornerRadius = cornerRadius, borderWidth = 1.5.dp, animationDurationMs = 8200)
                         } else {
                             Modifier
                         },
@@ -853,7 +895,7 @@ private fun RetroBottomExit(controller: RetroMenuController) {
                     .clickable(interactionSource = interactionSource, indication = null) {
                         controller.onExit?.invoke()
                     }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = (12f * paneScale).dp, vertical = (10f * paneScale).dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
@@ -861,13 +903,13 @@ private fun RetroBottomExit(controller: RetroMenuController) {
                 imageVector = Icons.AutoMirrored.Outlined.ExitToApp,
                 contentDescription = null,
                 tint = GlassExitTint,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size((18f * paneScale).dp),
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width((8f * paneScale).dp))
             Text(
                 text = "Exit",
                 color = GlassExitTint,
-                fontSize = 13.sp,
+                fontSize = (13f * paneScale).sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
             )

@@ -132,32 +132,34 @@ class RetroInputView(
         val trigH = unit * 0.105f
         val trigGap = unit * 0.02f
 
-        var leftShoulderTop = margin
-        var rightShoulderTop = margin
+        var leftCursor = margin
+        var rightCursor = margin
         if (config.hasTriggers) {
             val lt = GlassButton(KeyEvent.KEYCODE_BUTTON_L2, config.leftTriggerLabel, GlassShape.TRIGGER_LT)
-            lt.bounds.set(margin, leftShoulderTop, margin + trigW, leftShoulderTop + trigH)
+            lt.bounds.set(margin, leftCursor, margin + trigW, leftCursor + trigH)
             buttons += lt
-            leftShoulderTop += trigH + trigGap
+            leftCursor += trigH + trigGap
             if (config.showRightTrigger) {
                 val rt = GlassButton(KeyEvent.KEYCODE_BUTTON_R2, config.rightTriggerLabel, GlassShape.TRIGGER_RT)
-                rt.bounds.set(width - margin - trigW, rightShoulderTop, width - margin, rightShoulderTop + trigH)
+                rt.bounds.set(width - margin - trigW, rightCursor, width - margin, rightCursor + trigH)
                 buttons += rt
-                rightShoulderTop += trigH + trigGap
+                rightCursor += trigH + trigGap
             }
         }
         if (config.hasShoulders) {
             val lb = GlassButton(KeyEvent.KEYCODE_BUTTON_L1, "L", GlassShape.TRIGGER_LB)
-            lb.bounds.set(margin, leftShoulderTop, margin + trigW, leftShoulderTop + trigH)
+            lb.bounds.set(margin, leftCursor, margin + trigW, leftCursor + trigH)
             buttons += lb
             val rb = GlassButton(KeyEvent.KEYCODE_BUTTON_R1, "R", GlassShape.TRIGGER_RB)
-            rb.bounds.set(width - margin - trigW, rightShoulderTop, width - margin, rightShoulderTop + trigH)
+            rb.bounds.set(width - margin - trigW, rightCursor, width - margin, rightCursor + trigH)
             buttons += rb
+            leftCursor += trigH + trigGap
         }
 
         val clusterCx = width - margin - faceRadius * 2.6f
         val clusterCy = height - margin - faceRadius * 2.6f
         val spread = faceRadius * 1.75f
+        var clusterTop = height
         fun addFace(
             keyCode: Int,
             label: String,
@@ -167,6 +169,7 @@ class RetroInputView(
             val button = GlassButton(keyCode, label, GlassShape.CIRCLE)
             button.bounds.set(cx - faceRadius, cy - faceRadius, cx + faceRadius, cy + faceRadius)
             buttons += button
+            clusterTop = min(clusterTop, button.bounds.top)
         }
         if (config.hasXY) {
             addFace(KeyEvent.KEYCODE_BUTTON_X, "X", clusterCx, clusterCy - spread)
@@ -178,31 +181,41 @@ class RetroInputView(
             addFace(KeyEvent.KEYCODE_BUTTON_A, "A", clusterCx + faceRadius * 1.1f, clusterCy - faceRadius * 0.7f)
         }
 
-        dpadRadius = unit * 0.155f
-        if (config.hasStick) {
-            stickRadius = unit * 0.13f
-            stickCx = margin + stickRadius * 1.4f
-            stickCy = height - margin - stickRadius
-            dpadCx = margin + dpadRadius * 0.9f
-            dpadCy = stickCy - stickRadius - dpadRadius - unit * 0.04f
-        } else {
-            stickRadius = 0f
-            dpadCx = margin + dpadRadius * 1.15f
-            dpadCy = height - margin - dpadRadius * 1.15f
-        }
-
-        val pillW = unit * 0.17f
+        val pillW = unit * 0.135f
         val pillH = unit * 0.062f
         val pillGap = unit * 0.02f
-        val pillY = height - margin - pillH
-        val select = GlassButton(KeyEvent.KEYCODE_BUTTON_SELECT, "SELECT", GlassShape.PILL)
-        select.bounds.set(width * 0.5f - pillGap * 0.5f - pillW, pillY, width * 0.5f - pillGap * 0.5f, pillY + pillH)
-        buttons += select
+        val pillY = clusterTop - pillH - unit * 0.025f
         val start = GlassButton(KeyEvent.KEYCODE_BUTTON_START, "START", GlassShape.PILL)
-        start.bounds.set(width * 0.5f + pillGap * 0.5f, pillY, width * 0.5f + pillGap * 0.5f + pillW, pillY + pillH)
+        start.bounds.set(width - margin - pillW, pillY, width - margin, pillY + pillH)
         buttons += start
+        val select = GlassButton(KeyEvent.KEYCODE_BUTTON_SELECT, "SELECT", GlassShape.PILL)
+        select.bounds.set(
+            width - margin - pillW * 2 - pillGap,
+            pillY,
+            width - margin - pillW - pillGap,
+            pillY + pillH,
+        )
+        buttons += select
 
-        menuButton.bounds.set(width * 0.5f - pillW * 0.5f, margin, width * 0.5f + pillW * 0.5f, margin + pillH)
+        val menuW = unit * 0.15f
+        if (config.hasStick) {
+            dpadRadius = unit * 0.135f
+            dpadCx = margin + dpadRadius + unit * 0.02f
+            menuButton.bounds.set(dpadCx - menuW * 0.5f, leftCursor, dpadCx + menuW * 0.5f, leftCursor + pillH)
+            leftCursor += pillH + trigGap
+            dpadCy = leftCursor + dpadRadius
+            leftCursor += dpadRadius * 2 + trigGap
+            stickRadius = unit * 0.115f
+            stickCx = dpadCx
+            stickCy = max(leftCursor + stickRadius, height - margin - stickRadius)
+        } else {
+            stickRadius = 0f
+            dpadRadius = unit * 0.155f
+            dpadCx = margin + dpadRadius * 1.15f
+            dpadCy = height - margin - dpadRadius * 1.15f
+            val menuY = max(dpadCy - dpadRadius - pillH - unit * 0.025f, leftCursor)
+            menuButton.bounds.set(dpadCx - menuW * 0.5f, menuY, dpadCx + menuW * 0.5f, menuY + pillH)
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
