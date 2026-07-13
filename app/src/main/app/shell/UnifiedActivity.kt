@@ -12225,7 +12225,7 @@ class UnifiedActivity :
 
         fun selectExecutable(path: String) {
             val extension = path.substringAfterLast('.', "").lowercase(java.util.Locale.US)
-            val detectedRetro = com.winlator.cmod.feature.retro.RetroSystems.fromExtension(extension)
+            val detectedRetro = com.winlator.cmod.feature.retro.RetroSystems.detectForFile(path)
             val launchable =
                 path.endsWith(".exe", ignoreCase = true) ||
                     path.endsWith(".bat", ignoreCase = true) ||
@@ -12368,31 +12368,67 @@ class UnifiedActivity :
 
                                 val activeRetroSystem = retroSystem
                                 if (activeRetroSystem != null) {
-                                    Row(
-                                        modifier =
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(Color.White.copy(alpha = 0.05f))
-                                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Icon(
-                                            Icons.Outlined.SportsEsports,
-                                            contentDescription = null,
-                                            tint = StatusOnline.copy(alpha = 0.7f),
-                                            modifier = Modifier.size(14.dp),
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text("Console", color = TextSecondary, fontSize = 9.sp)
-                                            Text(
-                                                activeRetroSystem.displayName,
-                                                color = TextPrimary,
-                                                fontSize = 10.sp,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
+                                    var consoleMenuOpen by remember { mutableStateOf(false) }
+                                    Box {
+                                        Row(
+                                            modifier =
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .background(Color.White.copy(alpha = 0.05f))
+                                                    .paneNavItem(
+                                                        cornerRadius = 10.dp,
+                                                        tapToSelect = true,
+                                                        onActivate = { consoleMenuOpen = true },
+                                                    ).clickable { consoleMenuOpen = true }
+                                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.SportsEsports,
+                                                contentDescription = null,
+                                                tint = StatusOnline.copy(alpha = 0.7f),
+                                                modifier = Modifier.size(14.dp),
                                             )
+                                            Spacer(Modifier.width(6.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text("Console", color = TextSecondary, fontSize = 9.sp)
+                                                Text(
+                                                    activeRetroSystem.displayName,
+                                                    color = TextPrimary,
+                                                    fontSize = 10.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                            Icon(
+                                                Icons.Outlined.Edit,
+                                                contentDescription = stringResource(R.string.common_ui_change),
+                                                tint = Accent,
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                        }
+                                        DropdownMenu(
+                                            expanded = consoleMenuOpen,
+                                            onDismissRequest = { consoleMenuOpen = false },
+                                            containerColor = Color(0xFF1C232E),
+                                        ) {
+                                            com.winlator.cmod.feature.retro.RetroSystems.ALL.forEach { candidate ->
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            candidate.displayName,
+                                                            color =
+                                                                if (candidate.id == activeRetroSystem.id) Accent else TextPrimary,
+                                                            fontSize = 12.sp,
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        retroSystem = candidate
+                                                        consoleMenuOpen = false
+                                                    },
+                                                )
+                                            }
                                         }
                                     }
                                 } else {

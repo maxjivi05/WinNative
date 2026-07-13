@@ -123,6 +123,13 @@ object RetroSystems {
         return fromExtension(ext)
     }
 
+    fun detectForFile(path: String): RetroSystem? {
+        val ext = path.substringAfterLast('.', "").lowercase(Locale.US)
+        val detected = fromExtension(ext) ?: return null
+        if (ext == "bin" && java.io.File(path).length() > 16L * 1024 * 1024) return PSX
+        return detected
+    }
+
     fun isRetroRom(path: String?): Boolean {
         if (path.isNullOrBlank()) return false
         val ext = path.substringAfterLast('.', "").lowercase(Locale.US)
