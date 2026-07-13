@@ -227,7 +227,11 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         inputManager = getSystemService(InputManager::class.java)
         inputManager?.registerInputDeviceListener(inputDeviceListener, null)
         refreshControllerPresence()
-        if (hudVisible) showHud()
+        if (hudVisible) {
+            root.post {
+                if (!isFinishing && !isDestroyed && hudVisible) showHud()
+            }
+        }
         recordLaunchStats()
         observeErrors()
         observeEvents()
