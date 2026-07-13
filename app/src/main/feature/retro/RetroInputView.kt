@@ -46,6 +46,7 @@ class RetroInputView(
         val keyCode: Int,
         val label: String,
         val shape: GlassShape,
+        val textScale: Float = 1f,
         val bounds: RectF = RectF(),
     )
 
@@ -78,7 +79,8 @@ class RetroInputView(
         }
 
     private val buttons = mutableListOf<GlassButton>()
-    private val menuButton = GlassButton(0, "MENU", GlassShape.PILL)
+    private val menuButton = GlassButton(0, "MENU", GlassShape.PILL, textScale = 0.75f)
+    private var snap = 0f
 
     private var dpadCx = 0f
     private var dpadCy = 0f
@@ -123,42 +125,49 @@ class RetroInputView(
         buttons.clear()
         val width = w.toFloat()
         val height = h.toFloat()
-        val unit = min(width, height)
-        val margin = unit * 0.05f
-        val faceRadius = unit * 0.085f
-        strokeWidth = max(2f, faceRadius * 0.16f)
+        snap = width / 100f
+        val margin = snap * 2.5f
+        val faceRadius = snap * 3f
+        strokeWidth = max(2f, snap * 0.18f)
 
-        val trigW = unit * 0.30f
-        val trigH = unit * 0.105f
-        val trigGap = unit * 0.02f
+        val trigW = snap * 10.4f
+        val trigH = snap * 5.2f
+        val trigGap = snap * 1.5f
 
         var leftCursor = margin
         var rightCursor = margin
         if (config.hasTriggers) {
-            val lt = GlassButton(KeyEvent.KEYCODE_BUTTON_L2, config.leftTriggerLabel, GlassShape.TRIGGER_LT)
+            val lt =
+                GlassButton(KeyEvent.KEYCODE_BUTTON_L2, config.leftTriggerLabel, GlassShape.TRIGGER_LT, textScale = 1.3f)
             lt.bounds.set(margin, leftCursor, margin + trigW, leftCursor + trigH)
             buttons += lt
             leftCursor += trigH + trigGap
             if (config.showRightTrigger) {
-                val rt = GlassButton(KeyEvent.KEYCODE_BUTTON_R2, config.rightTriggerLabel, GlassShape.TRIGGER_RT)
+                val rt =
+                    GlassButton(
+                        KeyEvent.KEYCODE_BUTTON_R2,
+                        config.rightTriggerLabel,
+                        GlassShape.TRIGGER_RT,
+                        textScale = 1.3f,
+                    )
                 rt.bounds.set(width - margin - trigW, rightCursor, width - margin, rightCursor + trigH)
                 buttons += rt
                 rightCursor += trigH + trigGap
             }
         }
         if (config.hasShoulders) {
-            val lb = GlassButton(KeyEvent.KEYCODE_BUTTON_L1, "L", GlassShape.TRIGGER_LB)
+            val lb = GlassButton(KeyEvent.KEYCODE_BUTTON_L1, "L", GlassShape.TRIGGER_LB, textScale = 1.3f)
             lb.bounds.set(margin, leftCursor, margin + trigW, leftCursor + trigH)
             buttons += lb
-            val rb = GlassButton(KeyEvent.KEYCODE_BUTTON_R1, "R", GlassShape.TRIGGER_RB)
+            val rb = GlassButton(KeyEvent.KEYCODE_BUTTON_R1, "R", GlassShape.TRIGGER_RB, textScale = 1.3f)
             rb.bounds.set(width - margin - trigW, rightCursor, width - margin, rightCursor + trigH)
             buttons += rb
             leftCursor += trigH + trigGap
         }
 
-        val clusterCx = width - margin - faceRadius * 2.6f
-        val clusterCy = height - margin - faceRadius * 2.6f
-        val spread = faceRadius * 1.75f
+        val spread = snap * 5.5f
+        val clusterCx = width - margin - faceRadius - spread
+        val clusterCy = height - snap * 6f - faceRadius - spread
         var clusterTop = height
         fun addFace(
             keyCode: Int,
@@ -177,18 +186,18 @@ class RetroInputView(
             addFace(KeyEvent.KEYCODE_BUTTON_Y, "Y", clusterCx - spread, clusterCy)
             addFace(KeyEvent.KEYCODE_BUTTON_A, "A", clusterCx + spread, clusterCy)
         } else {
-            addFace(KeyEvent.KEYCODE_BUTTON_B, "B", clusterCx - faceRadius * 1.1f, clusterCy + faceRadius * 0.7f)
-            addFace(KeyEvent.KEYCODE_BUTTON_A, "A", clusterCx + faceRadius * 1.1f, clusterCy - faceRadius * 0.7f)
+            addFace(KeyEvent.KEYCODE_BUTTON_B, "B", clusterCx - faceRadius * 1.1f, clusterCy + spread * 0.5f + faceRadius * 0.5f)
+            addFace(KeyEvent.KEYCODE_BUTTON_A, "A", clusterCx + faceRadius * 1.1f, clusterCy + spread * 0.5f - faceRadius * 1.1f)
         }
 
-        val pillW = unit * 0.135f
-        val pillH = unit * 0.062f
-        val pillGap = unit * 0.02f
-        val pillY = clusterTop - pillH - unit * 0.065f
-        val start = GlassButton(KeyEvent.KEYCODE_BUTTON_START, "START", GlassShape.PILL)
+        val pillW = snap * 6f
+        val pillH = snap * 3f
+        val pillGap = snap * 1.2f
+        val pillY = clusterTop - pillH - snap * 3.5f
+        val start = GlassButton(KeyEvent.KEYCODE_BUTTON_START, "START", GlassShape.PILL, textScale = 0.75f)
         start.bounds.set(width - margin - pillW, pillY, width - margin, pillY + pillH)
         buttons += start
-        val select = GlassButton(KeyEvent.KEYCODE_BUTTON_SELECT, "SELECT", GlassShape.PILL)
+        val select = GlassButton(KeyEvent.KEYCODE_BUTTON_SELECT, "SELECT", GlassShape.PILL, textScale = 0.75f)
         select.bounds.set(
             width - margin - pillW * 2 - pillGap,
             pillY,
@@ -197,22 +206,22 @@ class RetroInputView(
         )
         buttons += select
 
-        val menuW = unit * 0.15f
+        val menuW = snap * 6f
         if (config.hasStick) {
-            dpadRadius = unit * 0.135f
-            dpadCx = margin + dpadRadius + unit * 0.02f
+            dpadRadius = snap * 6.5f
+            dpadCx = margin + dpadRadius + snap * 1f
             menuButton.bounds.set(dpadCx - menuW * 0.5f, leftCursor, dpadCx + menuW * 0.5f, leftCursor + pillH)
             leftCursor += pillH + trigGap
             dpadCy = leftCursor + dpadRadius
             leftCursor += dpadRadius * 2 + trigGap
-            stickRadius = unit * 0.115f
+            stickRadius = snap * 7f
             stickCx = dpadCx
-            stickCy = max(leftCursor + stickRadius, height - margin - stickRadius)
+            stickCy = max(leftCursor + stickRadius, height - snap * 6f - stickRadius)
         } else {
             stickRadius = 0f
-            dpadRadius = unit * 0.155f
-            dpadCx = margin + dpadRadius * 1.15f
-            dpadCy = height - margin - dpadRadius * 1.15f
+            dpadRadius = snap * 7.5f
+            dpadCx = margin + dpadRadius
+            dpadCy = height - snap * 6f - dpadRadius
             val menuY = max(pillY, leftCursor)
             menuButton.bounds.set(dpadCx - menuW * 0.5f, menuY, dpadCx + menuW * 0.5f, menuY + pillH)
         }
@@ -289,8 +298,8 @@ class RetroInputView(
         paint.color = textColor
         paint.textAlign = Paint.Align.CENTER
         paint.isFakeBoldText = true
-        val maxTextWidth = b.width() - strokeWidth * 3
-        paint.textSize = b.height() * if (button.label.length > 2) 0.42f else 0.62f
+        val maxTextWidth = b.width() - strokeWidth * 2
+        paint.textSize = snap * 2f * button.textScale
         if (button.label.isNotEmpty() && paint.measureText(button.label) > maxTextWidth) {
             paint.textSize = paint.textSize * maxTextWidth / paint.measureText(button.label)
         }
@@ -407,12 +416,13 @@ class RetroInputView(
         y: Float,
     ): Boolean {
         val b = button.bounds
+        val inflate = snap * 1.2f
         return if (button.shape == GlassShape.CIRCLE) {
-            val r = b.width() * 0.5f * 1.25f
+            val r = b.width() * 0.5f + inflate
             hypot(x - b.centerX(), y - b.centerY()) <= r
         } else {
-            x >= b.left - b.height() * 0.2f && x <= b.right + b.height() * 0.2f &&
-                y >= b.top - b.height() * 0.25f && y <= b.bottom + b.height() * 0.25f
+            x >= b.left - inflate && x <= b.right + inflate &&
+                y >= b.top - inflate && y <= b.bottom + inflate
         }
     }
 
