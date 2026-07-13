@@ -143,15 +143,14 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
             ),
         )
 
+        menu.entriesProvider = { pane -> buildEntriesFor(pane) }
+        menu.tabs = RetroDrawerTabs.build(resolvedSystem, RetroCoreOptions.forSystem(resolvedSystem).isNotEmpty())
+        menu.onExit = { finish() }
         val menuView =
             ComposeView(this).apply {
                 setContent {
                     WinNativeTheme {
-                        RetroDrawerMenu(
-                            controller = menu,
-                            title = gameName,
-                            systemLabel = resolvedSystem.displayName,
-                        )
+                        RetroDrawerMenu(menu)
                     }
                 }
             }
@@ -237,98 +236,91 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
         }
     }
 
-    private fun buildMenuEntries(): List<RetroMenuEntry> {
-        val entries = mutableListOf<RetroMenuEntry>()
-        entries += RetroMenuEntry.Action("Resume") { menu.close() }
-        entries +=
-            RetroMenuEntry.Action("Save State") {
-                menu.close()
-                saveState()
-            }
-        entries +=
-            RetroMenuEntry.Action("Load State") {
-                menu.close()
-                loadState()
-            }
-        entries +=
-            RetroMenuEntry.Action("Reset") {
-                menu.close()
-                retroView.reset()
-            }
-        entries +=
-            RetroMenuEntry.Toggle("Fast Forward", fastForward) { value ->
-                fastForward = value
-                retroView.frameSpeed = if (value) 2 else 1
-                refreshMenu()
-            }
-
-        if (diskCount > 1) {
-            entries += RetroMenuEntry.Header("DISC")
-            entries +=
-                RetroMenuEntry.Choice("Disc", "${currentDisk + 1} / $diskCount") { direction ->
-                    val next = (currentDisk + direction + diskCount) % diskCount
-                    lifecycleScope.launch(Dispatchers.Default) {
-                        runCatching { retroView.changeDisk(next) }
-                        currentDisk = next
-                        runOnUiThread { refreshMenu() }
+    private fun buildEntriesFor(pane: RetroPane?): List<RetroMenuEntry> =
+        when (pane) {
+            null -> buildMainEntries()
+            RetroPane.DISPLAY ->
+                SHADER_KEYS.mapIndexed { index, key ->
+                    RetroMenuEntry.Radio(
+                        label = SHADER_LABELS[index],
+                        selected = currentShaderKey == key,
+                    ) {
+                        currentShaderKey = key
+                        retroView.shader = shaderFromKey(key)
+                        persistExtra(RetroShortcuts.KEY_SHADER, key)
+                        menu.rebuild()
                     }
                 }
-        }
-
-        entries += RetroMenuEntry.Header("DISPLAY")
-        val shaderIndex = SHADER_KEYS.indexOf(currentShaderKey).coerceAtLeast(0)
-        entries +=
-            RetroMenuEntry.Choice("Video Filter", SHADER_LABELS[shaderIndex]) { direction ->
-                val next = (shaderIndex + direction + SHADER_KEYS.size) % SHADER_KEYS.size
-                currentShaderKey = SHADER_KEYS[next]
-                retroView.shader = shaderFromKey(currentShaderKey)
-                persistExtra(RetroShortcuts.KEY_SHADER, currentShaderKey)
-                refreshMenu()
-            }
-
-        val options = RetroCoreOptions.forSystem(system)
-        if (options.isNotEmpty()) {
-            entries += RetroMenuEntry.Header((system?.shortName ?: "CORE").uppercase() + " OPTIONS")
-            options.forEach { option ->
-                val current = coreVars[option.key] ?: option.defaultValue
-                val index = option.values.indexOf(current).coerceAtLeast(0)
-                entries +=
+            RetroPane.SYSTEM ->
+                RetroCoreOptions.forSystem(system).map { option ->
+                    val current = coreVars[option.key] ?: option.defaultValue
+                    val index = option.values.indexOf(current).coerceAtLeast(0)
                     RetroMenuEntry.Choice(option.label, option.valueLabels[index]) { direction ->
                         val next = (index + direction + option.values.size) % option.values.size
                         val newValue = option.values[next]
                         coreVars[option.key] = newValue
                         retroView.updateVariables(Variable(option.key, newValue))
                         persistExtra(RetroShortcuts.VAR_PREFIX + option.key, newValue)
-                        refreshMenu()
+                        menu.rebuild()
                     }
-            }
+                }
+            RetroPane.SOUND ->
+                listOf(
+                    RetroMenuEntry.Toggle("Sound", checked = audioEnabledSetting) { value ->
+                        audioEnabledSetting = value
+                        retroView.audioEnabled = value
+                        persistExtra(RetroShortcuts.KEY_AUDIO, if (value) "1" else "0")
+                        menu.rebuild()
+                    },
+                )
+            RetroPane.CONTROLS ->
+                listOf(
+                    RetroMenuEntry.Toggle("On-screen Controls", checked = touchControlsSetting) { value ->
+                        touchControlsSetting = value
+                        overlay?.visibility = if (value) View.VISIBLE else View.GONE
+                        persistExtra(RetroShortcuts.KEY_TOUCH_CONTROLS, if (value) "1" else "0")
+                        menu.rebuild()
+                    },
+                )
         }
 
-        entries += RetroMenuEntry.Header("SOUND")
+    private fun buildMainEntries(): List<RetroMenuEntry> {
+        val entries = mutableListOf<RetroMenuEntry>()
         entries +=
-            RetroMenuEntry.Toggle("Sound", audioEnabledSetting) { value ->
-                audioEnabledSetting = value
-                retroView.audioEnabled = value
-                persistExtra(RetroShortcuts.KEY_AUDIO, if (value) "1" else "0")
-                refreshMenu()
-            }
-
-        entries += RetroMenuEntry.Header("CONTROLS")
+            RetroMenuEntry.Action("Resume", RetroDrawerIcons.Resume) { menu.close() }
         entries +=
-            RetroMenuEntry.Toggle("On-screen Controls", touchControlsSetting) { value ->
-                touchControlsSetting = value
-                overlay?.visibility = if (value) View.VISIBLE else View.GONE
-                persistExtra(RetroShortcuts.KEY_TOUCH_CONTROLS, if (value) "1" else "0")
-                refreshMenu()
+            RetroMenuEntry.Action("Save State", RetroDrawerIcons.Save) {
+                menu.close()
+                saveState()
             }
-
-        entries += RetroMenuEntry.Header("")
-        entries += RetroMenuEntry.Action("Exit Game") { finish() }
+        entries +=
+            RetroMenuEntry.Action("Load State", RetroDrawerIcons.Load) {
+                menu.close()
+                loadState()
+            }
+        entries +=
+            RetroMenuEntry.Action("Reset", RetroDrawerIcons.Reset) {
+                menu.close()
+                retroView.reset()
+            }
+        entries +=
+            RetroMenuEntry.Action("Fast Forward", RetroDrawerIcons.FastForward, active = fastForward) {
+                fastForward = !fastForward
+                retroView.frameSpeed = if (fastForward) 2 else 1
+                menu.rebuild()
+            }
+        if (diskCount > 1) {
+            entries +=
+                RetroMenuEntry.Action("Disc ${currentDisk + 1}/$diskCount", RetroDrawerIcons.Disc) {
+                    val next = (currentDisk + 1) % diskCount
+                    lifecycleScope.launch(Dispatchers.Default) {
+                        runCatching { retroView.changeDisk(next) }
+                        currentDisk = next
+                        runOnUiThread { menu.rebuild() }
+                    }
+                }
+        }
         return entries
-    }
-
-    private fun refreshMenu() {
-        menu.update(buildMenuEntries())
     }
 
     private fun openMenu() {
@@ -337,7 +329,7 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
             return
         }
         overlay?.releaseAll()
-        menu.open(buildMenuEntries())
+        menu.open()
     }
 
     private fun mapPhysicalKey(keyCode: Int): Int =

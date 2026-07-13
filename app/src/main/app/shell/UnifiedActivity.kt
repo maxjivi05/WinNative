@@ -5686,22 +5686,17 @@ class UnifiedActivity :
         val epicId = if (isEpic) app.id - 2000000000 else 0
 
         var retroSystemId by remember(app.id) { mutableStateOf<String?>(null) }
-        var retroSettingsShortcut by remember(app.id) { mutableStateOf<Shortcut?>(null) }
-        var showRetroSettings by remember(app.id) { mutableStateOf(false) }
         LaunchedEffect(app.id, isCustom) {
             if (isCustom) {
                 withContext(Dispatchers.IO) {
                     val sc = findLibraryShortcutForGame(ContainerManager(context), app, true, false, 0)
-                    val sys =
+                    retroSystemId =
                         sc
                             ?.getExtra(com.winlator.cmod.feature.retro.RetroShortcuts.KEY_SYSTEM)
                             ?.takeIf { it.isNotEmpty() }
-                    retroSystemId = sys
-                    retroSettingsShortcut = if (sys != null) sc else null
                 }
             } else {
                 retroSystemId = null
-                retroSettingsShortcut = null
             }
         }
         val isRetro = retroSystemId != null
@@ -6372,8 +6367,9 @@ class UnifiedActivity :
                                         if (shortcut != null &&
                                             com.winlator.cmod.feature.retro.RetroShortcuts.isRetroShortcut(shortcut)
                                         ) {
-                                            retroSettingsShortcut = shortcut
-                                            showRetroSettings = true
+                                            com.winlator.cmod.feature.retro
+                                                .RetroSettingsDialog(this@UnifiedActivity, shortcut)
+                                                .show()
                                         } else if (shortcut != null) {
                                             // Layer the settings dialog on top; keep the detail dialog open underneath.
                                             ShortcutSettingsComposeDialog(this@UnifiedActivity, shortcut).show()
@@ -6489,15 +6485,6 @@ class UnifiedActivity :
                                     },
                                     onWorkshop = { if (!isEpic && !isGog) showWorkshopDialog = true },
                                 )
-
-                                if (showRetroSettings) {
-                                    retroSettingsShortcut?.let { retroShortcut ->
-                                        com.winlator.cmod.feature.retro.RetroGameSettingsDialog(
-                                            shortcut = retroShortcut,
-                                            onDismiss = { showRetroSettings = false },
-                                        )
-                                    }
-                                }
 
                                 when (heroPopup) {
                                     HeroLaunchPopup.BootToDesktop ->
