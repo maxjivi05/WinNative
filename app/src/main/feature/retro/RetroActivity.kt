@@ -206,6 +206,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         hudVisible = intent.getBooleanExtra(EXTRA_HUD, false)
         val menuView =
             ComposeView(this).apply {
+                elevation = 2000f
                 setContent {
                     WinNativeTheme {
                         RetroDrawerMenu(menu)

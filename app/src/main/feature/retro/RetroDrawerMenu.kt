@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
@@ -541,46 +542,39 @@ private fun RetroActionGrid(
 ) {
     val actions = controller.entries
     val spacing = (8f * paneScale).dp
-    val verticalPadding = (10f * paneScale).dp
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val rows = ((actions.size + controller.gridColumns - 1) / controller.gridColumns).coerceAtLeast(1)
-        val rowHeight =
-            ((maxHeight - verticalPadding * 2 - spacing * (rows - 1)) / rows)
-                .coerceAtLeast((72f * paneScale).dp)
-        Column(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = (10f * paneScale).dp, vertical = verticalPadding),
-            verticalArrangement = Arrangement.spacedBy(spacing),
-        ) {
-            actions.chunked(controller.gridColumns).forEachIndexed { rowIndex, row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(spacing),
-                ) {
-                    row.forEachIndexed { colIndex, entry ->
-                        val flatIndex = rowIndex * controller.gridColumns + colIndex
-                        if (entry is RetroMenuEntry.Action) {
-                            RetroActionCard(
-                                entry = entry,
-                                highlighted =
-                                    controller.controllerActive &&
-                                        controller.region == 1 &&
-                                        controller.contentIndex == flatIndex,
-                                paneScale = paneScale,
-                                modifier = Modifier.weight(1f).height(rowHeight),
-                                onClick = {
-                                    controller.contentIndex = flatIndex
-                                    entry.onClick()
-                                },
-                            )
-                        }
+    Column(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = (10f * paneScale).dp, vertical = (10f * paneScale).dp),
+        verticalArrangement = Arrangement.spacedBy(spacing),
+    ) {
+        actions.chunked(controller.gridColumns).forEachIndexed { rowIndex, row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(spacing),
+            ) {
+                row.forEachIndexed { colIndex, entry ->
+                    val flatIndex = rowIndex * controller.gridColumns + colIndex
+                    if (entry is RetroMenuEntry.Action) {
+                        RetroActionCard(
+                            entry = entry,
+                            highlighted =
+                                controller.controllerActive &&
+                                    controller.region == 1 &&
+                                    controller.contentIndex == flatIndex,
+                            paneScale = paneScale,
+                            modifier = Modifier.weight(1f).aspectRatio(1f),
+                            onClick = {
+                                controller.contentIndex = flatIndex
+                                entry.onClick()
+                            },
+                        )
                     }
-                    repeat(controller.gridColumns - row.size) {
-                        Spacer(Modifier.weight(1f))
-                    }
+                }
+                repeat(controller.gridColumns - row.size) {
+                    Spacer(Modifier.weight(1f))
                 }
             }
         }
