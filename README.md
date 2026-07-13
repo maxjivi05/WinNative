@@ -41,6 +41,24 @@ Designed for enthusiasts and power users, WinNative delivers the full Winlator e
 
 ---
 
+### Retro Console Support
+
+WinNative can also run classic console games alongside your PC library. Retro games live in the same Library and launch just like PC games, but run on an embedded libretro backend instead of Wine.
+
+Supported systems (bundled cores):
+
+| System | Core | ROM extensions |
+| --- | --- | --- |
+| NES | FCEUmm | `.nes` `.unf` `.unif` |
+| SNES | Snes9x | `.smc` `.sfc` `.swc` `.fig` |
+| Game Boy / Color | Gambatte | `.gb` `.gbc` |
+| Game Boy Advance | mGBA | `.gba` |
+| Genesis / Mega Drive, Master System, Game Gear | Genesis Plus GX | `.gen` `.md` `.smd` `.sms` `.gg` |
+| Nintendo 64 | Mupen64Plus-Next | `.n64` `.z64` `.v64` |
+| PlayStation | PCSX-ReARMed | `.cue` `.chd` `.pbp` `.m3u` `.iso` |
+
+**How to use:** In the Library, tap **Add Custom Game** and select a ROM instead of an `.exe`. WinNative detects the console and adds the game to your Library. Tap **Play** to launch it with on-screen touch controls and physical gamepad support; the in-game menu (Back button or on-screen **MENU**) offers save/load state, reset, and fast-forward. PlayStation BIOS files (e.g. `scph5501.bin`) can be placed in the app's `files/retro/system` folder for better compatibility.
+
 ### Contributing
 
 We welcome community contributions! Feel free to open a pull request for bug fixes, driver updates, UI improvements, or anything else you'd like to add.
@@ -56,3 +74,5 @@ Please match the existing code style and ensure any AI-assisted code is thorough
 - **Pluvia** features by the [Pluvia](https://github.com/oxters168/Pluvia) / [GameNative](https://github.com/utkarshdalal/GameNative) community
 - **Mesa/Turnip** contributions by the [Mesa3D](https://www.mesa3d.org/) team
 - **Goldberg Steam Emulator** by [Mr. Goldberg](https://gitlab.com/Mr_Goldberg/goldberg_emulator), maintained by [Detanup01](https://github.com/Detanup01/gbe_fork)
+- **LibretroDroid** by [Filippo Scognamiglio](https://github.com/Swordfish90/LibretroDroid) (GPL-3.0) — the embedded libretro host for retro console support
+- **libretro / RetroArch** and the individual core authors (FCEUmm, Snes9x, Gambatte, mGBA, Genesis Plus GX, Mupen64Plus-Next, PCSX-ReARMed)

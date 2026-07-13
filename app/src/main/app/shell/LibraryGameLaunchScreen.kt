@@ -134,6 +134,7 @@ internal fun LibraryGameLaunchScreen(
     lastPlayedMillis: Long,
     installSizeText: String?,
     isCustom: Boolean,
+    isRetro: Boolean = false,
     hasPinnedShortcut: Boolean,
     steamMenuEnabled: Boolean = false,
     areSteamActionsEnabled: Boolean = true,
@@ -165,7 +166,7 @@ internal fun LibraryGameLaunchScreen(
         val actionIconSize = 46.dp
         val actionIconSpacing = 8.dp
         // Action icons: Settings, Boot, CloudSync, Shortcut, Delete.
-        val actionIconCount = 5
+        val actionIconCount = if (isRetro) 2 else 5
         val actionWidth = actionIconSize * actionIconCount + actionIconSpacing * (actionIconCount - 1)
         val playHeight = 56.dp
         val contentGap = 18.dp
@@ -391,27 +392,29 @@ internal fun LibraryGameLaunchScreen(
                             size = actionIconSize,
                             onClick = onSettings,
                         )
-                        LaunchIconActionButton(
-                            icon = Icons.Outlined.DesktopWindows,
-                            contentDescription = stringResource(R.string.hero_boot_to_desktop_title),
-                            size = actionIconSize,
-                            onClick = onBootToDesktop,
-                        )
-                        LaunchIconActionButton(
-                            icon = Icons.Outlined.CloudSync,
-                            contentDescription = stringResource(R.string.cloud_saves_title),
-                            size = actionIconSize,
-                            onClick = onCloudSaves,
-                        )
-                        LaunchIconActionButton(
-                            icon = Icons.Outlined.Home,
-                            contentDescription =
-                                stringResource(
-                                    if (hasPinnedShortcut) R.string.common_ui_remove else R.string.common_ui_shortcut,
-                                ),
-                            size = actionIconSize,
-                            onClick = onShortcut,
-                        )
+                        if (!isRetro) {
+                            LaunchIconActionButton(
+                                icon = Icons.Outlined.DesktopWindows,
+                                contentDescription = stringResource(R.string.hero_boot_to_desktop_title),
+                                size = actionIconSize,
+                                onClick = onBootToDesktop,
+                            )
+                            LaunchIconActionButton(
+                                icon = Icons.Outlined.CloudSync,
+                                contentDescription = stringResource(R.string.cloud_saves_title),
+                                size = actionIconSize,
+                                onClick = onCloudSaves,
+                            )
+                            LaunchIconActionButton(
+                                icon = Icons.Outlined.Home,
+                                contentDescription =
+                                    stringResource(
+                                        if (hasPinnedShortcut) R.string.common_ui_remove else R.string.common_ui_shortcut,
+                                    ),
+                                size = actionIconSize,
+                                onClick = onShortcut,
+                            )
+                        }
                         Box {
                             LaunchIconActionButton(
                                 icon = Icons.Outlined.Delete,

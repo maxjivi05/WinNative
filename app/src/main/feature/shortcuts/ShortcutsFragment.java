@@ -221,6 +221,12 @@ public class ShortcutsFragment extends Fragment {
     Activity activity = getActivity();
     if (activity == null) return;
 
+    if (com.winlator.cmod.feature.retro.RetroShortcuts.isRetroShortcut(shortcut)) {
+      activity.startActivity(
+          com.winlator.cmod.feature.retro.RetroShortcuts.launchIntent(activity, shortcut));
+      return;
+    }
+
     Intent intent = new Intent(activity, XServerDisplayActivity.class);
     intent.putExtra("container_id", shortcut.container.id);
     intent.putExtra("shortcut_path", shortcut.file.getPath());

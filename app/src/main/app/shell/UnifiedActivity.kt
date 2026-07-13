@@ -5685,6 +5685,27 @@ class UnifiedActivity :
         val isGog = gogGame != null
         val epicId = if (isEpic) app.id - 2000000000 else 0
 
+        var retroSystemId by remember(app.id) { mutableStateOf<String?>(null) }
+        var retroSettingsShortcut by remember(app.id) { mutableStateOf<Shortcut?>(null) }
+        var showRetroSettings by remember(app.id) { mutableStateOf(false) }
+        LaunchedEffect(app.id, isCustom) {
+            if (isCustom) {
+                withContext(Dispatchers.IO) {
+                    val sc = findLibraryShortcutForGame(ContainerManager(context), app, true, false, 0)
+                    val sys =
+                        sc
+                            ?.getExtra(com.winlator.cmod.feature.retro.RetroShortcuts.KEY_SYSTEM)
+                            ?.takeIf { it.isNotEmpty() }
+                    retroSystemId = sys
+                    retroSettingsShortcut = if (sys != null) sc else null
+                }
+            } else {
+                retroSystemId = null
+                retroSettingsShortcut = null
+            }
+        }
+        val isRetro = retroSystemId != null
+
         val libraryDownloadRecords by com.winlator.cmod.app.service.download.DownloadCoordinator.records.collectAsState(
             initial = com.winlator.cmod.app.service.download.DownloadCoordinator.snapshotRecords(),
         )
@@ -6328,6 +6349,7 @@ class UnifiedActivity :
                                     lastPlayedMillis = lastPlayed,
                                     installSizeText = installSizeText,
                                     isCustom = isCustom,
+                                    isRetro = isRetro,
                                     hasPinnedShortcut = hasPinnedShortcut,
                                     playEnabled = playEnabled,
                                     playDisabledLabel = playDisabledLabel,
@@ -6347,7 +6369,12 @@ class UnifiedActivity :
                                     },
                                     onSettings = {
                                         val shortcut = resolveOrCreateShortcut()
-                                        if (shortcut != null) {
+                                        if (shortcut != null &&
+                                            com.winlator.cmod.feature.retro.RetroShortcuts.isRetroShortcut(shortcut)
+                                        ) {
+                                            retroSettingsShortcut = shortcut
+                                            showRetroSettings = true
+                                        } else if (shortcut != null) {
                                             // Layer the settings dialog on top; keep the detail dialog open underneath.
                                             ShortcutSettingsComposeDialog(this@UnifiedActivity, shortcut).show()
                                         }
@@ -6462,6 +6489,15 @@ class UnifiedActivity :
                                     },
                                     onWorkshop = { if (!isEpic && !isGog) showWorkshopDialog = true },
                                 )
+
+                                if (showRetroSettings) {
+                                    retroSettingsShortcut?.let { retroShortcut ->
+                                        com.winlator.cmod.feature.retro.RetroGameSettingsDialog(
+                                            shortcut = retroShortcut,
+                                            onDismiss = { showRetroSettings = false },
+                                        )
+                                    }
+                                }
 
                                 when (heroPopup) {
                                     HeroLaunchPopup.BootToDesktop ->
@@ -11542,6 +11578,12 @@ class UnifiedActivity :
                 return@launch
             }
 
+            if (com.winlator.cmod.feature.retro.RetroShortcuts.isRetroShortcut(shortcut)) {
+                val retroIntent = com.winlator.cmod.feature.retro.RetroShortcuts.launchIntent(context, shortcut)
+                withContext(Dispatchers.Main) { launchGame(context, retroIntent) }
+                return@launch
+            }
+
             // Backfill custom_name if missing (legacy shortcuts)
             if (shortcut.getExtra("custom_name").isEmpty()) {
                 shortcut.putExtra("custom_name", gameName)
@@ -12156,31 +12198,52 @@ class UnifiedActivity :
         var selectedExePath by remember { mutableStateOf<String?>(null) }
         var gameName by remember { mutableStateOf("") }
         var gameFolder by remember { mutableStateOf<String?>(null) }
+        var retroSystem by remember { mutableStateOf<com.winlator.cmod.feature.retro.RetroSystem?>(null) }
         var isAdding by remember { mutableStateOf(false) }
         val registry = remember { PaneNavRegistry() }
-        val addEnabled = selectedExePath != null && gameName.isNotBlank() && gameFolder != null && !isAdding
+        val addEnabled =
+            selectedExePath != null && gameName.isNotBlank() && !isAdding &&
+                (retroSystem != null || gameFolder != null)
         val doAdd: () -> Unit = {
             isAdding = true
+            val chosenRetro = retroSystem
             scope.launch(Dispatchers.IO) {
-                addCustomGame(context, gameName.trim(), selectedExePath!!, gameFolder!!)
+                val added =
+                    if (chosenRetro != null) {
+                        com.winlator.cmod.feature.retro.RetroShortcuts
+                            .create(context, gameName.trim(), selectedExePath!!, chosenRetro)
+                    } else {
+                        addCustomGame(context, gameName.trim(), selectedExePath!!, gameFolder!!)
+                        true
+                    }
                 withContext(Dispatchers.Main) {
                     isAdding = false
-                    com.winlator.cmod.shared.ui.toast.WinToast.show(
-                        context,
-                        "$gameName added!",
-                        android.widget.Toast.LENGTH_SHORT,
-                    )
-                    onDismiss()
+                    if (added) {
+                        com.winlator.cmod.shared.ui.toast.WinToast.show(
+                            context,
+                            "$gameName added!",
+                            android.widget.Toast.LENGTH_SHORT,
+                        )
+                        onDismiss()
+                    } else {
+                        com.winlator.cmod.shared.ui.toast.WinToast.show(
+                            context,
+                            "Could not add game",
+                            android.widget.Toast.LENGTH_SHORT,
+                        )
+                    }
                 }
             }
         }
 
         fun selectExecutable(path: String) {
+            val extension = path.substringAfterLast('.', "").lowercase(java.util.Locale.US)
+            val detectedRetro = com.winlator.cmod.feature.retro.RetroSystems.fromExtension(extension)
             val launchable =
                 path.endsWith(".exe", ignoreCase = true) ||
                     path.endsWith(".bat", ignoreCase = true) ||
                     path.endsWith(".cmd", ignoreCase = true)
-            if (!launchable || !java.io.File(path).isFile) {
+            if ((!launchable && detectedRetro == null) || !java.io.File(path).isFile) {
                 com.winlator.cmod.shared.ui.toast.WinToast.show(
                     context,
                     R.string.common_ui_select_valid_exe_file,
@@ -12190,8 +12253,13 @@ class UnifiedActivity :
             }
 
             selectedExePath = path
-            gameFolder = LibraryShortcutUtils.detectCustomGameFolder(path)
-            // Auto-generate a game name from the EXE name (without extension)
+            retroSystem = detectedRetro
+            gameFolder =
+                if (detectedRetro != null) {
+                    java.io.File(path).parent
+                } else {
+                    LibraryShortcutUtils.detectCustomGameFolder(path)
+                }
             if (gameName.isBlank()) {
                 gameName =
                     java.io
@@ -12260,7 +12328,9 @@ class UnifiedActivity :
                                                                     android.os.Environment.DIRECTORY_DOWNLOADS,
                                                                 ).absolutePath,
                                                     title = getString(R.string.common_ui_select_exe),
-                                                    allowedExtensions = setOf("exe", "bat", "cmd"),
+                                                    allowedExtensions =
+                                                        setOf("exe", "bat", "cmd") +
+                                                            com.winlator.cmod.feature.retro.RetroSystems.allExtensions,
                                                     dimAmount = 0.5f,
                                                     preserveBackdropBlur = true,
                                                     extraRoots = driveRoots(includeInternal = true),
@@ -12273,7 +12343,7 @@ class UnifiedActivity :
                                 Icon(Icons.Outlined.FolderOpen, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    selectedExePath ?: "Select Executable (.exe)",
+                                    selectedExePath ?: "Select Executable or Console ROM",
                                     color = if (selectedExePath == null) TextSecondary else TextPrimary,
                                     maxLines = if (selectedExePath == null) 1 else Int.MAX_VALUE,
                                     overflow = if (selectedExePath == null) TextOverflow.Ellipsis else TextOverflow.Visible,
@@ -12309,63 +12379,94 @@ class UnifiedActivity :
 
                                 Spacer(Modifier.height(8.dp))
 
-                                // Game folder — single compact row
-                                Row(
-                                    modifier =
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(Color.White.copy(alpha = 0.05f))
-                                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        Icons.Outlined.Folder,
-                                        contentDescription = null,
-                                        tint = StatusOnline.copy(alpha = 0.7f),
-                                        modifier = Modifier.size(14.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            stringResource(R.string.library_games_game_folder_mapped_drive),
-                                            color = TextSecondary,
-                                            fontSize = 9.sp,
-                                        )
-                                        Text(
-                                            gameFolder ?: stringResource(R.string.common_ui_auto_detected),
-                                            color = if (gameFolder != null) TextPrimary else TextSecondary,
-                                            fontSize = 10.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                    val openFolderPicker = {
-                                        if (ensureAllFilesAccessForImports(context)) {
-                                            DirectoryPickerDialog.show(
-                                                activity = this@UnifiedActivity,
-                                                initialPath = gameFolder,
-                                                title = getString(R.string.common_ui_select_folder),
-                                                dimAmount = 0.5f,
-                                                preserveBackdropBlur = true,
-                                                extraRoots = driveRoots(includeInternal = true),
-                                            ) { path -> gameFolder = path }
-                                        }
-                                    }
-                                    IconButton(
-                                        onClick = openFolderPicker,
+                                val activeRetroSystem = retroSystem
+                                if (activeRetroSystem != null) {
+                                    Row(
                                         modifier =
-                                            Modifier.size(28.dp).paneNavItem(
-                                                cornerRadius = 8.dp,
-                                                onActivate = openFolderPicker,
-                                            ),
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(Color.White.copy(alpha = 0.05f))
+                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Icon(
-                                            Icons.Outlined.Edit,
-                                            contentDescription = stringResource(R.string.common_ui_change),
-                                            tint = Accent,
+                                            Icons.Outlined.SportsEsports,
+                                            contentDescription = null,
+                                            tint = StatusOnline.copy(alpha = 0.7f),
                                             modifier = Modifier.size(14.dp),
                                         )
+                                        Spacer(Modifier.width(6.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text("Console", color = TextSecondary, fontSize = 9.sp)
+                                            Text(
+                                                activeRetroSystem.displayName,
+                                                color = TextPrimary,
+                                                fontSize = 10.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    // Game folder — single compact row
+                                    Row(
+                                        modifier =
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(Color.White.copy(alpha = 0.05f))
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.Folder,
+                                            contentDescription = null,
+                                            tint = StatusOnline.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                stringResource(R.string.library_games_game_folder_mapped_drive),
+                                                color = TextSecondary,
+                                                fontSize = 9.sp,
+                                            )
+                                            Text(
+                                                gameFolder ?: stringResource(R.string.common_ui_auto_detected),
+                                                color = if (gameFolder != null) TextPrimary else TextSecondary,
+                                                fontSize = 10.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        val openFolderPicker = {
+                                            if (ensureAllFilesAccessForImports(context)) {
+                                                DirectoryPickerDialog.show(
+                                                    activity = this@UnifiedActivity,
+                                                    initialPath = gameFolder,
+                                                    title = getString(R.string.common_ui_select_folder),
+                                                    dimAmount = 0.5f,
+                                                    preserveBackdropBlur = true,
+                                                    extraRoots = driveRoots(includeInternal = true),
+                                                ) { path -> gameFolder = path }
+                                            }
+                                        }
+                                        IconButton(
+                                            onClick = openFolderPicker,
+                                            modifier =
+                                                Modifier.size(28.dp).paneNavItem(
+                                                    cornerRadius = 8.dp,
+                                                    onActivate = openFolderPicker,
+                                                ),
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Edit,
+                                                contentDescription = stringResource(R.string.common_ui_change),
+                                                tint = Accent,
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                        }
                                     }
                                 }
                             }
