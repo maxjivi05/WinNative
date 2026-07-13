@@ -8,8 +8,8 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -17,8 +17,14 @@ import androidx.lifecycle.lifecycleScope
 import com.swordfish.libretrodroid.GLRetroView
 import com.swordfish.libretrodroid.GLRetroViewData
 import com.swordfish.libretrodroid.ShaderConfig
+import com.swordfish.libretrodroid.Variable
+import com.winlator.cmod.runtime.container.ContainerManager
+import com.winlator.cmod.runtime.container.Shortcut
+import com.winlator.cmod.shared.theme.WinNativeTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import java.io.File
 
 class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
@@ -27,18 +33,30 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
         const val EXTRA_SYSTEM_ID = "retro_system_id"
         const val EXTRA_GAME_NAME = "retro_game_name"
         const val EXTRA_SHORTCUT_PATH = "retro_shortcut_path"
+        const val EXTRA_CONTAINER_ID = "retro_container_id"
         const val EXTRA_SHADER = "retro_shader"
         const val EXTRA_TOUCH_CONTROLS = "retro_touch_controls"
         const val EXTRA_AUDIO = "retro_audio"
+        const val EXTRA_VARIABLES = "retro_variables"
+
+        private val SHADER_KEYS = listOf("default", "crt", "lcd", "sharp")
+        private val SHADER_LABELS = listOf("Default", "CRT", "LCD", "Sharp")
     }
 
     private lateinit var retroView: GLRetroView
     private var overlay: RetroInputView? = null
+    private val menu = RetroMenuController()
     private var retroReady = false
     private var gameName = "game"
     private var fastForward = false
     private var audioEnabledSetting = true
+    private var touchControlsSetting = true
+    private var currentShaderKey = "default"
+    private var coreVars = HashMap<String, String>()
+    private var diskCount = 0
+    private var currentDisk = 0
     private var system: RetroSystem? = null
+    private var persistShortcut: Shortcut? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +100,12 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
 
         val savesDir = RetroCoreManager.savesDir(this)
         val sramFile = File(savesDir, sramName())
+        currentShaderKey = intent.getStringExtra(EXTRA_SHADER)?.lowercase() ?: "default"
+        if (currentShaderKey !in SHADER_KEYS) currentShaderKey = "default"
+        audioEnabledSetting = intent.getBooleanExtra(EXTRA_AUDIO, true)
+        touchControlsSetting = intent.getBooleanExtra(EXTRA_TOUCH_CONTROLS, true)
+        @Suppress("UNCHECKED_CAST", "DEPRECATION")
+        coreVars = (intent.getSerializableExtra(EXTRA_VARIABLES) as? HashMap<String, String>) ?: HashMap()
 
         val data =
             GLRetroViewData(this).apply {
@@ -89,13 +113,13 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
                 gameFilePath = romFile.absolutePath
                 systemDirectory = RetroCoreManager.systemDir(this@RetroActivity).absolutePath
                 savesDirectory = savesDir.absolutePath
-                shader = shaderFromExtra(intent.getStringExtra(EXTRA_SHADER))
+                shader = shaderFromKey(currentShaderKey)
+                variables = coreVars.map { Variable(it.key, it.value) }.toTypedArray()
                 rumbleEventsEnabled = true
                 preferLowLatencyAudio = true
                 if (sramFile.isFile) saveRAMState = runCatching { sramFile.readBytes() }.getOrNull()
             }
 
-        audioEnabledSetting = intent.getBooleanExtra(EXTRA_AUDIO, true)
         retroView = GLRetroView(this, data)
         lifecycle.addObserver(retroView)
 
@@ -108,17 +132,36 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
             ),
         )
 
-        if (intent.getBooleanExtra(EXTRA_TOUCH_CONTROLS, true)) {
-            val inputView = RetroInputView(this, this)
-            overlay = inputView
-            root.addView(
-                inputView,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                ),
-            )
-        }
+        val inputView = RetroInputView(this, this)
+        inputView.visibility = if (touchControlsSetting) View.VISIBLE else View.GONE
+        overlay = inputView
+        root.addView(
+            inputView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+
+        val menuView =
+            ComposeView(this).apply {
+                setContent {
+                    WinNativeTheme {
+                        RetroDrawerMenu(
+                            controller = menu,
+                            title = gameName,
+                            systemLabel = resolvedSystem.displayName,
+                        )
+                    }
+                }
+            }
+        root.addView(
+            menuView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
 
         setContentView(root)
         retroReady = true
@@ -130,8 +173,14 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
         retroView
             .getGLRetroEvents()
             .onEach { event ->
-                if (event is GLRetroView.GLRetroEvents.SurfaceCreated && !audioEnabledSetting) {
-                    retroView.audioEnabled = false
+                if (event is GLRetroView.GLRetroEvents.SurfaceCreated) {
+                    if (!audioEnabledSetting) retroView.audioEnabled = false
+                    lifecycleScope.launch(Dispatchers.Default) {
+                        runCatching {
+                            diskCount = retroView.getAvailableDisks()
+                            currentDisk = retroView.getCurrentDisk()
+                        }
+                    }
                 }
             }.launchIn(lifecycleScope)
     }
@@ -157,13 +206,139 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
         return "$safe.srm"
     }
 
-    private fun shaderFromExtra(value: String?): ShaderConfig =
+    private fun shaderFromKey(value: String?): ShaderConfig =
         when (value?.lowercase()) {
             "crt" -> ShaderConfig.CRT
             "lcd" -> ShaderConfig.LCD
             "sharp" -> ShaderConfig.Sharp
             else -> ShaderConfig.Default
         }
+
+    private fun persistExtra(
+        key: String,
+        value: String,
+    ) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                val shortcut =
+                    persistShortcut ?: run {
+                        val containerId = intent.getIntExtra(EXTRA_CONTAINER_ID, 0)
+                        val path = intent.getStringExtra(EXTRA_SHORTCUT_PATH)
+                        if (containerId <= 0 || path.isNullOrBlank()) return@run null
+                        val file = File(path)
+                        if (!file.isFile) return@run null
+                        ContainerManager(this@RetroActivity)
+                            .getContainerById(containerId)
+                            ?.let { Shortcut(it, file) }
+                    }?.also { persistShortcut = it }
+                shortcut?.putExtra(key, value)
+                shortcut?.saveData()
+            }
+        }
+    }
+
+    private fun buildMenuEntries(): List<RetroMenuEntry> {
+        val entries = mutableListOf<RetroMenuEntry>()
+        entries += RetroMenuEntry.Action("Resume") { menu.close() }
+        entries +=
+            RetroMenuEntry.Action("Save State") {
+                menu.close()
+                saveState()
+            }
+        entries +=
+            RetroMenuEntry.Action("Load State") {
+                menu.close()
+                loadState()
+            }
+        entries +=
+            RetroMenuEntry.Action("Reset") {
+                menu.close()
+                retroView.reset()
+            }
+        entries +=
+            RetroMenuEntry.Toggle("Fast Forward", fastForward) { value ->
+                fastForward = value
+                retroView.frameSpeed = if (value) 2 else 1
+                refreshMenu()
+            }
+
+        if (diskCount > 1) {
+            entries += RetroMenuEntry.Header("DISC")
+            entries +=
+                RetroMenuEntry.Choice("Disc", "${currentDisk + 1} / $diskCount") { direction ->
+                    val next = (currentDisk + direction + diskCount) % diskCount
+                    lifecycleScope.launch(Dispatchers.Default) {
+                        runCatching { retroView.changeDisk(next) }
+                        currentDisk = next
+                        runOnUiThread { refreshMenu() }
+                    }
+                }
+        }
+
+        entries += RetroMenuEntry.Header("DISPLAY")
+        val shaderIndex = SHADER_KEYS.indexOf(currentShaderKey).coerceAtLeast(0)
+        entries +=
+            RetroMenuEntry.Choice("Video Filter", SHADER_LABELS[shaderIndex]) { direction ->
+                val next = (shaderIndex + direction + SHADER_KEYS.size) % SHADER_KEYS.size
+                currentShaderKey = SHADER_KEYS[next]
+                retroView.shader = shaderFromKey(currentShaderKey)
+                persistExtra(RetroShortcuts.KEY_SHADER, currentShaderKey)
+                refreshMenu()
+            }
+
+        val options = RetroCoreOptions.forSystem(system)
+        if (options.isNotEmpty()) {
+            entries += RetroMenuEntry.Header((system?.shortName ?: "CORE").uppercase() + " OPTIONS")
+            options.forEach { option ->
+                val current = coreVars[option.key] ?: option.defaultValue
+                val index = option.values.indexOf(current).coerceAtLeast(0)
+                entries +=
+                    RetroMenuEntry.Choice(option.label, option.valueLabels[index]) { direction ->
+                        val next = (index + direction + option.values.size) % option.values.size
+                        val newValue = option.values[next]
+                        coreVars[option.key] = newValue
+                        retroView.updateVariables(Variable(option.key, newValue))
+                        persistExtra(RetroShortcuts.VAR_PREFIX + option.key, newValue)
+                        refreshMenu()
+                    }
+            }
+        }
+
+        entries += RetroMenuEntry.Header("SOUND")
+        entries +=
+            RetroMenuEntry.Toggle("Sound", audioEnabledSetting) { value ->
+                audioEnabledSetting = value
+                retroView.audioEnabled = value
+                persistExtra(RetroShortcuts.KEY_AUDIO, if (value) "1" else "0")
+                refreshMenu()
+            }
+
+        entries += RetroMenuEntry.Header("CONTROLS")
+        entries +=
+            RetroMenuEntry.Toggle("On-screen Controls", touchControlsSetting) { value ->
+                touchControlsSetting = value
+                overlay?.visibility = if (value) View.VISIBLE else View.GONE
+                persistExtra(RetroShortcuts.KEY_TOUCH_CONTROLS, if (value) "1" else "0")
+                refreshMenu()
+            }
+
+        entries += RetroMenuEntry.Header("")
+        entries += RetroMenuEntry.Action("Exit Game") { finish() }
+        return entries
+    }
+
+    private fun refreshMenu() {
+        menu.update(buildMenuEntries())
+    }
+
+    private fun openMenu() {
+        if (!retroReady) {
+            finish()
+            return
+        }
+        overlay?.releaseAll()
+        menu.open(buildMenuEntries())
+    }
 
     private fun mapPhysicalKey(keyCode: Int): Int =
         when (keyCode) {
@@ -202,9 +377,13 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val keyCode = event.keyCode
+        if (menu.visible && (isGamepadSource(event) || keyCode == KeyEvent.KEYCODE_BACK)) {
+            menu.handleKey(keyCode, event.action)
+            return true
+        }
         if (retroReady && isGamepadSource(event)) {
             if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
-                if (event.action == KeyEvent.ACTION_DOWN) openMenu()
+                if (event.action == KeyEvent.ACTION_UP) openMenu()
                 return true
             }
             if (keyCode in forwardedKeys) {
@@ -220,6 +399,9 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
     }
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (menu.visible && event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK) {
+            return true
+        }
         if (retroReady &&
             event.action == MotionEvent.ACTION_MOVE &&
             event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
@@ -251,7 +433,7 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
         keyCode: Int,
         down: Boolean,
     ) {
-        if (!retroReady) return
+        if (!retroReady || menu.visible) return
         retroView.sendKeyEvent(if (down) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP, keyCode, 0)
     }
 
@@ -259,40 +441,12 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
         x: Float,
         y: Float,
     ) {
-        if (!retroReady) return
+        if (!retroReady || menu.visible) return
         retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_DPAD, x, y, 0)
     }
 
     override fun onMenu() {
         runOnUiThread { openMenu() }
-    }
-
-    private fun openMenu() {
-        if (!retroReady) {
-            finish()
-            return
-        }
-        overlay?.releaseAll()
-        val ffLabel = if (fastForward) "Fast Forward: On" else "Fast Forward: Off"
-        val items = arrayOf("Save State", "Load State", "Reset", ffLabel, "Exit")
-        AlertDialog
-            .Builder(this)
-            .setTitle(gameName)
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> saveState()
-                    1 -> loadState()
-                    2 -> retroView.reset()
-                    3 -> toggleFastForward()
-                    4 -> finish()
-                }
-            }.setNegativeButton("Resume", null)
-            .show()
-    }
-
-    private fun toggleFastForward() {
-        fastForward = !fastForward
-        retroView.frameSpeed = if (fastForward) 2 else 1
     }
 
     private fun saveState() {

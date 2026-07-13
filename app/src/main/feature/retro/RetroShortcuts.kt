@@ -16,6 +16,21 @@ object RetroShortcuts {
     const val KEY_SHADER = "retro_shader"
     const val KEY_TOUCH_CONTROLS = "retro_touch_controls"
     const val KEY_AUDIO = "retro_audio"
+    const val VAR_PREFIX = "retro_var_"
+
+    fun coreVariables(shortcut: Shortcut): HashMap<String, String> {
+        val vars = HashMap<String, String>()
+        val extras = shortcut.extraData
+        val keys = extras.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (key.startsWith(VAR_PREFIX)) {
+                val value = shortcut.getExtra(key)
+                if (value.isNotEmpty()) vars[key.removePrefix(VAR_PREFIX)] = value
+            }
+        }
+        return vars
+    }
 
     @JvmStatic
     fun isRetroShortcut(shortcut: Shortcut): Boolean = shortcut.getExtra(KEY_SYSTEM).isNotEmpty()
@@ -73,8 +88,10 @@ object RetroShortcuts {
             putExtra(RetroActivity.EXTRA_SYSTEM_ID, shortcut.getExtra(KEY_SYSTEM))
             putExtra(RetroActivity.EXTRA_GAME_NAME, shortcut.getExtra("custom_name", shortcut.name))
             putExtra(RetroActivity.EXTRA_SHORTCUT_PATH, shortcut.file.absolutePath)
+            putExtra(RetroActivity.EXTRA_CONTAINER_ID, shortcut.container.id)
             putExtra(RetroActivity.EXTRA_SHADER, shortcut.getExtra(KEY_SHADER, "default"))
             putExtra(RetroActivity.EXTRA_TOUCH_CONTROLS, shortcut.getExtra(KEY_TOUCH_CONTROLS, "1") != "0")
             putExtra(RetroActivity.EXTRA_AUDIO, shortcut.getExtra(KEY_AUDIO, "1") != "0")
+            putExtra(RetroActivity.EXTRA_VARIABLES, coreVariables(shortcut))
         }
 }
