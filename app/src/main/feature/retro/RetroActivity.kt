@@ -10,13 +10,6 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -29,6 +22,7 @@ import com.swordfish.libretrodroid.ShaderConfig
 import com.swordfish.libretrodroid.Variable
 import com.winlator.cmod.runtime.container.ContainerManager
 import com.winlator.cmod.runtime.container.Shortcut
+import com.winlator.cmod.runtime.display.ui.FrameRating
 import com.winlator.cmod.runtime.input.controls.ExternalController
 import com.winlator.cmod.shared.android.FixedFontScaleAppCompatActivity
 import com.winlator.cmod.shared.theme.WinNativeTheme
@@ -76,7 +70,9 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
     private var controllerConnected = false
     private var inputManager: InputManager? = null
     private var hudVisible = false
-    private var statsCollector: RetroStatsCollector? = null
+    private var frameRating: FrameRating? = null
+    private var rootLayout: FrameLayout? = null
+    private var menuComposeView: ComposeView? = null
 
     private val inputDeviceListener =
         object : InputManager.InputDeviceListener {
@@ -185,6 +181,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         lifecycle.addObserver(retroView)
 
         val root = FrameLayout(this)
+        rootLayout = root
         root.addView(
             retroView,
             FrameLayout.LayoutParams(
@@ -207,34 +204,15 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         menu.bottomProvider = { buildBottomEntries() }
         menu.tabs = RetroDrawerTabs.build(resolvedSystem, RetroCoreOptions.forSystem(resolvedSystem).isNotEmpty())
         hudVisible = intent.getBooleanExtra(EXTRA_HUD, false)
-        statsCollector = RetroStatsCollector(this, resolvedSystem.shortName)
-        RetroPerformanceHudState.setVisible(hudVisible)
         val menuView =
             ComposeView(this).apply {
                 setContent {
                     WinNativeTheme {
-                        val hudOn by RetroPerformanceHudState.visible.collectAsState()
-                        if (hudOn) {
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .fillMaxHeight()
-                                        .fillMaxWidth(0.5f)
-                                        .pointerInput(Unit) {
-                                            awaitPointerEventScope {
-                                                while (true) {
-                                                    awaitPointerEvent().changes.forEach { it.consume() }
-                                                }
-                                            }
-                                        },
-                            ) {
-                                RetroPerformanceHudOverlay()
-                            }
-                        }
                         RetroDrawerMenu(menu)
                     }
                 }
             }
+        menuComposeView = menuView
         root.addView(
             menuView,
             FrameLayout.LayoutParams(
@@ -248,7 +226,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         inputManager = getSystemService(InputManager::class.java)
         inputManager?.registerInputDeviceListener(inputDeviceListener, null)
         refreshControllerPresence()
-        statsCollector?.start(lifecycleScope)
+        if (hudVisible) showHud()
         recordLaunchStats()
         observeErrors()
         observeEvents()
@@ -256,9 +234,70 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
 
     override fun onDestroy() {
         inputManager?.unregisterInputDeviceListener(inputDeviceListener)
-        statsCollector?.stop()
-        RetroPerformanceHudState.setVisible(false)
         super.onDestroy()
+    }
+
+    private fun showHud() {
+        var rating = frameRating
+        if (rating == null) {
+            val root = rootLayout ?: return
+            rating = FrameRating(this, HashMap<String, String>())
+            rating.setRenderer(system?.shortName ?: "Retro")
+            rating.visibility = View.GONE
+            frameRating = rating
+            val menuIndex = menuComposeView?.let { root.indexOfChild(it) } ?: -1
+            if (menuIndex >= 0) root.addView(rating, menuIndex) else root.addView(rating)
+            applyRetroHudSettings(rating)
+        }
+        rating.visibility = View.VISIBLE
+        rating.reset()
+    }
+
+    private fun applyRetroHudSettings(rating: FrameRating) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val json =
+                runCatching {
+                    val containerId = intent.getIntExtra(EXTRA_CONTAINER_ID, 0)
+                    if (containerId <= 0) return@runCatching null
+                    ContainerManager(this@RetroActivity)
+                        .getContainerById(containerId)
+                        ?.getExtra("hudSettings")
+                }.getOrNull()
+            if (json.isNullOrEmpty()) return@launch
+            runCatching {
+                val obj = org.json.JSONObject(json)
+                val transparency = obj.optDouble("transparency", 1.0).toFloat()
+                val decoupled = obj.optBoolean("backgroundAlphaDecoupled", false)
+                val backgroundTransparency =
+                    obj
+                        .optDouble(
+                            "backgroundTransparency",
+                            (transparency * FrameRating.BACKDROP_BASE_ALPHA).toDouble(),
+                        ).toFloat()
+                val scale = obj.optDouble("scale", 1.0).toFloat()
+                val legacyCpuRam = obj.optBoolean("showCpuRam", true)
+                val legacyBattTemp = obj.optBoolean("showBattTemp", true)
+                val elements =
+                    booleanArrayOf(
+                        obj.optBoolean("showFPS", true),
+                        obj.optBoolean("showRenderer", true),
+                        obj.optBoolean("showGPU", true),
+                        obj.optBoolean("showCPU", legacyCpuRam),
+                        obj.optBoolean("showRAM", legacyCpuRam),
+                        obj.optBoolean("showBattery", legacyBattTemp),
+                        obj.optBoolean("showTemp", legacyBattTemp),
+                        obj.optBoolean("showGraph", true),
+                        obj.optBoolean("showCpuTemp", false),
+                    )
+                runOnUiThread {
+                    rating.setHudAlpha(transparency)
+                    rating.setBackgroundAlphaDecoupled(decoupled)
+                    rating.setHudBackgroundAlpha(backgroundTransparency)
+                    rating.setHudScale(scale)
+                    elements.forEachIndexed { index, enabled -> rating.toggleElement(index, enabled) }
+                }
+            }
+        }
     }
 
     private fun recordLaunchStats() {
@@ -290,7 +329,9 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
             .getGLRetroEvents()
             .onEach { event ->
                 when (event) {
-                    is GLRetroView.GLRetroEvents.FrameRendered -> statsCollector?.onFrame()
+                    is GLRetroView.GLRetroEvents.FrameRendered -> {
+                        if (hudVisible) frameRating?.recordGameFrame()
+                    }
                     is GLRetroView.GLRetroEvents.SurfaceCreated -> {
                         if (!audioEnabledSetting) retroView.audioEnabled = false
                         lifecycleScope.launch(Dispatchers.Default) {
@@ -430,7 +471,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         entries +=
             RetroMenuEntry.Action("HUD", RetroDrawerIcons.Hud, active = hudVisible) {
                 hudVisible = !hudVisible
-                RetroPerformanceHudState.setVisible(hudVisible)
+                if (hudVisible) showHud() else frameRating?.visibility = View.GONE
                 persistExtra(RetroShortcuts.KEY_HUD, if (hudVisible) "1" else "0")
                 menu.rebuild()
             }
