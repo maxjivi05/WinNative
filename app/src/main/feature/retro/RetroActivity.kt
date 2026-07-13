@@ -16,6 +16,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.swordfish.libretrodroid.GLRetroView
 import com.swordfish.libretrodroid.GLRetroViewData
+import com.swordfish.libretrodroid.LibretroDroid
 import com.swordfish.libretrodroid.ShaderConfig
 import com.swordfish.libretrodroid.Variable
 import com.winlator.cmod.runtime.container.ContainerManager
@@ -60,6 +61,21 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
     private var persistShortcut: Shortcut? = null
     private var playtimePrefs: SharedPreferences? = null
     private var sessionStart = 0L
+    private var emulationPaused = false
+
+    private fun pauseEmulation() {
+        if (emulationPaused || !retroReady) return
+        emulationPaused = true
+        retroView.onPause()
+        LibretroDroid.pause()
+    }
+
+    private fun resumeEmulation() {
+        if (!emulationPaused || !retroReady) return
+        emulationPaused = false
+        LibretroDroid.resume()
+        retroView.onResume()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -315,7 +331,17 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
     private fun buildMainEntries(): List<RetroMenuEntry> {
         val entries = mutableListOf<RetroMenuEntry>()
         entries +=
-            RetroMenuEntry.Action("Resume", RetroDrawerIcons.Resume) { menu.close() }
+            if (emulationPaused) {
+                RetroMenuEntry.Action("Resume", RetroDrawerIcons.Resume, active = true) {
+                    resumeEmulation()
+                    menu.close()
+                }
+            } else {
+                RetroMenuEntry.Action("Pause", RetroDrawerIcons.Pause) {
+                    pauseEmulation()
+                    menu.close()
+                }
+            }
         entries +=
             RetroMenuEntry.Action("Save State", RetroDrawerIcons.Save) {
                 menu.close()
@@ -513,6 +539,18 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         persistSram()
         accumulatePlaytime()
         super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (emulationPaused && retroReady) {
+            window.decorView.post {
+                if (emulationPaused && retroReady) {
+                    retroView.onPause()
+                    LibretroDroid.pause()
+                }
+            }
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

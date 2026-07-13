@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.Monitor
+import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Save
@@ -947,6 +948,7 @@ object RetroDrawerTabs {
 
 object RetroDrawerIcons {
     val Resume = Icons.Outlined.PlayArrow
+    val Pause = Icons.Outlined.Pause
     val Save = Icons.Outlined.Save
     val Load = Icons.Outlined.Download
     val Reset = Icons.Outlined.RestartAlt
