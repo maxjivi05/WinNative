@@ -132,7 +132,7 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
             ),
         )
 
-        val inputView = RetroInputView(this, this)
+        val inputView = RetroInputView(this, this, resolvedSystem)
         inputView.visibility = if (touchControlsSetting) View.VISIBLE else View.GONE
         overlay = inputView
         root.addView(
@@ -435,6 +435,14 @@ class RetroActivity : AppCompatActivity(), RetroInputView.Listener {
     ) {
         if (!retroReady || menu.visible) return
         retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_DPAD, x, y, 0)
+    }
+
+    override fun onStick(
+        x: Float,
+        y: Float,
+    ) {
+        if (!retroReady || menu.visible) return
+        retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_ANALOG_LEFT, x, y, 0)
     }
 
     override fun onMenu() {
