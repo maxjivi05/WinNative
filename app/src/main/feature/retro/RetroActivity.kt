@@ -1,6 +1,7 @@
 package com.winlator.cmod.feature.retro
 
 import android.content.SharedPreferences
+import android.hardware.input.InputManager
 import android.os.Bundle
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -21,6 +22,7 @@ import com.swordfish.libretrodroid.ShaderConfig
 import com.swordfish.libretrodroid.Variable
 import com.winlator.cmod.runtime.container.ContainerManager
 import com.winlator.cmod.runtime.container.Shortcut
+import com.winlator.cmod.runtime.input.controls.ExternalController
 import com.winlator.cmod.shared.android.FixedFontScaleAppCompatActivity
 import com.winlator.cmod.shared.theme.WinNativeTheme
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.abs
 
 class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener {
     companion object {
@@ -62,6 +65,35 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
     private var playtimePrefs: SharedPreferences? = null
     private var sessionStart = 0L
     private var emulationPaused = false
+    private var controllerConnected = false
+    private var inputManager: InputManager? = null
+
+    private val inputDeviceListener =
+        object : InputManager.InputDeviceListener {
+            override fun onInputDeviceAdded(deviceId: Int) = refreshControllerPresence()
+
+            override fun onInputDeviceRemoved(deviceId: Int) = refreshControllerPresence()
+
+            override fun onInputDeviceChanged(deviceId: Int) = refreshControllerPresence()
+        }
+
+    private val stickIsAnalog: Boolean
+        get() = system?.id == RetroSystems.N64.id
+
+    private fun anyGameControllerConnected(): Boolean =
+        InputDevice.getDeviceIds().any { id ->
+            ExternalController.isGameController(InputDevice.getDevice(id))
+        }
+
+    private fun refreshControllerPresence() {
+        controllerConnected = anyGameControllerConnected()
+        updateOverlayVisibility()
+    }
+
+    private fun updateOverlayVisibility() {
+        overlay?.visibility =
+            if (touchControlsSetting && !controllerConnected) View.VISIBLE else View.GONE
+    }
 
     private fun pauseEmulation() {
         if (emulationPaused || !retroReady) return
@@ -152,7 +184,6 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         )
 
         val inputView = RetroInputView(this, this, resolvedSystem)
-        inputView.visibility = if (touchControlsSetting) View.VISIBLE else View.GONE
         overlay = inputView
         root.addView(
             inputView,
@@ -183,9 +214,17 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
 
         setContentView(root)
         retroReady = true
+        inputManager = getSystemService(InputManager::class.java)
+        inputManager?.registerInputDeviceListener(inputDeviceListener, null)
+        refreshControllerPresence()
         recordLaunchStats()
         observeErrors()
         observeEvents()
+    }
+
+    override fun onDestroy() {
+        inputManager?.unregisterInputDeviceListener(inputDeviceListener)
+        super.onDestroy()
     }
 
     private fun recordLaunchStats() {
@@ -321,7 +360,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
                 listOf(
                     RetroMenuEntry.Toggle("On-screen Controls", checked = touchControlsSetting) { value ->
                         touchControlsSetting = value
-                        overlay?.visibility = if (value) View.VISIBLE else View.GONE
+                        updateOverlayVisibility()
                         persistExtra(RetroShortcuts.KEY_TOUCH_CONTROLS, if (value) "1" else "0")
                         menu.rebuild()
                     },
@@ -452,18 +491,32 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
             event.action == MotionEvent.ACTION_MOVE &&
             event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
         ) {
-            retroView.sendMotionEvent(
-                GLRetroView.MOTION_SOURCE_DPAD,
-                event.getAxisValue(MotionEvent.AXIS_HAT_X),
-                event.getAxisValue(MotionEvent.AXIS_HAT_Y),
-                0,
-            )
-            retroView.sendMotionEvent(
-                GLRetroView.MOTION_SOURCE_ANALOG_LEFT,
-                event.getAxisValue(MotionEvent.AXIS_X),
-                event.getAxisValue(MotionEvent.AXIS_Y),
-                0,
-            )
+            val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
+            val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+            val stickX = event.getAxisValue(MotionEvent.AXIS_X)
+            val stickY = event.getAxisValue(MotionEvent.AXIS_Y)
+            if (stickIsAnalog) {
+                retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_DPAD, hatX, hatY, 0)
+                retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_ANALOG_LEFT, stickX, stickY, 0)
+            } else {
+                val deadzone = 0.45f
+                val dpadX =
+                    when {
+                        abs(hatX) > 0.5f -> hatX
+                        stickX > deadzone -> 1f
+                        stickX < -deadzone -> -1f
+                        else -> 0f
+                    }
+                val dpadY =
+                    when {
+                        abs(hatY) > 0.5f -> hatY
+                        stickY > deadzone -> 1f
+                        stickY < -deadzone -> -1f
+                        else -> 0f
+                    }
+                retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_DPAD, dpadX, dpadY, 0)
+                retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_ANALOG_LEFT, stickX, stickY, 0)
+            }
             retroView.sendMotionEvent(
                 GLRetroView.MOTION_SOURCE_ANALOG_RIGHT,
                 event.getAxisValue(MotionEvent.AXIS_Z),
