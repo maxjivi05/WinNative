@@ -184,7 +184,7 @@ class RetroInputView(
         val pillW = unit * 0.135f
         val pillH = unit * 0.062f
         val pillGap = unit * 0.02f
-        val pillY = clusterTop - pillH - unit * 0.025f
+        val pillY = clusterTop - pillH - unit * 0.065f
         val start = GlassButton(KeyEvent.KEYCODE_BUTTON_START, "START", GlassShape.PILL)
         start.bounds.set(width - margin - pillW, pillY, width - margin, pillY + pillH)
         buttons += start
@@ -213,7 +213,7 @@ class RetroInputView(
             dpadRadius = unit * 0.155f
             dpadCx = margin + dpadRadius * 1.15f
             dpadCy = height - margin - dpadRadius * 1.15f
-            val menuY = max(dpadCy - dpadRadius - pillH - unit * 0.025f, leftCursor)
+            val menuY = max(pillY, leftCursor)
             menuButton.bounds.set(dpadCx - menuW * 0.5f, menuY, dpadCx + menuW * 0.5f, menuY + pillH)
         }
     }
