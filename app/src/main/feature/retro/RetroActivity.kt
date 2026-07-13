@@ -10,6 +10,13 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -42,6 +49,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         const val EXTRA_SHADER = "retro_shader"
         const val EXTRA_TOUCH_CONTROLS = "retro_touch_controls"
         const val EXTRA_AUDIO = "retro_audio"
+        const val EXTRA_HUD = "retro_hud"
         const val EXTRA_VARIABLES = "retro_variables"
 
         private val SHADER_KEYS = listOf("default", "crt", "lcd", "sharp")
@@ -67,6 +75,8 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
     private var emulationPaused = false
     private var controllerConnected = false
     private var inputManager: InputManager? = null
+    private var hudVisible = false
+    private var statsCollector: RetroStatsCollector? = null
 
     private val inputDeviceListener =
         object : InputManager.InputDeviceListener {
@@ -194,12 +204,33 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         )
 
         menu.entriesProvider = { pane -> buildEntriesFor(pane) }
+        menu.bottomProvider = { buildBottomEntries() }
         menu.tabs = RetroDrawerTabs.build(resolvedSystem, RetroCoreOptions.forSystem(resolvedSystem).isNotEmpty())
-        menu.onExit = { finish() }
+        hudVisible = intent.getBooleanExtra(EXTRA_HUD, false)
+        statsCollector = RetroStatsCollector(this, resolvedSystem.shortName)
+        RetroPerformanceHudState.setVisible(hudVisible)
         val menuView =
             ComposeView(this).apply {
                 setContent {
                     WinNativeTheme {
+                        val hudOn by RetroPerformanceHudState.visible.collectAsState()
+                        if (hudOn) {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(0.5f)
+                                        .pointerInput(Unit) {
+                                            awaitPointerEventScope {
+                                                while (true) {
+                                                    awaitPointerEvent().changes.forEach { it.consume() }
+                                                }
+                                            }
+                                        },
+                            ) {
+                                RetroPerformanceHudOverlay()
+                            }
+                        }
                         RetroDrawerMenu(menu)
                     }
                 }
@@ -217,6 +248,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         inputManager = getSystemService(InputManager::class.java)
         inputManager?.registerInputDeviceListener(inputDeviceListener, null)
         refreshControllerPresence()
+        statsCollector?.start(lifecycleScope)
         recordLaunchStats()
         observeErrors()
         observeEvents()
@@ -224,6 +256,8 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
 
     override fun onDestroy() {
         inputManager?.unregisterInputDeviceListener(inputDeviceListener)
+        statsCollector?.stop()
+        RetroPerformanceHudState.setVisible(false)
         super.onDestroy()
     }
 
@@ -255,12 +289,15 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         retroView
             .getGLRetroEvents()
             .onEach { event ->
-                if (event is GLRetroView.GLRetroEvents.SurfaceCreated) {
-                    if (!audioEnabledSetting) retroView.audioEnabled = false
-                    lifecycleScope.launch(Dispatchers.Default) {
-                        runCatching {
-                            diskCount = retroView.getAvailableDisks()
-                            currentDisk = retroView.getCurrentDisk()
+                when (event) {
+                    is GLRetroView.GLRetroEvents.FrameRendered -> statsCollector?.onFrame()
+                    is GLRetroView.GLRetroEvents.SurfaceCreated -> {
+                        if (!audioEnabledSetting) retroView.audioEnabled = false
+                        lifecycleScope.launch(Dispatchers.Default) {
+                            runCatching {
+                                diskCount = retroView.getAvailableDisks()
+                                currentDisk = retroView.getCurrentDisk()
+                            }
                         }
                     }
                 }
@@ -370,18 +407,6 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
     private fun buildMainEntries(): List<RetroMenuEntry> {
         val entries = mutableListOf<RetroMenuEntry>()
         entries +=
-            if (emulationPaused) {
-                RetroMenuEntry.Action("Resume", RetroDrawerIcons.Resume, active = true) {
-                    resumeEmulation()
-                    menu.close()
-                }
-            } else {
-                RetroMenuEntry.Action("Pause", RetroDrawerIcons.Pause) {
-                    pauseEmulation()
-                    menu.close()
-                }
-            }
-        entries +=
             RetroMenuEntry.Action("Save State", RetroDrawerIcons.Save) {
                 menu.close()
                 saveState()
@@ -402,6 +427,13 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
                 retroView.frameSpeed = if (fastForward) 2 else 1
                 menu.rebuild()
             }
+        entries +=
+            RetroMenuEntry.Action("HUD", RetroDrawerIcons.Hud, active = hudVisible) {
+                hudVisible = !hudVisible
+                RetroPerformanceHudState.setVisible(hudVisible)
+                persistExtra(RetroShortcuts.KEY_HUD, if (hudVisible) "1" else "0")
+                menu.rebuild()
+            }
         if (diskCount > 1) {
             entries +=
                 RetroMenuEntry.Action("Disc ${currentDisk + 1}/$diskCount", RetroDrawerIcons.Disc) {
@@ -415,6 +447,22 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         }
         return entries
     }
+
+    private fun buildBottomEntries(): List<RetroMenuEntry.Action> =
+        listOf(
+            if (emulationPaused) {
+                RetroMenuEntry.Action("Resume", RetroDrawerIcons.Resume, active = true) {
+                    resumeEmulation()
+                    menu.close()
+                }
+            } else {
+                RetroMenuEntry.Action("Pause", RetroDrawerIcons.Pause) {
+                    pauseEmulation()
+                    menu.close()
+                }
+            },
+            RetroMenuEntry.Action("Exit", RetroDrawerIcons.Exit, danger = true) { finish() },
+        )
 
     private fun openMenu() {
         if (!retroReady) {

@@ -16,6 +16,7 @@ object RetroShortcuts {
     const val KEY_SHADER = "retro_shader"
     const val KEY_TOUCH_CONTROLS = "retro_touch_controls"
     const val KEY_AUDIO = "retro_audio"
+    const val KEY_HUD = "retro_hud"
     const val VAR_PREFIX = "retro_var_"
 
     fun coreVariables(shortcut: Shortcut): HashMap<String, String> {
@@ -92,6 +93,7 @@ object RetroShortcuts {
             putExtra(RetroActivity.EXTRA_SHADER, shortcut.getExtra(KEY_SHADER, "default"))
             putExtra(RetroActivity.EXTRA_TOUCH_CONTROLS, shortcut.getExtra(KEY_TOUCH_CONTROLS, "1") != "0")
             putExtra(RetroActivity.EXTRA_AUDIO, shortcut.getExtra(KEY_AUDIO, "1") != "0")
+            putExtra(RetroActivity.EXTRA_HUD, shortcut.getExtra(KEY_HUD, "0") == "1")
             putExtra(RetroActivity.EXTRA_VARIABLES, coreVariables(shortcut))
         }
 }
