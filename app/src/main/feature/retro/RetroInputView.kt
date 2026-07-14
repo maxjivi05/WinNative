@@ -125,8 +125,20 @@ class RetroInputView(
         buttons.clear()
         val width = w.toFloat()
         val height = h.toFloat()
+        if (height > width) {
+            layoutPortrait(width, height)
+        } else {
+            layoutLandscape(width, height)
+        }
+    }
+
+    private fun layoutLandscape(
+        width: Float,
+        height: Float,
+    ) {
         snap = width / 100f
         val margin = snap * 2.5f
+        val bottomGap = snap * 9f
         val faceRadius = snap * 3f
         strokeWidth = max(2f, snap * 0.18f)
 
@@ -167,7 +179,7 @@ class RetroInputView(
 
         val spread = snap * 5.5f
         val clusterCx = width - margin - faceRadius - spread
-        val clusterCy = height - snap * 6f - faceRadius - spread
+        val clusterCy = height - bottomGap - faceRadius - spread
         var clusterTop = height
         fun addFace(
             keyCode: Int,
@@ -208,23 +220,92 @@ class RetroInputView(
 
         val menuW = snap * 6f
         if (config.hasStick) {
-            dpadRadius = snap * 6.5f
-            dpadCx = margin + dpadRadius + snap * 1f
-            menuButton.bounds.set(dpadCx - menuW * 0.5f, leftCursor, dpadCx + menuW * 0.5f, leftCursor + pillH)
-            leftCursor += pillH + trigGap
-            dpadCy = leftCursor + dpadRadius
-            leftCursor += dpadRadius * 2 + trigGap
+            menuButton.bounds.set(
+                width - margin - pillW * 3 - pillGap * 2,
+                pillY,
+                width - margin - pillW * 2 - pillGap * 2,
+                pillY + pillH,
+            )
             stickRadius = snap * 7f
-            stickCx = dpadCx
-            stickCy = max(leftCursor + stickRadius, height - snap * 6f - stickRadius)
+            stickCx = margin + stickRadius + snap * 1f
+            stickCy = height - bottomGap - stickRadius
+            dpadRadius = snap * 6.5f
+            dpadCx = stickCx
+            dpadCy = stickCy - stickRadius - snap * 2f - dpadRadius
         } else {
             stickRadius = 0f
             dpadRadius = snap * 7.5f
             dpadCx = margin + dpadRadius
-            dpadCy = height - snap * 6f - dpadRadius
+            dpadCy = height - bottomGap - dpadRadius
             val menuY = max(pillY, leftCursor)
             menuButton.bounds.set(dpadCx - menuW * 0.5f, menuY, dpadCx + menuW * 0.5f, menuY + pillH)
         }
+    }
+
+    private fun layoutPortrait(
+        width: Float,
+        height: Float,
+    ) {
+        snap = width / 100f
+        strokeWidth = max(2f, snap * 0.4f)
+        stickRadius = 0f
+        val zoneTop = height * 0.5f
+        val zoneH = height - zoneTop
+        val margin = snap * 5f
+
+        if (config.hasShoulders) {
+            val trigW = snap * 24f
+            val trigH = snap * 8f
+            val lb = GlassButton(KeyEvent.KEYCODE_BUTTON_L1, "L", GlassShape.TRIGGER_LB, textScale = 1.3f)
+            lb.bounds.set(margin, zoneTop + snap * 2f, margin + trigW, zoneTop + snap * 2f + trigH)
+            buttons += lb
+            val rb = GlassButton(KeyEvent.KEYCODE_BUTTON_R1, "R", GlassShape.TRIGGER_RB, textScale = 1.3f)
+            rb.bounds.set(width - margin - trigW, zoneTop + snap * 2f, width - margin, zoneTop + snap * 2f + trigH)
+            buttons += rb
+        }
+
+        val rowCy = zoneTop + zoneH * 0.45f
+        dpadRadius = snap * 15f
+        dpadCx = margin + dpadRadius
+        dpadCy = rowCy
+
+        val faceRadius = snap * 8.5f
+        fun addFace(
+            keyCode: Int,
+            label: String,
+            cx: Float,
+            cy: Float,
+        ) {
+            val button = GlassButton(keyCode, label, GlassShape.CIRCLE)
+            button.bounds.set(cx - faceRadius, cy - faceRadius, cx + faceRadius, cy + faceRadius)
+            buttons += button
+        }
+        addFace(KeyEvent.KEYCODE_BUTTON_A, "A", width - margin - faceRadius, rowCy - faceRadius * 0.9f)
+        addFace(
+            KeyEvent.KEYCODE_BUTTON_B,
+            "B",
+            width - margin - faceRadius * 3f - snap * 2f,
+            rowCy + faceRadius * 0.9f,
+        )
+
+        val pillW = snap * 13f
+        val pillH = snap * 5.5f
+        val pillGap = snap * 2f
+        val pillY = height - margin - pillH
+        val select = GlassButton(KeyEvent.KEYCODE_BUTTON_SELECT, "SELECT", GlassShape.PILL, textScale = 0.75f)
+        select.bounds.set(width * 0.5f - pillGap * 0.5f - pillW, pillY, width * 0.5f - pillGap * 0.5f, pillY + pillH)
+        buttons += select
+        val start = GlassButton(KeyEvent.KEYCODE_BUTTON_START, "START", GlassShape.PILL, textScale = 0.75f)
+        start.bounds.set(width * 0.5f + pillGap * 0.5f, pillY, width * 0.5f + pillGap * 0.5f + pillW, pillY + pillH)
+        buttons += start
+
+        val menuW = snap * 13f
+        menuButton.bounds.set(
+            width * 0.5f - menuW * 0.5f,
+            zoneTop + snap * 1.5f,
+            width * 0.5f + menuW * 0.5f,
+            zoneTop + snap * 1.5f + pillH,
+        )
     }
 
     override fun onDraw(canvas: Canvas) {

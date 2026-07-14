@@ -1,6 +1,9 @@
 package com.winlator.cmod.feature.retro
 
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.graphics.RectF
 import android.hardware.input.InputManager
 import android.os.Bundle
 import android.view.InputDevice
@@ -20,6 +23,7 @@ import com.swordfish.libretrodroid.GLRetroViewData
 import com.swordfish.libretrodroid.LibretroDroid
 import com.swordfish.libretrodroid.ShaderConfig
 import com.swordfish.libretrodroid.Variable
+import com.swordfish.libretrodroid.ViewportAlignment
 import com.winlator.cmod.runtime.container.ContainerManager
 import com.winlator.cmod.runtime.container.Shortcut
 import com.winlator.cmod.runtime.display.ui.FrameRating
@@ -73,6 +77,41 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
     private var frameRating: FrameRating? = null
     private var rootLayout: FrameLayout? = null
     private var menuComposeView: ComposeView? = null
+    private var surfaceReady = false
+
+    private val portraitCapable: Boolean
+        get() =
+            system?.id in
+                setOf(
+                    RetroSystems.GAMEBOY.id,
+                    RetroSystems.GAMEBOY_COLOR.id,
+                    RetroSystems.GBA.id,
+                    RetroSystems.GAME_GEAR.id,
+                )
+
+    private val isPortrait: Boolean
+        get() = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+
+    private fun applyDisplayGeometry() {
+        if (!surfaceReady || !retroReady) return
+        retroView.viewportAlignment = if (isPortrait) ViewportAlignment.TOP else ViewportAlignment.CENTER
+        val rating = frameRating
+        val rootHeight = rootLayout?.height ?: 0
+        val push =
+            if (isPortrait && hudVisible && rating != null &&
+                rating.visibility == View.VISIBLE && rating.height > 0 && rootHeight > 0
+            ) {
+                ((rating.y + rating.height + rating.height * 0.15f) / rootHeight).coerceIn(0f, 0.3f)
+            } else {
+                0f
+            }
+        retroView.viewport = RectF(0f, push, 1f, 1f)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        rootLayout?.post { applyDisplayGeometry() }
+    }
 
     private val inputDeviceListener =
         object : InputManager.InputDeviceListener {
@@ -140,6 +179,10 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
             return
         }
 
+        if (portraitCapable) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        }
+
         val coreFile = RetroCoreManager.coreFile(this, resolvedSystem)
         if (!coreFile.isFile) {
             Toast.makeText(this, "Core not installed: ${resolvedSystem.coreFileName}", Toast.LENGTH_LONG).show()
@@ -174,6 +217,13 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
                 variables = coreVars.map { Variable(it.key, it.value) }.toTypedArray()
                 rumbleEventsEnabled = true
                 preferLowLatencyAudio = true
+                skipDuplicateFrames = true
+                viewportAlignment =
+                    if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+                        ViewportAlignment.TOP
+                    } else {
+                        ViewportAlignment.CENTER
+                    }
                 if (sramFile.isFile) saveRAMState = runCatching { sramFile.readBytes() }.getOrNull()
             }
 
@@ -256,6 +306,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         }
         rating.visibility = View.VISIBLE
         rating.reset()
+        rating.post { applyDisplayGeometry() }
     }
 
     private fun applyRetroHudSettings(rating: FrameRating) {
@@ -339,6 +390,8 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
                     }
                     is GLRetroView.GLRetroEvents.SurfaceCreated -> {
                         if (!audioEnabledSetting) retroView.audioEnabled = false
+                        surfaceReady = true
+                        applyDisplayGeometry()
                         lifecycleScope.launch(Dispatchers.Default) {
                             runCatching {
                                 diskCount = retroView.getAvailableDisks()
@@ -476,7 +529,12 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         entries +=
             RetroMenuEntry.Action("HUD", RetroDrawerIcons.Hud, active = hudVisible) {
                 hudVisible = !hudVisible
-                if (hudVisible) showHud() else frameRating?.visibility = View.GONE
+                if (hudVisible) {
+                    showHud()
+                } else {
+                    frameRating?.visibility = View.GONE
+                    applyDisplayGeometry()
+                }
                 persistExtra(RetroShortcuts.KEY_HUD, if (hudVisible) "1" else "0")
                 menu.rebuild()
             }
