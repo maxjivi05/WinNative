@@ -293,7 +293,14 @@ class RetroMenuController {
 fun RetroDrawerMenu(controller: RetroMenuController) {
     val density = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val paneScale = (maxHeight.value / 520f).coerceIn(0.78f, 1f)
+        val portrait = maxHeight > maxWidth
+        val sheetHeight =
+            if (portrait) {
+                minOf(maxWidth, maxHeight - DrawerVerticalPadding * 2)
+            } else {
+                maxHeight - DrawerVerticalPadding * 2
+            }
+        val paneScale = (sheetHeight.value / 520f).coerceIn(0.78f, 1f)
         if (controller.visible) {
             Box(
                 Modifier
@@ -315,7 +322,7 @@ fun RetroDrawerMenu(controller: RetroMenuController) {
             Box(
                 Modifier
                     .padding(start = DrawerStartPadding, top = DrawerVerticalPadding, bottom = DrawerVerticalPadding)
-                    .fillMaxHeight()
+                    .height(sheetHeight)
                     .width(DrawerWidth)
                     .offset { androidx.compose.ui.unit.IntOffset(with(density) { sheetOffset.roundToPx() }, 0) }
                     .clip(RoundedCornerShape(20.dp))
