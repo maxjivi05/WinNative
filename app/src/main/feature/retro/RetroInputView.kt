@@ -259,7 +259,6 @@ class RetroInputView(
         snap = width / 100f
         strokeWidth = max(2f, snap * 0.18f)
         val margin = snap * 2.5f
-        val bottomGap = snap * 6.5f
         val trigW = snap * 10.4f
         val trigH = snap * 5.2f
         val trigGap = snap * 1.5f
@@ -283,22 +282,16 @@ class RetroInputView(
         val faceRadius = snap * 3f
         val spread = snap * 5.5f
         val clusterCx = width - margin - faceRadius - spread
-        val clusterCy = height - bottomGap - faceRadius - spread
+        val clusterCy = height - snap * 4.5f - faceRadius - spread
+        val bCx = clusterCx - faceRadius * 0.9f
+        val bCy = clusterCy + spread * 0.5f - faceRadius * 0.9f
         val bButton = GlassButton(KeyEvent.KEYCODE_BUTTON_Y, "B", GlassShape.CIRCLE)
-        bButton.bounds.set(
-            clusterCx - faceRadius * 2.1f,
-            clusterCy + spread * 0.5f - faceRadius * 2.1f,
-            clusterCx - faceRadius * 0.1f,
-            clusterCy + spread * 0.5f - faceRadius * 0.1f,
-        )
+        bButton.bounds.set(bCx - faceRadius, bCy - faceRadius, bCx + faceRadius, bCy + faceRadius)
         buttons += bButton
+        val aCx = clusterCx + faceRadius * 0.9f
+        val aCy = clusterCy + spread * 0.5f + faceRadius * 0.9f
         val aButton = GlassButton(KeyEvent.KEYCODE_BUTTON_B, "A", GlassShape.CIRCLE)
-        aButton.bounds.set(
-            clusterCx + faceRadius * 0.1f,
-            clusterCy + spread * 0.5f + faceRadius * 0.1f,
-            clusterCx + faceRadius * 2.1f,
-            clusterCy + spread * 0.5f + faceRadius * 2.1f,
-        )
+        aButton.bounds.set(aCx - faceRadius, aCy - faceRadius, aCx + faceRadius, aCy + faceRadius)
         buttons += aButton
 
         val pillW = snap * 6f
@@ -318,17 +311,21 @@ class RetroInputView(
 
         stickRadius = snap * 7f
         stickCx = margin + stickRadius + snap * 1f
-        stickCy = height - bottomGap - stickRadius
+        stickCy = height - snap * 5.5f - stickRadius
         dpadRadius = snap * 6.5f
         dpadCx = stickCx
         dpadCy = stickCy - stickRadius - snap * 2f - dpadRadius
 
         val cRadius = snap * 2.4f
         val cSpread = snap * 3.6f
-        val cCx = clusterCx
-        val topOfFaces = clusterCy + spread * 0.5f - faceRadius * 2.1f
+        val cCx = clusterCx + snap * 2f
+        val topOfFaces = bCy - faceRadius
         val bottomOfTriggers = margin + trigH * 2 + trigGap
-        val cCy = (bottomOfTriggers + topOfFaces) * 0.5f
+        val cCy =
+            min(
+                (bottomOfTriggers + topOfFaces) * 0.5f + snap * 2f,
+                topOfFaces - snap * 1.5f - cSpread - cRadius,
+            )
         fun addC(
             dx: Float,
             dy: Float,
