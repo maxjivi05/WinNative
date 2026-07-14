@@ -704,6 +704,14 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_ANALOG_LEFT, x, y, 0)
     }
 
+    override fun onRightStick(
+        x: Float,
+        y: Float,
+    ) {
+        if (!retroReady || menu.visible) return
+        retroView.sendMotionEvent(GLRetroView.MOTION_SOURCE_ANALOG_RIGHT, x, y, 0)
+    }
+
     override fun onMenu() {
         runOnUiThread { openMenu() }
     }

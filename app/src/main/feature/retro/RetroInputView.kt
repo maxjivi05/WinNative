@@ -37,6 +37,11 @@ class RetroInputView(
             y: Float,
         )
 
+        fun onRightStick(
+            x: Float,
+            y: Float,
+        )
+
         fun onMenu()
     }
 
@@ -47,6 +52,13 @@ class RetroInputView(
         val label: String,
         val shape: GlassShape,
         val textScale: Float = 1f,
+        val bounds: RectF = RectF(),
+    )
+
+    private class CButton(
+        val dx: Float,
+        val dy: Float,
+        val glyph: String,
         val bounds: RectF = RectF(),
     )
 
@@ -79,8 +91,16 @@ class RetroInputView(
         }
 
     private val buttons = mutableListOf<GlassButton>()
+    private val cButtons = mutableListOf<CButton>()
     private val menuButton = GlassButton(0, "MENU", GlassShape.PILL, textScale = 0.75f)
     private var snap = 0f
+    private var cStickX = 0f
+    private var cStickY = 0f
+
+    private val cAccentStroke = Color.argb(150, 255, 210, 90)
+    private val cAccentPressedStroke = Color.argb(220, 255, 214, 96)
+    private val cAccentPressedFill = Color.argb(60, 255, 210, 90)
+    private val cAccentText = Color.argb(255, 255, 214, 96)
 
     private var dpadCx = 0f
     private var dpadCy = 0f
@@ -123,6 +143,7 @@ class RetroInputView(
     ) {
         super.onSizeChanged(w, h, oldw, oldh)
         buttons.clear()
+        cButtons.clear()
         val width = w.toFloat()
         val height = h.toFloat()
         if (height > width) {
@@ -301,6 +322,28 @@ class RetroInputView(
         dpadRadius = snap * 6.5f
         dpadCx = stickCx
         dpadCy = stickCy - stickRadius - snap * 2f - dpadRadius
+
+        val cRadius = snap * 2.4f
+        val cSpread = snap * 3.6f
+        val cCx = clusterCx
+        val topOfFaces = clusterCy + spread * 0.5f - faceRadius * 2.1f
+        val bottomOfTriggers = margin + trigH * 2 + trigGap
+        val cCy = (bottomOfTriggers + topOfFaces) * 0.5f
+        fun addC(
+            dx: Float,
+            dy: Float,
+            glyph: String,
+            x: Float,
+            y: Float,
+        ) {
+            val c = CButton(dx, dy, glyph)
+            c.bounds.set(x - cRadius, y - cRadius, x + cRadius, y + cRadius)
+            cButtons += c
+        }
+        addC(0f, -1f, "▲", cCx, cCy - cSpread)
+        addC(0f, 1f, "▼", cCx, cCy + cSpread)
+        addC(-1f, 0f, "◀", cCx - cSpread, cCy)
+        addC(1f, 0f, "▶", cCx + cSpread, cCy)
     }
 
     private fun layoutPortrait(
@@ -377,7 +420,47 @@ class RetroInputView(
         drawDpad(canvas)
         if (config.hasStick) drawStick(canvas)
         buttons.forEach { drawGlassButton(canvas, it, pressedButtons.contains(it.keyCode)) }
+        cButtons.forEach { drawCButton(canvas, it) }
         drawGlassButton(canvas, menuButton, menuLatched)
+    }
+
+    private fun drawCButton(
+        canvas: Canvas,
+        button: CButton,
+    ) {
+        val b = button.bounds
+        val pressed =
+            (button.dx != 0f && cStickX == button.dx) || (button.dy != 0f && cStickY == button.dy)
+        paint.shader = null
+        paint.style = Paint.Style.FILL
+        paint.color = fillColor
+        canvas.drawCircle(b.centerX(), b.centerY(), b.width() * 0.5f, paint)
+        if (pressed) {
+            paint.color = cAccentPressedFill
+            canvas.drawCircle(b.centerX(), b.centerY(), b.width() * 0.5f, paint)
+        }
+        paint.shader =
+            RadialGradient(
+                b.centerX(),
+                b.centerY(),
+                b.width() * 0.5f,
+                Color.argb(0, 0, 0, 0),
+                Color.argb(glassEdgeAlpha, 0, 0, 0),
+                Shader.TileMode.CLAMP,
+            )
+        canvas.drawCircle(b.centerX(), b.centerY(), b.width() * 0.5f, paint)
+        paint.shader = null
+        paint.style = Paint.Style.STROKE
+        paint.color = if (pressed) cAccentPressedStroke else cAccentStroke
+        canvas.drawCircle(b.centerX(), b.centerY(), b.width() * 0.5f, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = cAccentText
+        paint.textAlign = Paint.Align.CENTER
+        paint.isFakeBoldText = true
+        paint.textSize = b.width() * 0.5f
+        val textY = b.centerY() - (paint.descent() + paint.ascent()) * 0.5f
+        canvas.drawText(button.glyph, b.centerX(), textY, paint)
+        paint.isFakeBoldText = false
     }
 
     private fun buildShapePath(button: GlassButton) {
@@ -533,6 +616,11 @@ class RetroInputView(
             stickY = 0f
             listener.onStick(0f, 0f)
         }
+        if (cStickX != 0f || cStickY != 0f) {
+            cStickX = 0f
+            cStickY = 0f
+            listener.onRightStick(0f, 0f)
+        }
         menuLatched = false
         invalidate()
     }
@@ -577,6 +665,8 @@ class RetroInputView(
         val newPressed = HashSet<Int>()
         var newDpadX = 0f
         var newDpadY = 0f
+        var newCX = 0f
+        var newCY = 0f
         var menuTouched = false
         var stickSeen = false
         var newStickX = stickX
@@ -621,6 +711,18 @@ class RetroInputView(
                     continue
                 }
 
+                var cHit = false
+                for (c in cButtons) {
+                    val reach = c.bounds.width() * 0.5f + snap * 1.2f
+                    if (hypot(x - c.bounds.centerX(), y - c.bounds.centerY()) <= reach) {
+                        if (c.dx != 0f) newCX = c.dx
+                        if (c.dy != 0f) newCY = c.dy
+                        cHit = true
+                        break
+                    }
+                }
+                if (cHit) continue
+
                 for (button in buttons) {
                     if (hitButton(button, x, y)) {
                         newPressed.add(button.keyCode)
@@ -628,6 +730,12 @@ class RetroInputView(
                     }
                 }
             }
+        }
+
+        if (newCX != cStickX || newCY != cStickY) {
+            cStickX = newCX
+            cStickY = newCY
+            listener.onRightStick(cStickX, cStickY)
         }
 
         if (!stickSeen && stickPointerId != -1) {
