@@ -171,7 +171,13 @@ class RetroMenuController {
     var entriesProvider: ((RetroPane?) -> List<RetroMenuEntry>)? = null
     var bottomProvider: (() -> List<RetroMenuEntry.Action>)? = null
 
-    val gridColumns: Int get() = if (pane == null) 3 else 1
+    val gridColumns: Int
+        get() =
+            when (pane) {
+                null -> 3
+                RetroPane.DISPLAY -> 2
+                else -> 1
+            }
 
     fun open() {
         pane = null
@@ -247,18 +253,18 @@ class RetroMenuController {
             when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP ->
                     when (region) {
-                        1 -> if (pane == null) moveContent(-gridColumns) else moveContent(-1)
+                        1 -> moveContent(-gridColumns)
                         2 -> region = 1
                     }
                 KeyEvent.KEYCODE_DPAD_DOWN ->
                     when (region) {
                         0 -> if (entries.isNotEmpty()) region = 1
-                        1 -> if (pane == null) moveContent(gridColumns) else moveContent(1)
+                        1 -> moveContent(gridColumns)
                     }
                 KeyEvent.KEYCODE_DPAD_LEFT ->
                     when (region) {
                         0 -> railIndex = (railIndex - 1 + tabs.size) % tabs.size
-                        1 -> if (pane == null) moveContent(-1) else activate(-1)
+                        1 -> if (gridColumns > 1) moveContent(-1) else activate(-1)
                         2 -> if (bottomEntries.isNotEmpty()) {
                             bottomIndex = (bottomIndex - 1 + bottomEntries.size) % bottomEntries.size
                         }
@@ -266,7 +272,7 @@ class RetroMenuController {
                 KeyEvent.KEYCODE_DPAD_RIGHT ->
                     when (region) {
                         0 -> railIndex = (railIndex + 1) % tabs.size
-                        1 -> if (pane == null) moveContent(1) else activate(1)
+                        1 -> if (gridColumns > 1) moveContent(1) else activate(1)
                         2 -> if (bottomEntries.isNotEmpty()) {
                             bottomIndex = (bottomIndex + 1) % bottomEntries.size
                         }
@@ -679,6 +685,7 @@ private fun RetroPaneList(
     controller: RetroMenuController,
     paneScale: Float,
 ) {
+    val columns = controller.gridColumns.coerceAtLeast(1)
     Column(
         modifier =
             Modifier
@@ -687,53 +694,66 @@ private fun RetroPaneList(
                 .padding(horizontal = (10f * paneScale).dp, vertical = (10f * paneScale).dp),
         verticalArrangement = Arrangement.spacedBy((8f * paneScale).dp),
     ) {
-        controller.entries.forEachIndexed { index, entry ->
-            val highlighted =
-                controller.controllerActive &&
-                    controller.region == 1 &&
-                    controller.contentIndex == index
-            when (entry) {
-                is RetroMenuEntry.Toggle ->
-                    RetroBooleanRow(
-                        entry = entry,
-                        highlighted = highlighted,
-                        paneScale = paneScale,
-                        onClick = {
-                            controller.contentIndex = index
-                            entry.onChange(!entry.checked)
-                        },
-                    )
-                is RetroMenuEntry.Choice ->
-                    RetroChoiceRow(
-                        entry = entry,
-                        highlighted = highlighted,
-                        paneScale = paneScale,
-                        onClick = {
-                            controller.contentIndex = index
-                            entry.onCycle(1)
-                        },
-                    )
-                is RetroMenuEntry.Radio ->
-                    RetroRadioRow(
-                        entry = entry,
-                        highlighted = highlighted,
-                        paneScale = paneScale,
-                        onClick = {
-                            controller.contentIndex = index
-                            entry.onSelect()
-                        },
-                    )
-                is RetroMenuEntry.Action ->
-                    RetroActionCard(
-                        entry = entry,
-                        highlighted = highlighted,
-                        paneScale = paneScale,
-                        modifier = Modifier.fillMaxWidth().height((56f * paneScale).dp),
-                        onClick = {
-                            controller.contentIndex = index
-                            entry.onClick()
-                        },
-                    )
+        controller.entries.chunked(columns).forEachIndexed { rowIndex, rowEntries ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy((8f * paneScale).dp),
+            ) {
+                rowEntries.forEachIndexed { colIndex, entry ->
+                    val index = rowIndex * columns + colIndex
+                    val highlighted =
+                        controller.controllerActive &&
+                            controller.region == 1 &&
+                            controller.contentIndex == index
+                    Box(Modifier.weight(1f)) {
+                        when (entry) {
+                            is RetroMenuEntry.Toggle ->
+                                RetroBooleanRow(
+                                    entry = entry,
+                                    highlighted = highlighted,
+                                    paneScale = paneScale,
+                                    onClick = {
+                                        controller.contentIndex = index
+                                        entry.onChange(!entry.checked)
+                                    },
+                                )
+                            is RetroMenuEntry.Choice ->
+                                RetroChoiceRow(
+                                    entry = entry,
+                                    highlighted = highlighted,
+                                    paneScale = paneScale,
+                                    onClick = {
+                                        controller.contentIndex = index
+                                        entry.onCycle(1)
+                                    },
+                                )
+                            is RetroMenuEntry.Radio ->
+                                RetroRadioRow(
+                                    entry = entry,
+                                    highlighted = highlighted,
+                                    paneScale = paneScale,
+                                    onClick = {
+                                        controller.contentIndex = index
+                                        entry.onSelect()
+                                    },
+                                )
+                            is RetroMenuEntry.Action ->
+                                RetroActionCard(
+                                    entry = entry,
+                                    highlighted = highlighted,
+                                    paneScale = paneScale,
+                                    modifier = Modifier.fillMaxWidth().height((56f * paneScale).dp),
+                                    onClick = {
+                                        controller.contentIndex = index
+                                        entry.onClick()
+                                    },
+                                )
+                        }
+                    }
+                }
+                repeat(columns - rowEntries.size) {
+                    Spacer(Modifier.weight(1f))
+                }
             }
         }
     }

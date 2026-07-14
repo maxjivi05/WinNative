@@ -1,3 +1,9 @@
 [submodule "app/src/main/cpp/adrenotools"]
 	path = app/src/main/cpp/adrenotools
 	url = https://github.com/Pipetto-crypto/libadrenotools.git
+[submodule "libretrodroid/src/main/cpp/oboe"]
+	path = libretrodroid/src/main/cpp/oboe
+	url = https://github.com/google/oboe
+[submodule "libretrodroid/src/main/cpp/libretro/libretro-common"]
+	path = libretrodroid/src/main/cpp/libretro/libretro-common
+	url = https://github.com/libretro/libretro-common

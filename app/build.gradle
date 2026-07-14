@@ -281,7 +281,7 @@ dependencies {
 
     implementation libs.workRuntimeKtx
 
-    implementation 'com.github.Swordfish90:libretrodroid:0.14.0'
+    implementation project(':libretrodroid')
 }
 
 spotless {

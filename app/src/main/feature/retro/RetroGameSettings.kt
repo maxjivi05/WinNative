@@ -92,8 +92,8 @@ private val FieldCorner = 8.dp
 private val ItemGap = 10.dp
 private val TightGap = 4.dp
 
-private val SHADER_KEYS = listOf("default", "crt", "lcd", "sharp")
-private val SHADER_LABELS = listOf("Default", "CRT", "LCD", "Sharp")
+private val SHADER_KEYS = listOf("default", "sgsr", "crt", "lcd", "sharp")
+private val SHADER_LABELS = listOf("Default", "SGSR", "CRT", "LCD", "Sharp")
 
 class RetroSettingsState(
     val shortcut: Shortcut,

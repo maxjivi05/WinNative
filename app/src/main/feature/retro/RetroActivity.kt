@@ -50,8 +50,8 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
         const val EXTRA_HUD = "retro_hud"
         const val EXTRA_VARIABLES = "retro_variables"
 
-        private val SHADER_KEYS = listOf("default", "crt", "lcd", "sharp")
-        private val SHADER_LABELS = listOf("Default", "CRT", "LCD", "Sharp")
+        private val SHADER_KEYS = listOf("default", "sgsr", "crt", "lcd", "sharp")
+        private val SHADER_LABELS = listOf("Default", "SGSR", "CRT", "LCD", "Sharp")
     }
 
     private lateinit var retroView: GLRetroView
@@ -426,6 +426,7 @@ class RetroActivity : FixedFontScaleAppCompatActivity(), RetroInputView.Listener
 
     private fun shaderFromKey(value: String?): ShaderConfig =
         when (value?.lowercase()) {
+            "sgsr" -> ShaderConfig.SGSR
             "crt" -> ShaderConfig.CRT
             "lcd" -> ShaderConfig.LCD
             "sharp" -> ShaderConfig.Sharp
