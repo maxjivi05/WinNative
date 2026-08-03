@@ -1,88 +1,129 @@
 package com.winlator.cmod.runtime.display.composition;
 
+import android.content.Context;
 import android.os.Build;
+import android.util.Log;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 /**
- * Bridge to the native {@code surface_compositor.c} module — gives the rest of
- * the app a stable Java entry point for the per-container "Direct Composition"
- * path without any caller having to know whether the underlying NDK
- * {@code ASurfaceControl} / {@code ASurfaceTransaction} symbols are actually
- * resolvable on this device.
+ * Java entry point for the native Direct Composition module.
  *
- * <h3>Phase 1 (current)</h3>
- * Only {@link #isAvailable()} is wired up. The result is cached after the first
- * call so subsequent checks are free. Code that wants to use the Direct
- * Composition fast path should:
- * <ol>
- *   <li>Read the per-container toggle ({@code Container#isDirectCompositionEnabled()}).</li>
- *   <li>Confirm runtime support with {@link #isAvailable()}.</li>
- *   <li>Otherwise fall back to the existing GLRenderer composition path.</li>
- * </ol>
- *
- * <h3>Why dlopen rather than direct linking</h3>
- * {@code minSdk} is 26 but {@code ASurfaceControl_*} arrived in API 29; linking
- * statically would fail to resolve at library-load time on Android 8/9. The
- * native side resolves symbols via {@code dlopen("libandroid.so")} +
- * {@code dlsym} so the shared library still loads everywhere and we degrade to
- * the GLRenderer path when the symbols are missing.
+ * <p>{@link #isAvailable()} requires API 29+ and that the libandroid.so symbols
+ * resolve. Beyond that, device eligibility is left to the per-container opt-in
+ * toggle rather than a static brand blocklist.
  */
 public final class SurfaceCompositor {
 
     static {
         // Same pattern used by SysVSharedMemory, GPUImage, ClientSocket, etc.
-        // — every class that calls into the `winlator` shared lib loads it in
-        // its static init. Repeated System.loadLibrary calls are no-ops once
-        // the library is already mapped into the process.
         System.loadLibrary("winlator");
     }
 
     private static final String TAG = "SurfaceCompositor";
 
-    /**
-     * Cached probe result. {@code null} until {@link #isAvailable()} is first
-     * called; thereafter the boxed Boolean is final-state. Read-after-write is
-     * safe because {@code Boolean} writes are atomic on every supported VM and
-     * the cache is intentionally racy: if two threads probe simultaneously they
-     * will both call into the JNI layer once, which is itself idempotent and
-     * mutex-guarded.
-     */
+    /** Cached probe result. null until first call; thereafter final-state. */
     private static volatile Boolean cachedAvailability;
 
     private SurfaceCompositor() {
         // Static-only utility.
     }
 
-    /**
-     * @return {@code true} when the device exposes the API 29+ SurfaceControl
-     *         + SurfaceTransaction NDK symbols and the {@code winlator} native
-     *         library was loaded successfully. {@code false} on any earlier
-     *         Android version, on any device where libandroid.so is missing
-     *         the symbol, or if the JNI lookup itself fails.
-     */
+    /** @return true when the API 29+ SurfaceControl symbols are usable here. */
     public static boolean isAvailable() {
         Boolean cached = cachedAvailability;
         if (cached != null) {
             return cached;
         }
-        // Hard short-circuit on platforms where the native call would always
-        // resolve to the API-< 29 fallback. Keeps logcat noise off old devices.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             cachedAvailability = Boolean.FALSE;
             return false;
         }
+
         boolean result;
         try {
             result = nativeIsAvailable();
         } catch (UnsatisfiedLinkError | RuntimeException e) {
-            // Bridge load failure (e.g. winlator native lib not yet loaded
-            // from this classloader) — treat as "not available" rather than
-            // crashing the activity. The caller falls back to the GL path.
-            android.util.Log.w(TAG, "nativeIsAvailable threw, treating as unavailable", e);
+            Log.w(TAG, "nativeIsAvailable threw, treating as unavailable", e);
             result = false;
         }
         cachedAvailability = result;
+        if (result) {
+            Log.i(TAG, "Direct Composition is available on this device");
+        }
         return result;
     }
 
     private static native boolean nativeIsAvailable();
+
+    // Shared wine_*.txt logs only capture Wine/FEX stderr, not logcat, so DC
+    // events go to their own direct-composition.log in the logs directory —
+    // LogManager includes it automatically when the user shares logs.
+
+    private static volatile File diagFile = null;
+    private static volatile FileWriter diagWriter = null;
+    private static final Object diagLock = new Object();
+    private static final SimpleDateFormat diagDateFormat =
+            new SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
+
+    /** Called once at session start, before any DC code runs. */
+    public static void initDiagnosticFile(File logsDir) {
+        synchronized (diagLock) {
+            try {
+                if (diagWriter != null) {
+                    diagWriter.flush();
+                    diagWriter.close();
+                }
+                if (logsDir != null && !logsDir.exists()) logsDir.mkdirs();
+                diagFile = new File(logsDir, "direct-composition.log");
+                diagWriter = new FileWriter(diagFile, /*append=*/false);
+                logEvent("=== Direct Composition diagnostic log started ===");
+                logEvent("Device: " + Build.MANUFACTURER + " " + Build.MODEL
+                        + " (API " + Build.VERSION.SDK_INT + ")");
+                logEvent("isAvailable() = " + isAvailable());
+            } catch (IOException e) {
+                Log.w(TAG, "Failed to init diagnostic file", e);
+                diagWriter = null;
+            }
+        }
+    }
+
+    /** Appends a timestamped line to the diagnostic file and logcat. Thread-safe. */
+    public static void logEvent(String message) {
+        String timestamped = "[" + diagDateFormat.format(new Date()) + "] " + message;
+        Log.i(TAG, message);
+        synchronized (diagLock) {
+            if (diagWriter != null) {
+                // Flush every line: this log exists to diagnose SurfaceFlinger
+                // crashes and soft reboots, and anything still buffered when the
+                // device goes down is exactly the part worth having.
+                try {
+                    diagWriter.write(timestamped + "\n");
+                    diagWriter.flush();
+                } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    /** Called from XServerDisplayActivity.onDestroy. */
+    public static void closeDiagnosticFile() {
+        synchronized (diagLock) {
+            try {
+                if (diagWriter != null) {
+                    logEvent("=== Direct Composition diagnostic log closed ===");
+                    diagWriter.flush();
+                    diagWriter.close();
+                }
+            } catch (IOException ignored) {
+            } finally {
+                diagWriter = null;
+                diagFile = null;
+            }
+        }
+    }
 }

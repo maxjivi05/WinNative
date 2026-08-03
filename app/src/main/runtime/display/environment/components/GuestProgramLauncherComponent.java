@@ -27,28 +27,35 @@ import com.winlator.cmod.shared.io.FileUtils;
 import com.winlator.cmod.shared.util.Callback;
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class GuestProgramLauncherComponent extends EnvironmentComponent {
+  private static final String TAG = "GuestProgramLauncherComponent";
+  private static final String DEPENDENCY_LOG_TAG = "CurlDeps";
+  private static final long DEPENDENCY_CHECK_TIMEOUT_MS = 1500L;
+  private static final Object lock = new Object();
+  private static final AtomicBoolean dependencyCheckScheduled = new AtomicBoolean(false);
   private String guestExecutable;
   private int pid = -1;
+  private int launchGeneration = 0;
   private String[] bindingPaths;
   private EnvVars envVars;
   private WineInfo wineInfo;
   private String box64Preset = Box64Preset.PERFORMANCE;
-  private String fexcorePreset = FEXCorePreset.PERFORMANCE;
+  private String fexcorePreset = FEXCorePreset.PERFORMANCE_TSO;
   private Callback<Integer> terminationCallback;
-  private static final Object lock = new Object();
   private final ContentsManager contentsManager;
   private final ContentProfile wineProfile;
   private Container container;
   private final Shortcut shortcut;
   private File workingDir;
-  private String steamType = Container.STEAM_TYPE_NORMAL;
   private Runnable preUnpackCallback;
+  private boolean fexUnixLibsActive = false;
 
   public static File ensureImageFsNativeLibrary(
       Context context, ImageFs imageFs, String libraryName) {
@@ -143,28 +150,6 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     this.container = container;
   }
 
-  public String getSteamType() {
-    return steamType;
-  }
-
-  public void setSteamType(String steamType) {
-    if (steamType == null) {
-      this.steamType = Container.STEAM_TYPE_NORMAL;
-      return;
-    }
-    String normalized = steamType.toLowerCase();
-    switch (normalized) {
-      case Container.STEAM_TYPE_LIGHT:
-        this.steamType = Container.STEAM_TYPE_LIGHT;
-        break;
-      case Container.STEAM_TYPE_ULTRALIGHT:
-        this.steamType = Container.STEAM_TYPE_ULTRALIGHT;
-        break;
-      default:
-        this.steamType = Container.STEAM_TYPE_NORMAL;
-    }
-  }
-
   public String execShellCommand(String command) {
     return execShellCommand(command, true);
   }
@@ -236,7 +221,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
       envVars.put("LD_PRELOAD", ldPreload.toString());
       Log.d("GuestLauncher", "execShellCommand LD_PRELOAD=" + ldPreload.toString());
     }
-    envVars.put("WINEESYNC_WINLATOR", "1");
+    if (!"1".equals(envVars.get("PROTON_NO_ESYNC"))) envVars.put("WINEESYNC_WINLATOR", "1");
     mergeExternalEnvVars(
         envVars,
         envVars.get("LD_PRELOAD"),
@@ -268,27 +253,54 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     }
     try {
       Log.d("GuestProgramLauncherComponent", "Shell command is " + finalCommand);
-      java.lang.Process process =
+      final java.lang.Process process =
           Runtime.getRuntime()
               .exec(
                   finalCommand,
                   envVars.toStringArray(),
                   workingDir != null ? workingDir : imageFs.getRootDir());
+
+      // stderr MUST be drained concurrently with stdout. Wine emits a steady
+      // stream of `fixme:`/`err:` lines; if nothing reads stderr, the kernel
+      // pipe buffer (64 KiB) fills and the child blocks forever on its next
+      // stderr write — even if we're only interested in stdout. Sequential
+      // "drain stdout, then stderr" deadlocks the same way, just less often.
+      final boolean captureStderr = includeStderr;
+      Thread stderrPump =
+          new Thread(
+              () -> {
+                try (BufferedReader er =
+                    new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+                  String l;
+                  while ((l = er.readLine()) != null) {
+                    if (captureStderr) {
+                      synchronized (output) {
+                        output.append(l).append('\n');
+                      }
+                    }
+                  }
+                } catch (IOException ignored) {
+                  // child closed stderr or we were interrupted — both are fine
+                }
+              },
+              "execShellCommand-stderr-pump");
+      stderrPump.setDaemon(true);
+      stderrPump.start();
+
       try (BufferedReader reader =
-              new BufferedReader(new InputStreamReader(process.getInputStream()));
-          BufferedReader errorReader =
-              new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+          new BufferedReader(new InputStreamReader(process.getInputStream()))) {
         String line;
         while ((line = reader.readLine()) != null) {
-          output.append(line).append("\n");
-        }
-        if (includeStderr) {
-          while ((line = errorReader.readLine()) != null) {
-            output.append(line).append("\n");
+          synchronized (output) {
+            output.append(line).append('\n');
           }
         }
       }
       process.waitFor();
+      // Stderr pump exits on its own when the child closes its stderr fd
+      // (which happens at process exit). Give it a brief grace period to
+      // append any tail lines before we return.
+      stderrPump.join(200);
     } catch (Exception e) {
       output.append("Error: ").append(e.getMessage());
     }
@@ -303,14 +315,14 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     String box64Version = container.getBox64Version();
     if (box64Version == null) box64Version = "";
 
-    if (shortcut != null) box64Version = shortcut.getExtra("box64Version", box64Version);
+    if (shortcut != null) box64Version = shortcut.getSettingExtra("box64Version", box64Version);
 
     Log.i(
         "GuestProgramLauncherComponent",
         "Launch runtime selected: Box64 version=" + box64Version);
 
     File rootDir = imageFs.getRootDir();
-    boolean box64Missing = !new File(rootDir, "/usr/bin/box64").exists();
+    boolean box64Missing = !new File(rootDir, "usr/bin/box64").exists();
 
     if (box64Missing || !box64Version.equals(container.getExtra("box64Version"))) {
       if (box64Version.isEmpty()) {
@@ -338,7 +350,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     }
 
     // Set execute permissions for box64 just in case
-    File box64File = new File(rootDir, "/usr/bin/box64");
+    File box64File = new File(rootDir, "usr/bin/box64");
     if (box64File.exists()) {
       FileUtils.chmod(box64File, 0755);
     }
@@ -360,11 +372,13 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     if (wowbox64Version == null) wowbox64Version = "";
     if (fexcoreVersion == null) fexcoreVersion = "";
 
+    boolean unixLibsPref = container.isUseUnixLibs();
     if (shortcut != null) {
-      emulator = shortcut.getExtra("emulator", emulator);
-      emulator64 = shortcut.getExtra("emulator64", emulator64);
-      wowbox64Version = shortcut.getExtra("box64Version", wowbox64Version);
-      fexcoreVersion = shortcut.getExtra("fexcoreVersion", fexcoreVersion);
+      emulator = shortcut.getSettingExtra("emulator", emulator);
+      emulator64 = shortcut.getSettingExtra("emulator64", emulator64);
+      wowbox64Version = shortcut.getSettingExtra("box64Version", wowbox64Version);
+      fexcoreVersion = shortcut.getSettingExtra("fexcoreVersion", fexcoreVersion);
+      unixLibsPref = "1".equals(shortcut.getSettingExtra("useUnixLibs", unixLibsPref ? "1" : "0"));
     }
 
     boolean usesWowbox64 = emulator.equalsIgnoreCase("wowbox64");
@@ -372,6 +386,9 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         emulator.equalsIgnoreCase("fexcore")
             || emulator64.equalsIgnoreCase("fexcore")
             || !usesWowbox64;
+
+    fexUnixLibsActive =
+        usesFexcore && unixLibsPref && contentsManager.fexcoreVersionHasUnixLibs(fexcoreVersion);
 
     Log.i(
         "GuestProgramLauncherComponent",
@@ -428,30 +445,44 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
           "WowBox64 already loaded for launch: version=" + wowbox64Version);
     }
 
-    if (usesFexcore
-        && (fexcoreDllsMissing || !fexcoreVersion.equals(container.getExtra("fexcoreVersion")))) {
-      if (fexcoreVersion.isEmpty()) {
-        Log.w("GuestProgramLauncherComponent", "No FEXCore version selected; skipping content extraction");
-      } else {
-        ContentProfile profile = contentsManager.getProfileByEntryName("fexcore-" + fexcoreVersion);
-        if (profile != null) {
+    if (usesFexcore) {
+      ContentProfile profile =
+          fexcoreVersion.isEmpty() ? null : contentsManager.getProfileByEntryName("fexcore-" + fexcoreVersion);
+      String wantMode = fexUnixLibsActive ? "unixlibs" : "dll";
+      boolean modeChanged = !wantMode.equals(container.getExtra("fexcoreMode"));
+      boolean versionChanged = !fexcoreVersion.equals(container.getExtra("fexcoreVersion"));
+      boolean needsExtraction =
+          versionChanged || modeChanged || (!fexUnixLibsActive && fexcoreDllsMissing);
+
+      if (needsExtraction) {
+        if (fexcoreVersion.isEmpty()) {
+          Log.w("GuestProgramLauncherComponent", "No FEXCore version selected; skipping content extraction");
+        } else if (profile != null) {
           Log.i(
               "GuestProgramLauncherComponent",
-              "Loading FEXCore content profile: version=" + fexcoreVersion);
+              "Loading FEXCore content profile: version=" + fexcoreVersion + " mode=" + wantMode);
           contentsManager.applyContent(profile);
+          if (!fexUnixLibsActive) contentsManager.removeAppliedUnixLibs(profile);
         } else {
           Log.w(
               "GuestProgramLauncherComponent",
               "FEXCore content profile not installed; no bundled FEXCore archive will be loaded: version="
                   + fexcoreVersion);
         }
+        container.putExtra("fexcoreVersion", fexcoreVersion);
+        container.putExtra("fexcoreMode", wantMode);
+        containerDataChanged = true;
+      } else {
+        Log.i(
+            "GuestProgramLauncherComponent",
+            "FEXCore already loaded for launch: version=" + fexcoreVersion + " mode=" + wantMode);
       }
-      container.putExtra("fexcoreVersion", fexcoreVersion);
-      containerDataChanged = true;
-    } else if (usesFexcore) {
-      Log.i(
-          "GuestProgramLauncherComponent",
-          "FEXCore already loaded for launch: version=" + fexcoreVersion);
+
+      if (profile != null) {
+        File wineUnixDir = new File(environment.getImageFs().getWinePath(), "lib/wine/aarch64-unix");
+        if (fexUnixLibsActive) contentsManager.copyUnixLibsToDir(profile, wineUnixDir);
+        else contentsManager.deleteUnixLibsFromDir(profile, wineUnixDir);
+      }
     }
     if (containerDataChanged) container.saveData();
   }
@@ -478,76 +509,141 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
   @Override
   public void start() {
     synchronized (lock) {
+      long startTime = System.currentTimeMillis();
       if (wineInfo.isArm64EC()) {
         extractEmulatorsDlls();
       } else extractBox64Files();
       copyDefaultBox64RCFile();
-      checkDependencies();
+      scheduleDependencyCheck();
 
       // Run Steamless DRM stripping if configured (must happen after box64 is ready
       // but before the game exe is launched)
       if (preUnpackCallback != null) {
         try {
-          Log.d(
-              "GuestProgramLauncherComponent",
-              "Running preUnpack callback (Steamless DRM stripping)");
+          Log.d(TAG, "Running preUnpack callback (Steamless DRM stripping)");
           preUnpackCallback.run();
         } catch (Exception e) {
-          Log.e("GuestProgramLauncherComponent", "preUnpack callback failed", e);
+          Log.e(TAG, "preUnpack callback failed", e);
         }
       }
 
+      launchGeneration++;
       pid = execGuestProgram();
-      Log.d("GuestProgramLauncherComponent", "Guest process started with pid=" + pid);
+      Log.d(
+          TAG,
+          "Guest process started with pid="
+              + pid
+              + " after launch prep "
+              + (System.currentTimeMillis() - startTime)
+              + "ms");
     }
+  }
+
+  private void scheduleDependencyCheck() {
+    if (!dependencyCheckScheduled.compareAndSet(false, true)) return;
+
+    Thread thread =
+        new Thread(
+            () -> Log.d(DEPENDENCY_LOG_TAG, checkDependencies()),
+            "GuestDependencyCheck");
+    thread.setDaemon(true);
+    thread.start();
   }
 
   private void copyDefaultBox64RCFile() {
     Context context = environment.getContext();
     ImageFs imageFs = ImageFs.find(context);
     File rootDir = imageFs.getRootDir();
-    String assetPath;
-    switch (steamType) {
-      case Container.STEAM_TYPE_LIGHT:
-        assetPath = "box86_64/lightsteam.box64rc";
-        break;
-      case Container.STEAM_TYPE_ULTRALIGHT:
-        assetPath = "box86_64/ultralightsteam.box64rc";
-        break;
-      default:
-        assetPath = "box86_64/default.box64rc";
-        break;
-    }
+    String assetPath = "box86_64/default.box64rc";
     FileUtils.copy(context, assetPath, new File(rootDir, "/etc/config.box64rc"));
   }
 
   private String checkDependencies() {
     String curlPath = environment.getImageFs().getRootDir().getPath() + "/usr/lib/libXau.so";
-    String lddCommand = "ldd " + curlPath;
-
     StringBuilder output = new StringBuilder("Checking Curl dependencies...\n");
+    java.lang.Process process = null;
+    Thread stdoutPump = null;
+    Thread stderrPump = null;
 
     try {
-      java.lang.Process process = Runtime.getRuntime().exec(lddCommand);
-      try (BufferedReader reader =
-              new BufferedReader(new InputStreamReader(process.getInputStream()));
-          BufferedReader errorReader =
-              new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
-        String line;
-        while ((line = reader.readLine()) != null) {
-          output.append(line).append("\n");
-        }
-        while ((line = errorReader.readLine()) != null) {
-          output.append(line).append("\n");
+      process = Runtime.getRuntime().exec(new String[] {"ldd", curlPath});
+      stdoutPump = createDependencyPump(process.getInputStream(), output);
+      stderrPump = createDependencyPump(process.getErrorStream(), output);
+
+      stdoutPump.start();
+      stderrPump.start();
+
+      long deadline = System.currentTimeMillis() + DEPENDENCY_CHECK_TIMEOUT_MS;
+      while (true) {
+        try {
+          int exitCode = process.exitValue();
+          synchronized (output) {
+            output.append("ldd exit code: ").append(exitCode).append("\n");
+          }
+          break;
+        } catch (IllegalThreadStateException ignored) {
+          if (System.currentTimeMillis() >= deadline) {
+            synchronized (output) {
+              output
+                  .append("Timed out after ")
+                  .append(DEPENDENCY_CHECK_TIMEOUT_MS)
+                  .append("ms; skipping blocking dependency probe\n");
+            }
+            process.destroy();
+            break;
+          }
+
+          try {
+            Thread.sleep(50L);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            synchronized (output) {
+              output.append("Dependency probe interrupted\n");
+            }
+            process.destroy();
+            break;
+          }
         }
       }
-      process.waitFor();
     } catch (Exception e) {
       output.append("Error running ldd: ").append(e.getMessage());
+    } finally {
+      joinDependencyPump(stdoutPump);
+      joinDependencyPump(stderrPump);
     }
 
-    Log.d("CurlDeps", output.toString()); // Log the full dependency output
     return output.toString();
+  }
+
+  private Thread createDependencyPump(InputStream stream, StringBuilder output) {
+    Thread pump =
+        new Thread(
+            () -> {
+              try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                  synchronized (output) {
+                    output.append(line).append("\n");
+                  }
+                }
+              } catch (IOException e) {
+                synchronized (output) {
+                  output.append("Error reading dependency output: ").append(e.getMessage()).append("\n");
+                }
+              }
+            },
+            "GuestDependencyPump");
+    pump.setDaemon(true);
+    return pump;
+  }
+
+  private void joinDependencyPump(Thread pump) {
+    if (pump == null) return;
+    try {
+      pump.join(200L);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   @Override
@@ -560,6 +656,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
       } else {
         Log.d("GuestProgramLauncherComponent", "Stop requested with no tracked guest process");
       }
+      dependencyCheckScheduled.set(false);
     }
   }
 
@@ -622,6 +719,15 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
       return baseValue;
     }
     return baseValue + ":" + overrideValue;
+  }
+
+  private static String appendFirstExistingPreload(String ldPreload, File[] candidates) {
+    for (File candidate : candidates) {
+      if (candidate.exists()) {
+        return mergePreloadValue(ldPreload, candidate.getAbsolutePath());
+      }
+    }
+    return ldPreload;
   }
 
   private void mergeExternalEnvVars(
@@ -751,12 +857,17 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
   }
 
   private int execGuestProgram() {
+    final int gen = launchGeneration;
     Context context = environment.getContext();
     ImageFs imageFs = environment.getImageFs();
     File rootDir = imageFs.getRootDir();
 
     SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
-    boolean enableBox64Logs = preferences.getBoolean("enable_box64_logs", false);
+    boolean emulatorLogs = preferences.getBoolean("enable_emulator_logs", false);
+    boolean fexLogActive = wineInfo != null && wineInfo.isArm64EC()
+        && (container == null || !"wowbox64".equalsIgnoreCase(container.getEmulator()));
+    boolean enableBox64Logs = emulatorLogs && !fexLogActive;
+    boolean enableFexcoreLogs = emulatorLogs && fexLogActive;
     boolean openWithAndroidBrowser = preferences.getBoolean("open_with_android_browser", false);
     boolean shareAndroidClipboard = preferences.getBoolean("share_android_clipboard", false);
 
@@ -770,6 +881,13 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
 
     addBox64EnvVars(envVars, enableBox64Logs);
     envVars.putAll(FEXCorePresetManager.getEnvVars(context, fexcorePreset));
+
+    if (enableFexcoreLogs) {
+      // FEXCore is silent by default. Enable logging to stderr so its output is
+      // captured by the in-game logs pane and the per-session fexcore_*.txt log.
+      envVars.put("FEX_SILENTLOG", "0");
+      envVars.put("FEX_OUTPUTLOG", "stderr");
+    }
 
     String renderer = GPUInformation.getRenderer(null, null);
 
@@ -830,18 +948,72 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     envVars.put("ANDROID_SYSVSHM_SERVER", rootDir.getPath() + UnixSocketConfig.SYSVSHM_SERVER_PATH);
 
     String primaryDNS = "8.8.4.4";
-    ConnectivityManager connectivityManager =
-        (ConnectivityManager) context.getSystemService(Service.CONNECTIVITY_SERVICE);
-    if (connectivityManager.getActiveNetwork() != null) {
-      ArrayList<InetAddress> dnsServers =
-          new ArrayList<>(
-              connectivityManager
-                  .getLinkProperties(connectivityManager.getActiveNetwork())
-                  .getDnsServers());
-      primaryDNS = dnsServers.get(0).toString().substring(1);
+    java.util.List<String> orderedDns = new java.util.ArrayList<>();
+    try {
+      ConnectivityManager connectivityManager =
+          (ConnectivityManager) context.getSystemService(Service.CONNECTIVITY_SERVICE);
+      android.net.Network activeNetwork =
+          connectivityManager != null ? connectivityManager.getActiveNetwork() : null;
+      android.net.LinkProperties linkProps =
+          activeNetwork != null ? connectivityManager.getLinkProperties(activeNetwork) : null;
+      java.util.List<InetAddress> dnsServers =
+          linkProps != null ? linkProps.getDnsServers() : null;
+      if (dnsServers != null && !dnsServers.isEmpty()) {
+        for (InetAddress dns : dnsServers) {
+          if (dns instanceof java.net.Inet4Address) {
+            String a = dns.getHostAddress();
+            if (a != null && !a.isEmpty()) orderedDns.add(a);
+          }
+        }
+        for (InetAddress dns : dnsServers) {
+          if (!(dns instanceof java.net.Inet4Address)) {
+            String a = dns.getHostAddress();
+            if (a != null && !a.isEmpty()) {
+              int pct = a.indexOf('%');
+              if (pct >= 0) a = a.substring(0, pct);
+              orderedDns.add(a);
+            }
+          }
+        }
+        if (!orderedDns.isEmpty()) primaryDNS = orderedDns.get(0);
+      }
+    } catch (Exception e) {
+      Log.w("GuestLauncher", "DNS capture failed, using fallback " + primaryDNS, e);
+    }
+    if (orderedDns.isEmpty()) {
+      orderedDns.add("8.8.4.4");
+      orderedDns.add("1.1.1.1");
     }
     envVars.put("ANDROID_RESOLV_DNS", primaryDNS);
     envVars.put("WINE_NEW_NDIS", "1");
+
+    // Refresh /usr/etc/resolv.conf and /usr/etc/hosts on every launch.
+    // The shipped imagefs ships stale DNS and a broken localhost mapping; rewrite
+    // them here so Linux-side tools inside the prefix (curl, openssl, busybox) and
+    // anything else that consults hosts/resolv.conf see the correct values.
+    try {
+      File etcDir = imageFs.getEtcDir();
+      if (etcDir.isDirectory() || etcDir.mkdirs()) {
+        StringBuilder resolv = new StringBuilder();
+        resolv.append("# Generated at launch by WinNative from Android DNS.\n");
+        for (String dns : orderedDns) {
+          resolv.append("nameserver ").append(dns).append('\n');
+        }
+        resolv.append("options edns0 timeout:2 attempts:2\n");
+        FileUtils.writeString(new File(etcDir, "resolv.conf"), resolv.toString());
+
+        FileUtils.writeString(
+            new File(etcDir, "hosts"),
+            "127.0.0.1\tlocalhost\n"
+                + "::1\t\tlocalhost ip6-localhost ip6-loopback\n"
+                + "fe00::0\t\tip6-localnet\n"
+                + "ff00::0\t\tip6-mcastprefix\n"
+                + "ff02::1\t\tip6-allnodes\n"
+                + "ff02::2\t\tip6-allrouters\n");
+      }
+    } catch (Exception e) {
+      Log.w("GuestLauncher", "Failed to refresh resolv.conf/hosts in imagefs", e);
+    }
 
     String ld_preload;
     if (!new File(imageFs.getLibDir(), "libandroid-sysvshm.so").exists()) {
@@ -855,20 +1027,20 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     Log.d("GuestLauncher", "nativeLibDir: " + nativeLibDir);
     Log.d("GuestLauncher", "fakeinputSrc exists: " + fakeinputSrc.exists());
     Log.d("GuestLauncher", "fakeinputDest: " + fakeinputDest.getAbsolutePath());
-    if (!fakeinputDest.exists()) {
-      try {
-        if (fakeinputSrc.exists()) {
-          FileUtils.copy(fakeinputSrc, fakeinputDest);
-          Log.d("GuestLauncher", "Copied libfakeinput.so to imagefs");
-        } else {
-          Log.e(
-              "GuestLauncher",
-              "libfakeinput.so NOT FOUND in APK: " + fakeinputSrc.getAbsolutePath());
-        }
-      } catch (Exception e) {
-        Log.e("GuestLauncher", "Failed to copy libfakeinput.so: " + e.getMessage());
-        e.printStackTrace();
+    try {
+      if (fakeinputSrc.exists()) {
+        // Refresh every launch so the guest reader can never skew from the
+        // app-side ring writer (a same-size rebuild defeats length checks).
+        FileUtils.copy(fakeinputSrc, fakeinputDest);
+        Log.d("GuestLauncher", "Copied libfakeinput.so to imagefs");
+      } else if (!fakeinputDest.exists()) {
+        Log.e(
+            "GuestLauncher",
+            "libfakeinput.so NOT FOUND in APK: " + fakeinputSrc.getAbsolutePath());
       }
+    } catch (Exception e) {
+      Log.e("GuestLauncher", "Failed to copy libfakeinput.so: " + e.getMessage());
+      e.printStackTrace();
     }
     Log.d("GuestLauncher", "fakeinputDest exists after copy: " + fakeinputDest.exists());
 
@@ -889,27 +1061,21 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
       ld_preload = ld_preload + fakeinputDest.getAbsolutePath();
     }
 
-    // Samsung and some other OEMs ship a Vulkan ICD dep chain ending in
-    // /system_ext/lib64/libvendorutils.so that references OpenSSL's BIO_flush.
-    // Without libcrypto already mapped, vkCreateInstance fails with res=-9 and
-    // DXVK aborts with "Required Vulkan extension VK_KHR_surface not supported".
-    //
-    // Only /system and /system_ext are in the default linker namespace's
-    // permitted_paths; the conscrypt APEX is not, so preloading from it
-    // blocks the whole execve with a linker namespace error. Fall back to
-    // the imagefs copy as a last resort.
+    // Preload OEM Vulkan ICD deps that otherwise fail lazy symbol resolution.
+    // Keep paths within default linker namespace permitted_paths.
+    File[] jpegCandidates = new File[] {
+        new File("/system/lib64/libjpeg.so"),
+        new File("/system_ext/lib64/libjpeg.so"),
+    };
+    ld_preload = appendFirstExistingPreload(ld_preload, jpegCandidates);
+
     File[] cryptoCandidates = new File[] {
         new File("/system/lib64/libcrypto.so"),
         new File("/system_ext/lib64/libcrypto.so"),
         new File(imageFs.getLibDir(), "libcrypto.so.3"),
     };
-    for (File c : cryptoCandidates) {
-      if (c.exists()) {
-        if (!ld_preload.isEmpty()) ld_preload = ld_preload + ":";
-        ld_preload = ld_preload + c.getAbsolutePath();
-        break;
-      }
-    }
+    ld_preload = appendFirstExistingPreload(ld_preload, cryptoCandidates);
+
 
     File devInputDir = new File(imageFs.getRootDir(), "dev/input");
     devInputDir.mkdirs();
@@ -944,14 +1110,14 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     String emulator = container.getEmulator();
     String emulator64 = container.getEmulator64();
     if (shortcut != null) {
-      emulator = shortcut.getExtra("emulator", container.getEmulator());
-      emulator64 = shortcut.getExtra("emulator64", container.getEmulator64());
+      emulator = shortcut.getSettingExtra("emulator", container.getEmulator());
+      emulator64 = shortcut.getSettingExtra("emulator64", container.getEmulator64());
     }
 
     if (wineInfo.isArm64EC()) {
       emulator64 = container.getEmulator64();
       if (shortcut != null) {
-        emulator64 = shortcut.getExtra("emulator64", container.getEmulator64());
+        emulator64 = shortcut.getSettingExtra("emulator64", container.getEmulator64());
       }
     }
 
@@ -1020,7 +1186,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         workingDir != null ? workingDir : rootDir,
         (status) -> {
           synchronized (lock) {
-            pid = -1;
+            if (gen == launchGeneration) pid = -1;
           }
 
           ProcessHelper.drainDeadChildren("guest process termination callback");

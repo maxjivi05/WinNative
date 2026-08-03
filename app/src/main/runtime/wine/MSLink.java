@@ -243,12 +243,21 @@ public abstract class MSLink {
       File containerRootDir = container != null ? container.getRootDir() : new File(imageFs.getRootDir(), "home/" + ImageFs.USER);
       winePrefix = new File(containerRootDir, ".wine").getAbsolutePath();
 
-      // PEACFUL UPGRADE: If getNativePath failed (common during first creation), 
+      // PEACFUL UPGRADE: If getNativePath failed (common during first creation),
       // calculate the Absolute Android Path math immediately so we have the parent folder.
       if (exeFile == null || !exeFile.exists()) {
         String relPath = windowsPath.substring(2).replace("\\", "/");
         while (relPath.startsWith("/")) relPath = relPath.substring(1);
         exeFile = new File(containerRootDir, ".wine/drive_c/" + relPath);
+      }
+    } else if (windowsPath.matches("^[zZ]:.*")) {
+      File containerRootDir = container != null ? container.getRootDir() : new File(imageFs.getRootDir(), "home/" + ImageFs.USER);
+      winePrefix = new File(containerRootDir, ".wine").getAbsolutePath();
+
+      if (exeFile == null || !exeFile.exists()) {
+        String relPath = windowsPath.substring(2).replace("\\", "/");
+        while (relPath.startsWith("/")) relPath = relPath.substring(1);
+        exeFile = new File(imageFs.getRootDir(), relPath);
       }
     }
 
@@ -269,21 +278,6 @@ public abstract class MSLink {
 
       if (PeIconExtractor.INSTANCE.extractAndSave(exeFile, iconOutFile)) {
         customLibraryIconPath = iconOutFile.getAbsolutePath();
-      } else {
-        File gameDir = exeFile.isDirectory() ? exeFile : exeFile.getParentFile();
-        if (gameDir != null && gameDir.exists()) {
-          File[] candidates =
-              gameDir.listFiles(
-                  (dir, name_dir) -> {
-                    String lower = name_dir.toLowerCase();
-                    return lower.endsWith(".jpg")
-                        || lower.endsWith(".jpeg")
-                        || lower.endsWith(".png");
-                  });
-          if (candidates != null && candidates.length > 0) {
-            customLibraryIconPath = candidates[0].getAbsolutePath();
-          }
-        }
       }
     }
 

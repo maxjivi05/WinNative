@@ -185,14 +185,20 @@ class GOGManifestParser
          * Calculate total download size across multiple depot files
          *
          * @param files List of depot files
-         * @return Total compressed size in bytes
+         * @return Total compressed size in bytes, counting shared chunks once
          */
-        fun calculateTotalSize(files: List<DepotFile>): Long =
-            files.sumOf { file ->
-                file.chunks.sumOf { chunk ->
-                    chunk.compressedSize ?: chunk.size
+        fun calculateTotalSize(files: List<DepotFile>): Long {
+            val seen = mutableSetOf<String>()
+            var total = 0L
+            files.forEach { file ->
+                file.chunks.forEach { chunk ->
+                    if (seen.add(chunk.compressedMd5)) {
+                        total += (chunk.compressedSize ?: chunk.size).coerceAtLeast(0L)
+                    }
                 }
             }
+            return total
+        }
 
         /**
          * Calculate total uncompressed size
@@ -240,7 +246,6 @@ class GOGManifestParser
             // Use the first (highest priority) CDN URL as base
             val baseCdnUrl = baseUrls.first()
 
-            // Build full URL for each chunk: baseUrl/aa/bb/aabbccdd...
             // Where aa/bb are first 4 chars of MD5 hash
             return chunks.associateWith { chunkMd5 ->
                 if (chunkMd5.length >= 4) {
@@ -285,15 +290,21 @@ class GOGManifestParser
                 // Use the first (highest priority) CDN URL for this product
                 val baseCdnUrl = productUrls.first()
 
-                // Build full URL for chunk: baseUrl/aa/bb/aabbccdd...
                 // Where aa/bb are first 4 chars of MD5 hash
-                val chunkUrl =
+                val chunkSuffix =
                     if (chunkMd5.length >= 4) {
                         val first2 = chunkMd5.substring(0, 2)
                         val next2 = chunkMd5.substring(2, 4)
-                        "$baseCdnUrl/$first2/$next2/$chunkMd5"
+                        "/$first2/$next2/$chunkMd5"
                     } else {
-                        "$baseCdnUrl/$chunkMd5"
+                        "/$chunkMd5"
+                    }
+                val queryIndex = baseCdnUrl.indexOf('?')
+                val chunkUrl =
+                    if (queryIndex >= 0) {
+                        baseCdnUrl.substring(0, queryIndex) + chunkSuffix + baseCdnUrl.substring(queryIndex)
+                    } else {
+                        baseCdnUrl + chunkSuffix
                     }
 
                 chunkUrlMap[chunkMd5] = chunkUrl

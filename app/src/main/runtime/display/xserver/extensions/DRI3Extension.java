@@ -2,6 +2,8 @@ package com.winlator.cmod.runtime.display.xserver.extensions;
 
 import static com.winlator.cmod.runtime.display.xserver.XClientRequestHandler.RESPONSE_CODE_SUCCESS;
 
+import android.util.Log;
+import com.winlator.cmod.runtime.system.ApplicationLogGate;
 import com.winlator.cmod.runtime.display.connector.XConnectorEpoll;
 import com.winlator.cmod.runtime.display.connector.XInputStream;
 import com.winlator.cmod.runtime.display.connector.XOutputStream;
@@ -10,6 +12,7 @@ import com.winlator.cmod.runtime.display.renderer.GPUImage;
 import com.winlator.cmod.runtime.display.xserver.Drawable;
 import com.winlator.cmod.runtime.display.xserver.Pixmap;
 import com.winlator.cmod.runtime.display.xserver.Window;
+import com.winlator.cmod.runtime.display.xserver.WindowManager;
 import com.winlator.cmod.runtime.display.xserver.XClient;
 import com.winlator.cmod.runtime.display.xserver.XLock;
 import com.winlator.cmod.runtime.display.xserver.XServer;
@@ -25,21 +28,36 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 public class DRI3Extension implements Extension {
+  private static final String TAG = "DRI3Extension";
   public static final byte MAJOR_OPCODE = -102;
   private static final int MAX_BUFFERS = 4;
-  // Mesa's Android WSI path uses this private modifier to pass an AHardwareBuffer socket.
+  // Mesa's Android WSI path uses these private modifiers to pass an AHardwareBuffer socket.
+  // Both variants carry a single AHB fd; treat them identically for zero-copy scanout.
   private static final long ANDROID_NATIVE_BUFFER_MODIFIER = 1255L;
+  private static final long ANDROID_NATIVE_BUFFER_MODIFIER_2 = 1256L;
+  // Standard DRM modifier for plain linear buffers (CPU-shm fallback path).
+  private static final long DRM_FORMAT_MOD_LINEAR = 0L;
+
+  private static boolean isHardwareBufferModifier(long modifier) {
+    return modifier == ANDROID_NATIVE_BUFFER_MODIFIER
+        || modifier == ANDROID_NATIVE_BUFFER_MODIFIER_2;
+  }
   private final Callback<Drawable> onDestroyDrawableListener =
       (drawable) -> {
         ByteBuffer data = drawable.getData();
         if (data != null) SysVSharedMemory.unmapSHMSegment(data, data.capacity());
       };
+  private boolean loggedAhbAdvertised;
+  private boolean loggedAhbUnavailable;
 
   private abstract static class ClientOpcodes {
     private static final byte QUERY_VERSION = 0;
     private static final byte OPEN = 1;
     private static final byte PIXMAP_FROM_BUFFER = 2;
+    private static final byte GET_SUPPORTED_MODIFIERS = 6;
     private static final byte PIXMAP_FROM_BUFFERS = 7;
+    // BuffersFromPixmap (8) intentionally not implemented; AHB re-export over X is rare and
+    // requires a worker pool to drive AHardwareBuffer_sendHandleToUnixSocket asynchronously.
   }
 
   @Override
@@ -62,17 +80,45 @@ public class DRI3Extension implements Extension {
     return 0;
   }
 
+  @Override
+  public int getNumEvents() {
+    return 0;
+  }
+
+  @Override
+  public int getNumErrors() {
+    return 0;
+  }
+
+  @Override
+  public void setFirstEventId(byte id) {}
+
+  @Override
+  public void setFirstErrorId(byte id) {}
+
   private void queryVersion(XClient client, XInputStream inputStream, XOutputStream outputStream)
       throws IOException, XRequestError {
-    inputStream.skip(8);
+    int clientMajor = inputStream.readInt();
+    int clientMinor = inputStream.readInt();
+    // Cap at 1.2 — advertising 1.3 makes DXVK use FenceFromFD/FDFromFence per back-buffer,
+    // which adds a SyncExtension poll() dispatcher thread that contends with the X dispatch
+    // thread on fenceLock every frame. Pre-PR #424 advertised 1.0 with no observable issues;
+    // 1.2 keeps PixmapFromBuffers (multi-FD modifiers) which DXVK still uses, while turning
+    // off the sync-fence machinery that regressed in-game vsync 60 cap stability.
+    int major = 1;
+    int minor = 2;
+    if (clientMajor < major || (clientMajor == major && clientMinor < minor)) {
+      major = clientMajor;
+      minor = clientMinor;
+    }
 
     try (XStreamLock lock = outputStream.lock()) {
       outputStream.writeByte(RESPONSE_CODE_SUCCESS);
       outputStream.writeByte((byte) 0);
       outputStream.writeShort(client.getSequenceNumber());
       outputStream.writeInt(0);
-      outputStream.writeInt(1);
-      outputStream.writeInt(0);
+      outputStream.writeInt(major);
+      outputStream.writeInt(minor);
       outputStream.writePad(16);
     }
   }
@@ -80,11 +126,15 @@ public class DRI3Extension implements Extension {
   private void open(XClient client, XInputStream inputStream, XOutputStream outputStream)
       throws IOException, XRequestError {
     int drawableId = inputStream.readInt();
-    inputStream.skip(4);
+    inputStream.skip(4); // provider
 
     Drawable drawable = client.xServer.drawableManager.getDrawable(drawableId);
     if (drawable == null) throw new BadDrawable(drawableId);
 
+    // We deliberately reply with nfd=0. On Android, render-node access (/dev/dri/render*)
+    // is not available to unprivileged apps, and substituting /dev/null risks tripping Mesa
+    // into trying DRM ioctls on a non-DRM FD. Mesa's Android WSI path does not need this FD
+    // anyway - it goes directly to PixmapFromBuffers with the AHB-socket modifier.
     try (XStreamLock lock = outputStream.lock()) {
       outputStream.writeByte(RESPONSE_CODE_SUCCESS);
       outputStream.writeByte((byte) 0);
@@ -115,6 +165,8 @@ public class DRI3Extension implements Extension {
     int fd = inputStream.getAncillaryFd();
     if (fd < 0) throw new BadAlloc();
     pixmapFromFd(client, pixmapId, width, height, stride, 0, depth, bpp, fd, size);
+    client.xServer.windowManager.triggerOnFramePresented(
+        window, WindowManager.FrameSource.DRI3_BUFFER, 0);
   }
 
   private void pixmapFromBuffers(
@@ -148,18 +200,81 @@ public class DRI3Extension implements Extension {
     long size = (long) stride * height;
 
     try {
-      if (modifier == ANDROID_NATIVE_BUFFER_MODIFIER
+      if (isHardwareBufferModifier(modifier)
           && numBuffers == 1
           && tryPixmapFromHardwareBuffer(client, pixmapId, width, height, depth, fds[0])) {
+        // fds[0] stays non-negative so the finally block closes the AHB socket.
+        client.xServer.windowManager.triggerOnFramePresented(
+            window, WindowManager.FrameSource.DRI3_BUFFER, 0);
         return;
+      }
+
+      if (isHardwareBufferModifier(modifier)) {
+        Log.w(
+            TAG,
+            "AHB pixmap import failed; falling back to linear SHM path: pixmap="
+                + pixmapId
+                + " numBuffers="
+                + numBuffers
+                + " size="
+                + Short.toUnsignedInt(width)
+                + "x"
+                + Short.toUnsignedInt(height));
       }
 
       if (numBuffers != 1 || stride <= 0 || size <= 0) throw new BadImplementation();
       int fd = fds[0];
       fds[0] = -1;
       pixmapFromFd(client, pixmapId, width, height, stride, offset, depth, bpp, fd, size);
+      client.xServer.windowManager.triggerOnFramePresented(
+          window, WindowManager.FrameSource.DRI3_BUFFER, 0);
     } finally {
       closeFds(fds);
+    }
+  }
+
+  /**
+   * DRI3 1.2 GetSupportedModifiers (opcode 6). Advertises ANDROID_NATIVE_BUFFER_MODIFIER for
+   * window pixmaps (zero-copy AHB) and DRM_FORMAT_MOD_LINEAR for screen pixmaps (CPU/SHM).
+   */
+  private void getSupportedModifiers(
+      XClient client, XInputStream inputStream, XOutputStream outputStream) throws IOException {
+    inputStream.readInt(); // window (we do not vary modifiers per window)
+    int depth = inputStream.readUnsignedByte();
+    int bpp = inputStream.readUnsignedByte();
+    inputStream.skip(2);
+
+    boolean ahbSupported = GPUImage.isSupported() && bpp == 32 && (depth == 24 || depth == 32);
+    int numWindow = ahbSupported ? 1 : 0;
+    int numScreen = 1; // always advertise LINEAR for the CPU/SHM path
+    if (ahbSupported && !loggedAhbAdvertised && ApplicationLogGate.isEnabled()) {
+      Log.i(
+          TAG,
+          "Advertising DRI3 AHB modifier for window pixmaps: depth=" + depth + " bpp=" + bpp);
+      loggedAhbAdvertised = true;
+    } else if (!ahbSupported && !loggedAhbUnavailable && ApplicationLogGate.isEnabled()) {
+      Log.i(
+          TAG,
+          "DRI3 AHB modifier unavailable: gpuImageSupported="
+              + GPUImage.isSupported()
+              + " depth="
+              + depth
+              + " bpp="
+              + bpp);
+      loggedAhbUnavailable = true;
+    }
+
+    int extraBytes = (numWindow + numScreen) * 8;
+    try (XStreamLock lock = outputStream.lock()) {
+      outputStream.writeByte(RESPONSE_CODE_SUCCESS);
+      outputStream.writeByte((byte) 0);
+      outputStream.writeShort(client.getSequenceNumber());
+      outputStream.writeInt(extraBytes / 4);
+      outputStream.writeInt(numWindow);
+      outputStream.writeInt(numScreen);
+      outputStream.writePad(16);
+      if (ahbSupported) outputStream.writeLong(ANDROID_NATIVE_BUFFER_MODIFIER);
+      outputStream.writeLong(DRM_FORMAT_MOD_LINEAR);
     }
   }
 
@@ -193,6 +308,16 @@ public class DRI3Extension implements Extension {
       throws IOException, XRequestError {
     GPUImage gpuImage = new GPUImage(fd);
     if (!gpuImage.isValid()) {
+      Log.w(
+          TAG,
+          "Rejected DRI3 AHB pixmap: pixmap="
+              + pixmapId
+              + " size="
+              + Short.toUnsignedInt(width)
+              + "x"
+              + Short.toUnsignedInt(height)
+              + " depth="
+              + Byte.toUnsignedInt(depth));
       gpuImage.destroy();
       return false;
     }
@@ -203,9 +328,23 @@ public class DRI3Extension implements Extension {
       gpuImage.destroy();
       throw new BadIdChoice(pixmapId);
     }
+    drawable.setPresentedSourceSize(width, height);
     drawable.setTexture(gpuImage);
     drawable.setDirectScanout(true);
-    client.xServer.pixmapManager.createPixmap(drawable);
+    Pixmap pixmap = client.xServer.pixmapManager.createPixmap(drawable);
+    client.registerAsOwnerOfResource(pixmap);
+    if (ApplicationLogGate.isEnabled()) {
+      Log.i(
+          TAG,
+          "Loaded DRI3 AHB pixmap for direct scanout: pixmap="
+              + pixmapId
+              + " size="
+              + Short.toUnsignedInt(width)
+              + "x"
+              + Short.toUnsignedInt(height)
+              + " depth="
+              + Byte.toUnsignedInt(depth));
+    }
     return true;
   }
 
@@ -229,10 +368,12 @@ public class DRI3Extension implements Extension {
       short totalWidth = (short) (stride / 4);
       Drawable drawable =
           client.xServer.drawableManager.createDrawable(pixmapId, totalWidth, height, depth);
+      drawable.setPresentedSourceSize(width, height);
       drawable.setData(buffer);
       drawable.setTexture(null);
       drawable.setOnDestroyListener(onDestroyDrawableListener);
-      client.xServer.pixmapManager.createPixmap(drawable);
+      Pixmap pixmap = client.xServer.pixmapManager.createPixmap(drawable);
+      client.registerAsOwnerOfResource(pixmap);
     } finally {
       XConnectorEpoll.closeFd(fd);
     }
@@ -259,6 +400,9 @@ public class DRI3Extension implements Extension {
                 XServer.Lockable.DRAWABLE_MANAGER)) {
           pixmapFromBuffer(client, inputStream, outputStream);
         }
+        break;
+      case ClientOpcodes.GET_SUPPORTED_MODIFIERS:
+        getSupportedModifiers(client, inputStream, outputStream);
         break;
       case ClientOpcodes.PIXMAP_FROM_BUFFERS:
         try (XLock lock =

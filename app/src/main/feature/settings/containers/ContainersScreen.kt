@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -25,16 +25,12 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Info
@@ -47,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -66,17 +63,29 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.winlator.cmod.R
 import com.winlator.cmod.runtime.container.Container
+import com.winlator.cmod.shared.ui.dialog.PopupDialog
+import com.winlator.cmod.shared.ui.dialog.PopupTextAction
+import com.winlator.cmod.shared.ui.focus.rememberSettingsContentNav
+import com.winlator.cmod.shared.ui.nav.DialogPaneNav
+import com.winlator.cmod.shared.ui.nav.LocalPaneNav
+import com.winlator.cmod.shared.ui.nav.PaneNavRegistry
+import com.winlator.cmod.shared.ui.nav.paneNavItem
+import androidx.compose.runtime.CompositionLocalProvider
 import java.util.Locale
 
-private val ContainersBg = Color(0xFF18181D)
+private val ContainersBg = Color(0xFF11111C)
 private val ContainersCard = Color(0xFF1C1C2A)
 private val ContainersSubcard = Color(0xFF161622)
 private val ContainersOutline = Color(0xFF2A2A3A)
 private val ContainersIconBox = Color(0xFF242434)
 private val ContainersAccent = Color(0xFF1A9FFF)
+private val ContainersNavHighlight = Color(0xFF4FC3F7)
 private val ContainersTextPrimary = Color(0xFFF0F4FF)
 private val ContainersTextSecondary = Color(0xFF7A8FA8)
 private val ContainersDanger = Color(0xFFFF7A88)
+
+// Card shape knob: width : height. Lower = squarer (1f = perfect square), higher = wider/shorter.
+private const val ContainerCardAspect = 1.2f
 
 data class ContainersScreenState(
     val containers: List<Container> = emptyList(),
@@ -90,17 +99,12 @@ sealed interface ContainersDialogUiState {
         val container: Container,
     ) : ContainersDialogUiState
 
+    data class ComponentInstaller(
+        val container: Container,
+    ) : ContainersDialogUiState
+
     data class ConfirmRemove(
         val container: Container,
-    ) : ContainersDialogUiState
-
-    data class Backups(
-        val container: Container,
-    ) : ContainersDialogUiState
-
-    data class BackupSelection(
-        val container: Container,
-        val backupNames: List<String>,
     ) : ContainersDialogUiState
 
     data class StorageInfo(
@@ -129,60 +133,92 @@ fun ContainersScreen(
     onRunContainer: (Container) -> Unit,
     onEditContainer: (Container) -> Unit,
     onDuplicateContainer: (Container) -> Unit,
-    onShowBackups: (Container) -> Unit,
+    onInstallComponents: (Container) -> Unit,
     onRemoveContainer: (Container) -> Unit,
     onShowInfo: (Container) -> Unit,
     onDismissDialog: () -> Unit,
     onConfirmDuplicateDialog: (Container) -> Unit,
     onConfirmRemoveDialog: (Container) -> Unit,
-    onConfirmBackupDialog: (Container) -> Unit,
-    onConfirmRestoreDialog: (Container) -> Unit,
     onClearCacheDialog: (Container) -> Unit,
-    onBackupSelectionChosen: (Int) -> Unit,
+    bridge: SettingsNavBridge? = null,
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
     val navBarStartPadding = navBarPadding.calculateStartPadding(layoutDirection)
     val navBarEndPadding = navBarPadding.calculateEndPadding(layoutDirection)
     val navBarBottomPadding = navBarPadding.calculateBottomPadding()
+    val contentNav = rememberSettingsContentNav(bridge)
 
-    Column(
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .background(ContainersBg)
-                .padding(
-                    start = 16.dp + navBarStartPadding,
-                    top = 16.dp,
-                    end = 16.dp + navBarEndPadding,
-                ),
-    ) {
-        SectionLabel(text = stringResource(R.string.common_ui_containers))
-        Spacer(Modifier.height(6.dp))
-
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 4.dp + navBarBottomPadding),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    CompositionLocalProvider(LocalPaneNav provides contentNav) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .background(ContainersBg)
+                    .padding(
+                        start = 16.dp + navBarStartPadding,
+                        top = 16.dp,
+                        end = 16.dp + navBarEndPadding,
+                    ),
         ) {
-            item(key = "add") {
-                AddContainerCard(onClick = onAddContainer)
-            }
-            items(
-                items = state.containers,
-                key = { container -> container.id },
-            ) { container ->
-                ContainerCard(
-                    container = container,
-                    onRun = { onRunContainer(container) },
-                    onEdit = { onEditContainer(container) },
-                    onDuplicate = { onDuplicateContainer(container) },
-                    onShowBackups = { onShowBackups(container) },
-                    onRemove = { onRemoveContainer(container) },
-                    onShowInfo = { onShowInfo(container) },
-                )
+            SectionLabel(text = stringResource(R.string.common_ui_containers))
+            Spacer(Modifier.height(6.dp))
+
+            val cardSpacing = 8.dp
+            val minCardWidth = 140.dp
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val columns =
+                    maxOf(1, ((maxWidth + cardSpacing) / (minCardWidth + cardSpacing)).toInt())
+                val totalCells = state.containers.size + 1
+                val rowCount = (totalCells + columns - 1) / columns
+
+                Column(
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(cardSpacing),
+                ) {
+                    for (rowIndex in 0 until rowCount) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(cardSpacing),
+                        ) {
+                            for (colIndex in 0 until columns) {
+                                val cellIndex = rowIndex * columns + colIndex
+                                val gxBase = colIndex * 2
+                                val gyBase = rowIndex * 2
+                                Box(modifier = Modifier.weight(1f)) {
+                                    when {
+                                        cellIndex == 0 ->
+                                            AddContainerCard(
+                                                onClick = onAddContainer,
+                                                navRow = gyBase,
+                                                navCol = gxBase,
+                                            )
+                                        cellIndex <= state.containers.size -> {
+                                            val container = state.containers[cellIndex - 1]
+                                            key(container.id) {
+                                                ContainerCard(
+                                                    container = container,
+                                                    navRow = gyBase,
+                                                    navCol = gxBase,
+                                                    onRun = { onRunContainer(container) },
+                                                    onEdit = { onEditContainer(container) },
+                                                    onDuplicate = { onDuplicateContainer(container) },
+                                                    onInstallComponents = { onInstallComponents(container) },
+                                                    onRemove = { onRemoveContainer(container) },
+                                                    onShowInfo = { onShowInfo(container) },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp + navBarBottomPadding))
+                }
             }
         }
     }
@@ -193,40 +229,73 @@ fun ContainersScreen(
         }
 
         is ContainersDialogUiState.ConfirmDuplicate -> {
-            ContainersConfirmDialog(
-                message = stringResource(R.string.containers_list_confirm_duplicate),
-                confirmLabel = stringResource(R.string.common_ui_duplicate),
-                confirmColor = ContainersAccent,
-                onDismiss = onDismissDialog,
-                onConfirm = { onConfirmDuplicateDialog(dialog.container) },
-            )
+            val nav = remember { PaneNavRegistry() }
+            Dialog(
+                onDismissRequest = onDismissDialog,
+                properties = DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                DialogPaneNav(nav, onDismiss = onDismissDialog)
+                CompositionLocalProvider(LocalPaneNav provides nav) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .safeDrawingPadding()
+                                .padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PopupDialog(
+                            title = stringResource(R.string.containers_list_duplicate_title),
+                            message = stringResource(R.string.containers_list_confirm_duplicate),
+                            accentColor = ContainersAccent,
+                            modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
+                            footer = {
+                                ConfirmDialogFooter(
+                                    confirmLabel = stringResource(R.string.common_ui_duplicate),
+                                    confirmColor = ContainersAccent,
+                                    onConfirm = { onConfirmDuplicateDialog(dialog.container) },
+                                    onCancel = onDismissDialog,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
         }
 
         is ContainersDialogUiState.ConfirmRemove -> {
-            ContainersConfirmDialog(
-                message = stringResource(R.string.containers_list_confirm_remove),
-                confirmLabel = stringResource(R.string.common_ui_remove),
-                confirmColor = ContainersDanger,
-                onDismiss = onDismissDialog,
-                onConfirm = { onConfirmRemoveDialog(dialog.container) },
-            )
-        }
-
-        is ContainersDialogUiState.Backups -> {
-            ContainersBackupsDialog(
-                onDismiss = onDismissDialog,
-                onBackup = { onConfirmBackupDialog(dialog.container) },
-                onRestore = { onConfirmRestoreDialog(dialog.container) },
-            )
-        }
-
-        is ContainersDialogUiState.BackupSelection -> {
-            ContainersSelectionDialog(
-                title = stringResource(R.string.container_backups_select_title),
-                options = dialog.backupNames,
-                onDismiss = onDismissDialog,
-                onSelected = onBackupSelectionChosen,
-            )
+            val nav = remember { PaneNavRegistry() }
+            Dialog(
+                onDismissRequest = onDismissDialog,
+                properties = DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                DialogPaneNav(nav, onDismiss = onDismissDialog)
+                CompositionLocalProvider(LocalPaneNav provides nav) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .safeDrawingPadding()
+                                .padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PopupDialog(
+                            title = stringResource(R.string.containers_list_remove_title),
+                            message = stringResource(R.string.containers_list_confirm_remove),
+                            accentColor = ContainersDanger,
+                            modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
+                            footer = {
+                                ConfirmDialogFooter(
+                                    confirmLabel = stringResource(R.string.common_ui_remove),
+                                    confirmColor = ContainersDanger,
+                                    onConfirm = { onConfirmRemoveDialog(dialog.container) },
+                                    onCancel = onDismissDialog,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
         }
 
         is ContainersDialogUiState.StorageInfo -> {
@@ -234,6 +303,13 @@ fun ContainersScreen(
                 state = dialog.data,
                 onDismiss = onDismissDialog,
                 onClearCache = { onClearCacheDialog(dialog.data.container) },
+            )
+        }
+
+        is ContainersDialogUiState.ComponentInstaller -> {
+            ComponentInstallerSheet(
+                container = dialog.container,
+                onDismiss = onDismissDialog,
             )
         }
 
@@ -260,12 +336,16 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun AddContainerCard(onClick: () -> Unit) {
+private fun AddContainerCard(
+    onClick: () -> Unit,
+    navRow: Int,
+    navCol: Int,
+) {
     Column(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .height(138.dp)
+                .aspectRatio(ContainerCardAspect)
                 .clip(RoundedCornerShape(12.dp))
                 .background(ContainersCard)
                 .border(1.dp, ContainersOutline, RoundedCornerShape(12.dp))
@@ -282,7 +362,16 @@ private fun AddContainerCard(onClick: () -> Unit) {
                 Modifier
                     .size(56.dp)
                     .clip(CircleShape)
-                    .background(ContainersIconBox),
+                    .background(ContainersIconBox)
+                    .paneNavItem(
+                        cornerRadius = 28.dp,
+                        onActivate = onClick,
+                        highlightColor = ContainersNavHighlight,
+                        tapToSelect = true,
+                        isEntry = true,
+                        navRow = navRow,
+                        navCol = navCol,
+                    ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -306,20 +395,29 @@ private fun AddContainerCard(onClick: () -> Unit) {
 @Composable
 private fun ContainerCard(
     container: Container,
+    navRow: Int,
+    navCol: Int,
     onRun: () -> Unit,
     onEdit: () -> Unit,
     onDuplicate: () -> Unit,
-    onShowBackups: () -> Unit,
+    onInstallComponents: () -> Unit,
     onRemove: () -> Unit,
     onShowInfo: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val nameFontSize =
+        when {
+            container.name.length > 44 -> 9.sp
+            container.name.length > 34 -> 10.sp
+            container.name.length > 26 -> 11.sp
+            else -> 13.sp
+        }
 
     Column(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .height(138.dp)
+                .aspectRatio(ContainerCardAspect)
                 .clip(RoundedCornerShape(12.dp))
                 .background(ContainersCard)
                 .border(1.dp, ContainersOutline, RoundedCornerShape(12.dp))
@@ -335,10 +433,12 @@ private fun ContainerCard(
             )
             Spacer(Modifier.weight(1f))
             SmallVectorIconButton(
-                image = Icons.Outlined.ContentCopy,
-                contentDescription = stringResource(R.string.common_ui_duplicate),
-                tint = ContainersTextSecondary,
-                onClick = onDuplicate,
+                image = ComponentContainerIcon,
+                contentDescription = "Install components",
+                tint = ContainersAccent,
+                onClick = onInstallComponents,
+                navRow = navRow,
+                navCol = navCol,
             )
             Spacer(Modifier.width(8.dp))
             Box {
@@ -347,6 +447,8 @@ private fun ContainerCard(
                     contentDescription = stringResource(R.string.common_ui_edit),
                     tint = ContainersTextSecondary,
                     onClick = { menuExpanded = true },
+                    navRow = navRow,
+                    navCol = navCol + 1,
                 )
                 DropdownMenu(
                     expanded = menuExpanded,
@@ -354,10 +456,10 @@ private fun ContainerCard(
                     containerColor = ContainersCard,
                 ) {
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.container_backups_title), color = ContainersTextPrimary) },
+                        text = { Text(stringResource(R.string.common_ui_duplicate), color = ContainersTextPrimary) },
                         onClick = {
                             menuExpanded = false
-                            onShowBackups()
+                            onDuplicate()
                         },
                     )
                     DropdownMenuItem(
@@ -388,9 +490,10 @@ private fun ContainerCard(
             Text(
                 text = container.name,
                 color = ContainersTextPrimary,
-                fontSize = 13.sp,
+                fontSize = nameFontSize,
                 fontWeight = FontWeight.Bold,
-                maxLines = 2,
+                maxLines = 1,
+                softWrap = false,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
@@ -407,13 +510,17 @@ private fun ContainerCard(
                 contentDescription = stringResource(R.string.common_ui_run),
                 tint = ContainersAccent,
                 onClick = onRun,
+                navRow = navRow + 1,
+                navCol = navCol,
             )
             ActionButton(
                 modifier = Modifier.weight(1f),
                 image = Icons.Outlined.Edit,
                 contentDescription = stringResource(R.string.common_ui_edit),
-                tint = ContainersTextSecondary,
+                tint = ContainersAccent,
                 onClick = onEdit,
+                navRow = navRow + 1,
+                navCol = navCol + 1,
             )
         }
     }
@@ -558,174 +665,58 @@ private fun ContainersDialogButton(
 }
 
 @Composable
-private fun ContainersConfirmDialog(
-    message: String,
+private fun ConfirmDialogFooter(
     confirmLabel: String,
     confirmColor: Color,
-    onDismiss: () -> Unit,
     onConfirm: () -> Unit,
+    onCancel: () -> Unit,
 ) {
-    ContainersDialogShell(
-        onDismiss = onDismiss,
-        maxWidth = 420.dp,
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = message,
-            color = ContainersTextSecondary,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
+        ConfirmFooterAction(
+            label = stringResource(R.string.common_ui_cancel),
+            textColor = ContainersTextSecondary,
+            onClick = onCancel,
+            isEntry = true,
         )
-        Spacer(Modifier.height(16.dp))
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(ContainersOutline),
+        ConfirmFooterAction(
+            label = confirmLabel,
+            textColor = confirmColor,
+            onClick = onConfirm,
         )
-        Spacer(Modifier.height(16.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-        ) {
-            ContainersDialogButton(
-                label = stringResource(R.string.common_ui_cancel),
-                primary = false,
-                textColor = ContainersTextPrimary,
-                onClick = onDismiss,
-            )
-            ContainersDialogButton(
-                label = confirmLabel,
-                primary = false,
-                textColor = confirmColor,
-                backgroundColor = confirmColor.copy(alpha = 0.12f),
-                borderColor = confirmColor.copy(alpha = 0.3f),
-                onClick = onConfirm,
-            )
-        }
     }
 }
 
 @Composable
-private fun ContainersBackupsDialog(
-    onDismiss: () -> Unit,
-    onBackup: () -> Unit,
-    onRestore: () -> Unit,
+private fun ConfirmFooterAction(
+    label: String,
+    textColor: Color,
+    onClick: () -> Unit,
+    isEntry: Boolean = false,
 ) {
-    ContainersDialogShell(
-        onDismiss = onDismiss,
-        title = stringResource(R.string.container_backups_title),
-        maxWidth = 420.dp,
+    Box(
+        modifier =
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .paneNavItem(
+                    cornerRadius = 8.dp,
+                    onActivate = onClick,
+                    highlightColor = ContainersNavHighlight,
+                    tapToSelect = true,
+                    isEntry = isEntry,
+                ).padding(horizontal = 10.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = stringResource(R.string.container_backups_prompt),
-            color = ContainersTextSecondary,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
+            text = label,
+            color = textColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
         )
-        Spacer(Modifier.height(16.dp))
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(ContainersOutline),
-        )
-        Spacer(Modifier.height(16.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-        ) {
-            ContainersDialogButton(
-                label = stringResource(R.string.common_ui_cancel),
-                primary = false,
-                textColor = ContainersTextPrimary,
-                onClick = onDismiss,
-            )
-            ContainersDialogButton(
-                label = stringResource(R.string.google_cloud_restore),
-                primary = false,
-                textColor = ContainersTextPrimary,
-                onClick = onRestore,
-            )
-            ContainersDialogButton(
-                label = stringResource(R.string.google_cloud_backup),
-                primary = false,
-                textColor = ContainersAccent,
-                backgroundColor = ContainersAccent.copy(alpha = 0.12f),
-                borderColor = ContainersAccent.copy(alpha = 0.3f),
-                onClick = onBackup,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ContainersSelectionDialog(
-    title: String,
-    options: List<String>,
-    onDismiss: () -> Unit,
-    onSelected: (Int) -> Unit,
-) {
-    ContainersDialogShell(
-        onDismiss = onDismiss,
-        title = title,
-        maxWidth = 420.dp,
-    ) {
-        Column {
-            Column(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 300.dp)
-                        .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                options.forEachIndexed { index, option ->
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(ContainersSubcard)
-                                .border(1.dp, ContainersOutline, RoundedCornerShape(12.dp))
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                    onClick = { onSelected(index) },
-                                ).padding(horizontal = 14.dp, vertical = 10.dp),
-                    ) {
-                        Text(
-                            text = option,
-                            color = ContainersTextPrimary,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(14.dp))
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(ContainersOutline),
-            )
-            Spacer(Modifier.height(14.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                ContainersDialogButton(
-                    label = stringResource(R.string.common_ui_cancel),
-                    primary = false,
-                    textColor = ContainersTextPrimary,
-                    onClick = onDismiss,
-                )
-            }
-        }
     }
 }
 
@@ -777,89 +768,93 @@ private fun ContainerStorageInfoDialog(
     onDismiss: () -> Unit,
     onClearCache: () -> Unit,
 ) {
-    ContainersDialogShell(
-        onDismiss = onDismiss,
-        title = stringResource(R.string.container_config_storage_info),
-        iconImage = Icons.Outlined.Info,
-        maxWidth = 500.dp,
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                StorageMetric(
-                    label = stringResource(R.string.container_config_drive_c),
-                    value = formatBytes(state.driveCBytes),
-                )
-                StorageMetric(
-                    label = stringResource(R.string.container_config_cache),
-                    value = formatBytes(state.cacheBytes),
-                )
-                StorageMetric(
-                    label = stringResource(R.string.container_config_total),
-                    value = formatBytes(state.totalBytes),
-                )
-            }
-            Column(
-                modifier = Modifier.widthIn(min = 180.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        progress = { state.usedPercent.coerceIn(0f, 100f) / 100f },
-                        modifier = Modifier.size(132.dp),
-                        color = ContainersAccent.copy(alpha = 0.38f),
-                        trackColor = ContainersAccent.copy(alpha = 0.12f),
-                        strokeWidth = 18.dp,
-                    )
-                    Text(
-                        text = formatUsedPercent(state.usedPercent),
-                        color = ContainersTextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = stringResource(R.string.container_config_estimated_used_space),
-                    color = ContainersTextSecondary,
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
-        Spacer(Modifier.height(18.dp))
         Box(
             modifier =
                 Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(ContainersOutline),
-        )
-        Spacer(Modifier.height(16.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            ContainersDialogButton(
-                label = stringResource(R.string.container_config_clear_cache),
-                primary = false,
-                textColor = ContainersTextPrimary,
-                onClick = onClearCache,
-            )
-            ContainersDialogButton(
-                label = stringResource(R.string.common_ui_ok),
-                primary = true,
-                textColor = ContainersAccent,
-                backgroundColor = ContainersAccent.copy(alpha = 0.12f),
-                borderColor = ContainersAccent.copy(alpha = 0.3f),
-                onClick = onDismiss,
+            PopupDialog(
+                title = stringResource(R.string.container_config_storage_info),
+                icon = Icons.Outlined.Info,
+                accentColor = ContainersAccent,
+                modifier = Modifier.widthIn(min = 320.dp, max = 500.dp),
+                content = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            StorageMetric(
+                                label = stringResource(R.string.container_config_drive_c),
+                                value = formatBytes(state.driveCBytes),
+                            )
+                            StorageMetric(
+                                label = stringResource(R.string.container_config_cache),
+                                value = formatBytes(state.cacheBytes),
+                            )
+                            StorageMetric(
+                                label = stringResource(R.string.container_config_total),
+                                value = formatBytes(state.totalBytes),
+                            )
+                        }
+                        Column(
+                            modifier = Modifier.widthIn(min = 180.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(
+                                    progress = { state.usedPercent.coerceIn(0f, 100f) / 100f },
+                                    modifier = Modifier.size(132.dp),
+                                    color = ContainersAccent.copy(alpha = 0.38f),
+                                    trackColor = ContainersAccent.copy(alpha = 0.12f),
+                                    strokeWidth = 18.dp,
+                                )
+                                Text(
+                                    text = formatUsedPercent(state.usedPercent),
+                                    color = ContainersTextPrimary,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                text = stringResource(R.string.container_config_estimated_used_space),
+                                color = ContainersTextSecondary,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                },
+                footer = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    ) {
+                        PopupTextAction(
+                            label = stringResource(R.string.container_config_clear_cache),
+                            textColor = ContainersTextSecondary,
+                            onClick = onClearCache,
+                        )
+                        PopupTextAction(
+                            label = stringResource(R.string.common_ui_ok),
+                            textColor = ContainersAccent,
+                            onClick = onDismiss,
+                        )
+                    }
+                },
             )
         }
     }
@@ -907,6 +902,8 @@ private fun SmallVectorIconButton(
     contentDescription: String,
     tint: Color,
     onClick: () -> Unit,
+    navRow: Int? = null,
+    navCol: Int? = null,
 ) {
     Box(
         modifier =
@@ -915,10 +912,13 @@ private fun SmallVectorIconButton(
                 .clip(RoundedCornerShape(8.dp))
                 .background(ContainersSubcard)
                 .border(1.dp, ContainersOutline, RoundedCornerShape(8.dp))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onClick,
+                .paneNavItem(
+                    cornerRadius = 8.dp,
+                    onActivate = onClick,
+                    highlightColor = ContainersNavHighlight,
+                    tapToSelect = true,
+                    navRow = navRow,
+                    navCol = navCol,
                 ),
         contentAlignment = Alignment.Center,
     ) {
@@ -938,6 +938,8 @@ private fun ActionButton(
     contentDescription: String,
     tint: Color,
     onClick: () -> Unit,
+    navRow: Int? = null,
+    navCol: Int? = null,
 ) {
     Box(
         modifier =
@@ -946,10 +948,13 @@ private fun ActionButton(
                 .clip(RoundedCornerShape(9.dp))
                 .background(ContainersSubcard)
                 .border(1.dp, ContainersOutline, RoundedCornerShape(9.dp))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onClick,
+                .paneNavItem(
+                    cornerRadius = 9.dp,
+                    onActivate = onClick,
+                    highlightColor = ContainersNavHighlight,
+                    tapToSelect = true,
+                    navRow = navRow,
+                    navCol = navCol,
                 ),
         contentAlignment = Alignment.Center,
     ) {

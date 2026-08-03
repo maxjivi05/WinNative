@@ -11,8 +11,11 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
 import android.util.Log
+import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
@@ -57,9 +60,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,6 +82,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -97,6 +103,7 @@ import androidx.compose.ui.text.googlefonts.Font
 import androidx.compose.ui.text.googlefonts.GoogleFont
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -111,30 +118,24 @@ import com.winlator.cmod.app.shell.UnifiedActivity
 import com.winlator.cmod.feature.settings.DriversFragment
 import com.winlator.cmod.feature.settings.ContainerSettingsComposeDialog
 import com.winlator.cmod.runtime.container.Container
+import com.winlator.cmod.runtime.container.ContainerCreation
 import com.winlator.cmod.runtime.container.ContainerManager
-import com.winlator.cmod.runtime.content.AdrenotoolsManager
 import com.winlator.cmod.runtime.content.ContentProfile
 import com.winlator.cmod.runtime.content.ContentsManager
+import com.winlator.cmod.runtime.content.AdrenotoolsManager
 import com.winlator.cmod.runtime.content.Downloader
 import com.winlator.cmod.runtime.display.environment.ImageFs
 import com.winlator.cmod.runtime.display.environment.ImageFsInstaller
 import com.winlator.cmod.runtime.wine.WineInfo
 import com.winlator.cmod.shared.ui.toast.WinToast
 import com.winlator.cmod.shared.android.FixedFontScaleFragmentActivity
-import com.winlator.cmod.shared.io.FileUtils
-import com.winlator.cmod.shared.io.TarCompressorUtils
-import com.winlator.cmod.shared.io.TarCompressorUtils.Type
 import com.winlator.cmod.shared.ui.widget.chasingBorder
 import com.winlator.cmod.shared.theme.WinNativeTheme
-import com.winlator.cmod.shared.util.OnExtractFileListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -174,6 +175,40 @@ private data class TabInfo(
     val highlight: Boolean = false,
 )
 
+private val NavHighlightAccent = Color(0xFF57CBDE)
+
+private fun Modifier.navHighlight(highlighted: Boolean, cornerRadius: Dp): Modifier =
+    drawBehind {
+        if (highlighted) {
+            val cr = cornerRadius.toPx()
+            drawRoundRect(
+                color = NavHighlightAccent.copy(alpha = 0.18f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(cr, cr),
+            )
+            drawRoundRect(
+                color = NavHighlightAccent,
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(cr, cr),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx()),
+            )
+        }
+    }
+
+private const val REGION_TABS = 0
+private const val REGION_CONTENT = 1
+private const val REGION_NAV = 2
+
+private suspend fun LazyListState.scrollToSelected(index: Int) {
+    if (index < 0) return
+    val info = layoutInfo
+    if (info.visibleItemsInfo.isEmpty()) return
+    val visible = info.visibleItemsInfo.firstOrNull { it.index == index }
+    val fullyVisible =
+        visible != null &&
+            visible.offset >= info.viewportStartOffset &&
+            visible.offset + visible.size <= info.viewportEndOffset
+    if (!fullyVisible) runCatching { animateScrollToItem(index) }
+}
+
 class SetupWizardActivity : FixedFontScaleFragmentActivity() {
     companion object {
         private const val PREFS_NAME = "winnative_setup"
@@ -190,7 +225,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         private const val KEY_LAST_CONTENT_PREFIX = "last_content_"
         private const val KEY_DEFAULT_JSON_CACHE = "default_json_cache"
         private const val DEFAULT_JSON_URL =
-            "https://github.com/Xnick417x/winlator-nightly-wcp/blob/main/default.json"
+            "https://github.com/nicholasx417/WinNative-Components/blob/main/default.json"
 
         @JvmStatic
         fun isSetupComplete(context: Context): Boolean = prefs(context).getBoolean(KEY_SETUP_COMPLETE, false)
@@ -253,7 +288,23 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         }
 
         @JvmStatic
-        fun getLastInstalledDriverId(context: Context): String = prefs(context).getString(KEY_LAST_DRIVER_ID, "") ?: ""
+        fun getLastInstalledDriverId(context: Context): String {
+            val lastId = prefs(context).getString(KEY_LAST_DRIVER_ID, "") ?: ""
+            if (lastId.isBlank() || lastId == "System") return ""
+
+            val manager = AdrenotoolsManager(context)
+            val installed = manager.enumarateInstalledDrivers()
+            if (installed.contains(lastId)) return lastId
+
+            return if (installed.isNotEmpty()) {
+                val first = installed[0]
+                recordInstalledDriver(context, first)
+                first
+            } else {
+                recordInstalledDriver(context, "")
+                ""
+            }
+        }
 
         @JvmStatic
         fun recordInstalledContent(
@@ -383,17 +434,12 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         val label: String,
         val type: ContentProfile.ContentType,
         val url: String,
-        val nameHint: String,
     )
 
     private data class RuntimeSpec(
         val label: String,
-        val archToken: String,
         val fallbackType: ContentProfile.ContentType,
         val fallbackUrl: String,
-        val fallbackNameHint: String,
-        val containerDisplayName: (ContentProfile) -> String,
-        val persistContainerId: (Context, Int) -> Unit,
     )
 
     private data class RemotePackageSpec(
@@ -415,64 +461,50 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             PackageSpec(
                 label = "DXVK 2.7.1 GPLAsync",
                 type = ContentProfile.ContentType.CONTENT_TYPE_DXVK,
-                url = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Stable-Dxvk/Dxvk-2.7.1-gplasync.wcp",
-                nameHint = "dxvk-2.7.1-gplasync",
+                url = "https://github.com/nicholasx417/WinNative-Components/releases/download/Stable-Dxvk/Dxvk-2.7.1-gplasync.wcp",
             ),
             PackageSpec(
                 label = "DXVK 2.7.1 ARM64EC GPLAsync",
                 type = ContentProfile.ContentType.CONTENT_TYPE_DXVK,
-                url = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Stable-Arm64ec-Dxvk/Dxvk-2.7.1-arm64ec-gplasync.wcp",
-                nameHint = "Dxvk-2.7.1-arm64ec-gplasync",
+                url = "https://github.com/nicholasx417/WinNative-Components/releases/download/Stable-Arm64ec-Dxvk/Dxvk-2.7.1-arm64ec-gplasync.wcp",
             ),
             PackageSpec(
-                label = "VKD3D Proton 3.0b",
+                label = "VKD3D Proton 3.0.1",
                 type = ContentProfile.ContentType.CONTENT_TYPE_VKD3D,
-                url = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Stable-Vk3dk/Vk3dk-proton-3.0b.wcp",
-                nameHint = "Vk3dk-proton-3.0b",
+                url = "https://github.com/nicholasx417/WinNative-Components/releases/download/Stable-VKD3D/Vkd3d-proton-3.0.1.wcp",
             ),
             PackageSpec(
-                label = "VKD3D ARM64EC 3.0b",
+                label = "VKD3D ARM64EC 3.0.1",
                 type = ContentProfile.ContentType.CONTENT_TYPE_VKD3D,
-                url = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Stable-Arm64ec-Vk3dk/Vk3dk-arm64ec-3.0b.wcp",
-                nameHint = "Vk3dk-arm64ec-3.0b",
+                url = "https://github.com/nicholasx417/WinNative-Components/releases/download/Stable-arm64ec-VKD3D/Vkd3d-arm64ec-3.0.1.wcp",
             ),
             PackageSpec(
                 label = "DXVK 2.4.1 pre-reg",
                 type = ContentProfile.ContentType.CONTENT_TYPE_DXVK,
-                url = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Stable-Dxvk/Dxvk-2.4.1-pre-reg.wcp",
-                nameHint = "Dxvk-2.4.1-pre-reg",
+                url = "https://github.com/nicholasx417/WinNative-Components/releases/download/Stable-Dxvk/Dxvk-2.4.1-pre-reg.wcp",
             ),
             PackageSpec(
-                label = "FEX 2604",
+                label = "FEX 2605",
                 type = ContentProfile.ContentType.CONTENT_TYPE_FEXCORE,
-                url = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Stable-FEX/FEX-2604.wcp",
-                nameHint = "FEX-2604",
+                url = "https://github.com/nicholasx417/WinNative-Components/releases/download/Stable-FEX/FEX-2605.wcp",
             ),
             PackageSpec(
-                label = "Box64 0.4.1 fix",
+                label = "Box64 0.4.2",
                 type = ContentProfile.ContentType.CONTENT_TYPE_BOX64,
-                url = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Stable-Box64/Box64-0.4.1-fix.wcp",
-                nameHint = "Box64-0.4.1-fix",
+                url = "https://github.com/nicholasx417/WinNative-Components/releases/download/Stable-Box64/Box64-0.4.2.wcp",
             ),
             PackageSpec(
-                label = "Wowbox64 0.4.1",
+                label = "Wowbox64 0.4.2",
                 type = ContentProfile.ContentType.CONTENT_TYPE_WOWBOX64,
-                url = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Stable-wowbox64/Wowbox64-0.4.1.wcp",
-                nameHint = "Wowbox64-0.4.1",
+                url = "https://github.com/nicholasx417/WinNative-Components/releases/download/Stable-wowbox64/Wowbox64-0.4.2.wcp",
             ),
         )
 
     private val x86ProtonSpec =
         RuntimeSpec(
             label = "Recommended x86-64",
-            archToken = "x86_64",
             fallbackType = ContentProfile.ContentType.CONTENT_TYPE_WINE,
-            fallbackUrl = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/Wine/wine-9.20-x86_64.wcp",
-            fallbackNameHint = "wine-9.20-x86_64",
-            containerDisplayName = { profile ->
-                "${runtimeDisplayLabel(profile)} x86-64"
-            },
-            persistContainerId = ::saveDefaultX86ContainerId,
+            fallbackUrl = "https://github.com/nicholasx417/WinNative-Components/releases/download/Wine/wine-9.20-x86_64.wcp",
         )
 
     private val recommendedUrlsState = mutableStateOf<Set<String>>(emptySet())
@@ -497,21 +529,28 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
     private val arm64ProtonSpec =
         RuntimeSpec(
             label = "Recommended ARM64EC",
-            archToken = "arm64ec",
             fallbackType = ContentProfile.ContentType.CONTENT_TYPE_PROTON,
-            fallbackUrl = "https://github.com/Xnick417x/winlator-nightly-wcp/releases/download/GameNative/Proton-10-arm64ec-coffincolors.wcp",
-            fallbackNameHint = "Proton-10-arm64ec-coffincolors",
-            containerDisplayName = { profile ->
-                "${runtimeDisplayLabel(profile)} ARM64EC"
-            },
-            persistContainerId = ::saveDefaultArm64ContainerId,
+            fallbackUrl = "https://github.com/nicholasx417/WinNative-Components/releases/download/Proton/Proton-10-arm64ec-coffincolors.wcp",
         )
 
     private val storageGranted = mutableStateOf(false)
     private val notifGranted = mutableStateOf(false)
     private val notifDenied = mutableStateOf(false)
+    private val backgroundSessionEnabled = mutableStateOf(false)
 
     private val pageIndex = mutableIntStateOf(0)
+    private val navRegion = mutableIntStateOf(REGION_CONTENT)
+    private val navIndex = mutableIntStateOf(0)
+    private val activateSignal = mutableIntStateOf(0)
+    private val controllerConnected = mutableStateOf(false)
+    private var tabCount = 0
+    private var contentCount = 0
+    private var contentColumns = 1
+    private var navCount = 2
+    private var wideLayout = false
+    private var lastTabIndex = 0
+    private var lastContentIndex = 0
+    private var onTabIndexChange: ((Int) -> Unit)? = null
     private val imageFsInstalling = mutableStateOf(false)
     private val imageFsProgress = mutableIntStateOf(0)
     private val imageFsDone = mutableStateOf(false)
@@ -526,6 +565,16 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
     private val advancedProfiles = mutableStateListOf<RemotePackageSpec>()
     private val advancedInstalledSet = mutableStateListOf<String>()
     private val advancedContainerNames = mutableStateListOf<String>()
+    private val advancedSizeCache = mutableStateMapOf<String, Long>()
+    private val advancedSizeFetchesInFlight = mutableSetOf<String>()
+
+    private enum class QueueItemStatus { QUEUED, ACTIVE, FAILED }
+
+    private val installQueue = mutableStateListOf<RemotePackageSpec>()
+    private val queueStatus = mutableStateMapOf<String, QueueItemStatus>()
+    private var queueWorkerRunning = false
+    private var queueTotal = 0
+    private var queueCompleted = 0
 
     private var returnToCaller = false
     private var recommendedPackageRefreshInFlight = false
@@ -536,14 +585,16 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         ) {
             storageGranted.value = hasStoragePermission()
         }
-
     private val notifPermLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestPermission(),
         ) { granted ->
             notifGranted.value = granted
             notifDenied.value = !granted
-            if (!granted && Build.VERSION.SDK_INT >= 33 &&
+            if (granted) {
+                backgroundSessionEnabled.value = true
+                prefs(this).edit().putBoolean("enable_background_session", true).apply()
+            } else if (Build.VERSION.SDK_INT >= 33 &&
                 !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
             ) {
                 openNotificationSettings()
@@ -559,8 +610,268 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 permissions[Manifest.permission.READ_EXTERNAL_STORAGE] == true
         }
 
+    private var stickEngaged = 0
+
+    private fun advanceWizardPage() {
+        val page = pageIndex.intValue
+        if (page < 2) {
+            val canGoNext = if (page == 0) storageGranted.value && imageFsDone.value else true
+            if (canGoNext) pageIndex.intValue += 1
+        } else if (!creatingContainer.value && transferState.value == null) {
+            finishWizard()
+        }
+    }
+
+    private fun resetNav(region: Int = REGION_CONTENT) {
+        navRegion.intValue = if (region == REGION_TABS && tabCount == 0) REGION_CONTENT else region
+        navIndex.intValue = 0
+        lastTabIndex = 0
+        lastContentIndex = 0
+    }
+
+    private fun regionSize(r: Int) =
+        when (r) {
+            REGION_TABS -> tabCount
+            REGION_CONTENT -> contentCount
+            REGION_NAV -> navCount
+            else -> 0
+        }
+
+    private fun clampNav() {
+        val max = (regionSize(navRegion.intValue) - 1).coerceAtLeast(0)
+        if (navIndex.intValue > max) navIndex.intValue = max
+    }
+
+    private fun setNav(region: Int, index: Int) {
+        navRegion.intValue = region
+        navIndex.intValue = index.coerceAtLeast(0)
+        clampNav()
+        if (region == REGION_TABS) onTabIndexChange?.invoke(navIndex.intValue)
+    }
+
+    fun setTabCount(n: Int) {
+        tabCount = n.coerceAtLeast(0)
+        clampNav()
+    }
+
+    fun setContentLayout(count: Int, columns: Int) {
+        contentCount = count.coerceAtLeast(0)
+        contentColumns = columns.coerceAtLeast(1)
+        clampNav()
+    }
+
+    private fun navLeft() {
+        if (wideLayout) {
+            when (navRegion.intValue) {
+                REGION_CONTENT ->
+                    if (contentColumns > 1 && navIndex.intValue % contentColumns != 0) {
+                        navIndex.intValue -= 1
+                    } else if (tabCount > 0) {
+                        lastContentIndex = navIndex.intValue
+                        setNav(REGION_TABS, lastTabIndex.coerceAtMost(tabCount - 1))
+                    }
+                REGION_NAV ->
+                    when {
+                        navIndex.intValue > 0 -> navIndex.intValue -= 1
+                        contentCount > 0 -> { navRegion.intValue = REGION_CONTENT; navIndex.intValue = lastContentIndex.coerceAtMost(contentCount - 1) }
+                        tabCount > 0 -> setNav(REGION_TABS, lastTabIndex.coerceAtMost(tabCount - 1))
+                    }
+            }
+            return
+        }
+        when (navRegion.intValue) {
+            REGION_TABS -> if (navIndex.intValue > 0) setNav(REGION_TABS, navIndex.intValue - 1)
+            else -> if (navIndex.intValue > 0) navIndex.intValue -= 1
+        }
+    }
+
+    private fun navRight() {
+        if (wideLayout) {
+            when (navRegion.intValue) {
+                REGION_TABS ->
+                    when {
+                        contentCount > 0 -> { lastTabIndex = navIndex.intValue; navRegion.intValue = REGION_CONTENT; navIndex.intValue = lastContentIndex.coerceAtMost(contentCount - 1) }
+                        navCount > 0 -> { navRegion.intValue = REGION_NAV; navIndex.intValue = navCount - 1 }
+                    }
+                REGION_CONTENT ->
+                    if (navIndex.intValue % contentColumns != contentColumns - 1 && navIndex.intValue < contentCount - 1) {
+                        navIndex.intValue += 1
+                    } else if (navCount > 0) {
+                        lastContentIndex = navIndex.intValue
+                        navRegion.intValue = REGION_NAV
+                        navIndex.intValue = navCount - 1
+                    }
+                REGION_NAV -> if (navIndex.intValue < navCount - 1) navIndex.intValue += 1
+            }
+            return
+        }
+        val size = regionSize(navRegion.intValue)
+        if (navRegion.intValue == REGION_TABS) {
+            if (navIndex.intValue < size - 1) setNav(REGION_TABS, navIndex.intValue + 1)
+        } else if (navIndex.intValue < size - 1) {
+            navIndex.intValue += 1
+        }
+    }
+
+    private fun navUp() {
+        if (wideLayout) {
+            when (navRegion.intValue) {
+                REGION_TABS -> if (navIndex.intValue > 0) setNav(REGION_TABS, navIndex.intValue - 1)
+                REGION_CONTENT -> if (navIndex.intValue >= contentColumns) navIndex.intValue -= contentColumns
+                REGION_NAV ->
+                    when {
+                        contentCount > 0 -> { navRegion.intValue = REGION_CONTENT; navIndex.intValue = lastContentIndex.coerceAtMost(contentCount - 1) }
+                        tabCount > 0 -> setNav(REGION_TABS, lastTabIndex.coerceAtMost(tabCount - 1))
+                    }
+            }
+            return
+        }
+        when (navRegion.intValue) {
+            REGION_CONTENT ->
+                if (navIndex.intValue < contentColumns) {
+                    if (tabCount > 0) setNav(REGION_TABS, navIndex.intValue.coerceAtMost(tabCount - 1))
+                } else {
+                    navIndex.intValue -= contentColumns
+                }
+            REGION_NAV ->
+                when {
+                    contentCount > 0 -> { navRegion.intValue = REGION_CONTENT; navIndex.intValue = contentCount - 1 }
+                    tabCount > 0 -> setNav(REGION_TABS, 0)
+                }
+        }
+    }
+
+    private fun navDown() {
+        if (wideLayout) {
+            when (navRegion.intValue) {
+                REGION_TABS -> if (navIndex.intValue < tabCount - 1) setNav(REGION_TABS, navIndex.intValue + 1)
+                REGION_CONTENT -> {
+                    val below = navIndex.intValue + contentColumns
+                    if (below < contentCount) navIndex.intValue = below
+                    else if (navCount > 0) { lastContentIndex = navIndex.intValue; navRegion.intValue = REGION_NAV; navIndex.intValue = navCount - 1 }
+                }
+            }
+            return
+        }
+        when (navRegion.intValue) {
+            REGION_TABS ->
+                when {
+                    contentCount > 0 -> { navRegion.intValue = REGION_CONTENT; navIndex.intValue = lastContentIndex.coerceAtMost(contentCount - 1) }
+                    navCount > 0 -> { navRegion.intValue = REGION_NAV; navIndex.intValue = 0 }
+                }
+            REGION_CONTENT -> {
+                val below = navIndex.intValue + contentColumns
+                if (below < contentCount) {
+                    navIndex.intValue = below
+                } else if (navCount > 0) {
+                    navRegion.intValue = REGION_NAV
+                    navIndex.intValue = 0
+                }
+            }
+        }
+    }
+
+    private fun navActivate() { activateSignal.intValue++ }
+
+    private fun applyNavDir(code: Int) {
+        when (code) {
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> navLeft()
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> navRight()
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> navUp()
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> navDown()
+        }
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (com.winlator.cmod.runtime.input.controls.ExternalController.isGameController(event.device)) {
+            controllerConnected.value = true
+        }
+        val down = event.action == android.view.KeyEvent.ACTION_DOWN
+        when (event.keyCode) {
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+            android.view.KeyEvent.KEYCODE_DPAD_UP,
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+            -> {
+                if (down) applyNavDir(event.keyCode)
+                return true
+            }
+
+            android.view.KeyEvent.KEYCODE_BUTTON_A,
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+            -> {
+                if (down) navActivate()
+                return true
+            }
+
+            android.view.KeyEvent.KEYCODE_BUTTON_B -> {
+                if (down && pageIndex.intValue > 0) {
+                    pageIndex.intValue -= 1
+                }
+                return true
+            }
+
+            android.view.KeyEvent.KEYCODE_BUTTON_START -> {
+                if (down) advanceWizardPage()
+                return true
+            }
+
+            android.view.KeyEvent.KEYCODE_BUTTON_X,
+            android.view.KeyEvent.KEYCODE_BUTTON_Y,
+            android.view.KeyEvent.KEYCODE_BUTTON_L1,
+            android.view.KeyEvent.KEYCODE_BUTTON_R1,
+            -> return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean {
+        if ((event.source and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK &&
+            event.action == android.view.MotionEvent.ACTION_MOVE
+        ) {
+            controllerConnected.value = true
+            val x = event.getAxisValue(android.view.MotionEvent.AXIS_X)
+            val y = event.getAxisValue(android.view.MotionEvent.AXIS_Y)
+            val hx = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_X)
+            val hy = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_Y)
+            val code =
+                when {
+                    x < -0.5f || hx < -0.5f -> android.view.KeyEvent.KEYCODE_DPAD_LEFT
+                    x > 0.5f || hx > 0.5f -> android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+                    y < -0.5f || hy < -0.5f -> android.view.KeyEvent.KEYCODE_DPAD_UP
+                    y > 0.5f || hy > 0.5f -> android.view.KeyEvent.KEYCODE_DPAD_DOWN
+                    else -> 0
+                }
+            if (code != 0) {
+                if (stickEngaged == 0) {
+                    stickEngaged = code
+                    applyNavDir(code)
+                }
+                return true
+            }
+            if (kotlin.math.abs(x) < 0.35f && kotlin.math.abs(y) < 0.35f &&
+                kotlin.math.abs(hx) < 0.35f && kotlin.math.abs(hy) < 0.35f
+            ) {
+                stickEngaged = 0
+            }
+            return true
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.clearFlags(
+            WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION or
+                WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS,
+        )
+        enableEdgeToEdge(
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
         returnToCaller = intent?.getBooleanExtra(EXTRA_RETURN_TO_CALLER, false) == true
         val forceShow = intent?.getBooleanExtra(EXTRA_FORCE_SHOW, false) == true
 
@@ -572,13 +883,14 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             refreshWizardState()
         }
 
-        if (!forceShow && isSetupComplete(this) && ImageFs.find(this).isValid) {
+        if (!forceShow && isSetupComplete(this) && ImageFs.find(this).isUpToDate) {
             launchApp()
             return
         }
 
         storageGranted.value = hasStoragePermission()
         notifGranted.value = hasNotificationPermissionSilently()
+        backgroundSessionEnabled.value = prefs(this).getBoolean("enable_background_session", false)
         refreshWizardState()
         loadAdvancedProfiles()
 
@@ -592,24 +904,42 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                         surface = Color(0xFF1E252E),
                     ),
             ) {
-                SetupWizardScreen()
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalMinimumInteractiveComponentSize provides androidx.compose.ui.unit.Dp.Unspecified,
+                ) {
+                    SetupWizardScreen()
+                }
             }
         }
     }
 
+    private fun isAnyControllerConnected(): Boolean {
+        for (id in android.view.InputDevice.getDeviceIds()) {
+            val dev = android.view.InputDevice.getDevice(id)
+            if (dev != null && com.winlator.cmod.runtime.input.controls.ExternalController.isGameController(dev)) {
+                return true
+            }
+        }
+        return false
+    }
+
     override fun onResume() {
         super.onResume()
+        controllerConnected.value = isAnyControllerConnected()
         storageGranted.value = hasStoragePermission()
         val notificationsEnabled = hasNotificationPermissionSilently()
         notifGranted.value = notificationsEnabled
-        if (notificationsEnabled) notifDenied.value = false
+        if (notificationsEnabled) {
+            notifDenied.value = false
+        }
+        backgroundSessionEnabled.value = prefs(this).getBoolean("enable_background_session", false)
         refreshWizardState()
         refreshRecommendedPackageCache()
     }
 
     private fun refreshWizardState() {
         val imageFs = ImageFs.find(this)
-        imageFsDone.value = imageFs.isValid && imageFs.version >= ImageFsInstaller.LATEST_VERSION.toInt()
+        imageFsDone.value = imageFs.isUpToDate
 
         val preferences = prefs(this)
         val containerManager = ContainerManager(this)
@@ -677,6 +1007,12 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
     }
 
     private fun requestNotifications() {
+        if (hasNotificationPermissionSilently()) {
+            backgroundSessionEnabled.value = true
+            prefs(this).edit().putBoolean("enable_background_session", true).apply()
+            return
+        }
+
         if (Build.VERSION.SDK_INT >= 33 && applicationInfo.targetSdkVersion >= 33) {
             if (notifDenied.value) {
                 openNotificationSettings()
@@ -712,143 +1048,43 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         wizardError.value = null
         imageFsInstalling.value = true
         imageFsProgress.intValue = 0
-        val imageFs = ImageFs.find(this)
-        val rootDir = imageFs.rootDir
 
-        Executors.newSingleThreadExecutor().execute {
-            try {
-                clearRootDir(rootDir)
+        val keepAliveTag = "imagefs_install"
+        com.winlator.cmod.runtime.system.SessionKeepAliveService.startDownload(this, keepAliveTag)
 
-                val compressionRatio = 22
-                var contentLength = 0L
-                val assetSize = FileUtils.getSize(this, "imagefs.txz")
-                contentLength +=
-                    if (assetSize > 0) {
-                        (assetSize * (100.0f / compressionRatio)).toLong()
-                    } else {
-                        800_000_000L
-                    }
-
-                try {
-                    val versions = resources.getStringArray(R.array.wine_entries)
-                    versions.forEach { version ->
-                        val versionSize = FileUtils.getSize(this, "$version.txz")
-                        contentLength +=
-                            if (versionSize > 0) {
-                                (versionSize * (100.0f / compressionRatio)).toLong()
-                            } else {
-                                100_000_000L
-                            }
-                    }
-                } catch (_: Exception) {
-                }
-
-                val totalSize = AtomicLong()
-                val listener =
-                    OnExtractFileListener { file, size ->
-                        if (size > 0) {
-                            val total = totalSize.addAndGet(size)
-                            val percent = ((total.toFloat() / contentLength) * 100f).toInt().coerceIn(0, 100)
-                            runOnUiThread { imageFsProgress.intValue = percent }
-                        }
-                        file
-                    }
-
-                val success =
-                    TarCompressorUtils.extract(
-                        Type.XZ,
-                        this,
-                        "imagefs.txz",
-                        rootDir,
-                        listener,
-                    )
-
-                if (!success) {
+        ImageFsInstaller.installFromAssets(
+            this,
+            object : ImageFsInstaller.ProgressListener {
+                override fun onProgress(percent: Int) {
                     runOnUiThread {
-                        imageFsInstalling.value = false
-                        wizardError.value = "ImageFS extraction failed. Check available storage and try again."
+                        imageFsProgress.intValue = percent.coerceIn(0, 100)
                     }
-                    return@execute
                 }
 
-                try {
-                    resources.getStringArray(R.array.wine_entries).forEach { version ->
-                        val outFile = File(rootDir, "/opt/$version")
-                        outFile.mkdirs()
-                        TarCompressorUtils.extract(Type.XZ, this, "$version.txz", outFile, listener)
+                override fun onFinished(success: Boolean) {
+                    runOnUiThread {
+                        imageFsProgress.intValue = if (success) 100 else imageFsProgress.intValue
+                        if (success) {
+                            window.decorView.postDelayed(
+                                {
+                                    imageFsInstalling.value = false
+                                    imageFsDone.value = true
+                                    refreshWizardState()
+                                },
+                                500L,
+                            )
+                        } else {
+                            imageFsInstalling.value = false
+                            wizardError.value = "ImageFS install failed. Check available storage and try again."
+                        }
+                        com.winlator.cmod.runtime.system.SessionKeepAliveService.stopDownload(
+                            applicationContext,
+                            keepAliveTag,
+                        )
                     }
-                } catch (_: Exception) {
                 }
-
-                try {
-                    val manager = AdrenotoolsManager(this)
-                    resources.getStringArray(R.array.wrapper_graphics_driver_version_entries).forEach { driver ->
-                        manager.extractDriverFromResources(driver)
-                    }
-                } catch (_: Exception) {
-                }
-
-                imageFs.createImgVersionFile(ImageFsInstaller.LATEST_VERSION.toInt())
-                runOnUiThread {
-                    imageFsProgress.intValue = 100
-                    imageFsInstalling.value = false
-                    imageFsDone.value = true
-                    refreshWizardState()
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    imageFsInstalling.value = false
-                    wizardError.value = "ImageFS install failed: ${e.message}"
-                }
-            }
-        }
-    }
-
-    private suspend fun downloadAndInstallPackage(
-        spec: PackageSpec,
-        index: Int,
-        total: Int,
-    ): ContentProfile? {
-        transferState.value =
-            TransferState(
-                title = getString(R.string.setup_wizard_recommended_components),
-                detail = getString(R.string.setup_wizard_downloading, spec.label),
-                currentIndex = index + 1,
-                total = total,
-                progress = 0f,
-            )
-
-        val downloaded =
-            downloadFileToCache(
-                label = spec.label,
-                url = spec.url,
-                currentIndex = index + 1,
-                total = total,
-            ) ?: return null
-
-        // Show 100% briefly so the bar visually completes before switching
-        transferState.value =
-            TransferState(
-                title = getString(R.string.setup_wizard_recommended_components),
-                detail = getString(R.string.setup_wizard_downloading, spec.label),
-                currentIndex = index + 1,
-                total = total,
-                progress = 1f,
-            )
-        kotlinx.coroutines.delay(500)
-
-        transferState.value =
-            TransferState(
-                title = getString(R.string.setup_wizard_recommended_components),
-                detail = getString(R.string.setup_wizard_installing_package, spec.label),
-                currentIndex = index + 1,
-                total = total,
-                progress = null,
-            )
-
-        val profile = installDownloadedPackage(downloaded, spec.url)
-        downloaded.delete()
-        return profile
+            },
+        )
     }
 
     private suspend fun downloadFileToCache(
@@ -856,15 +1092,16 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         url: String,
         currentIndex: Int,
         total: Int,
+        title: String = label,
     ): File? =
         withContext(Dispatchers.IO) {
             val sanitized = label.lowercase().replace(Regex("[^a-z0-9]+"), "_")
             val output = File(cacheDir, "wizard_${System.currentTimeMillis()}_$sanitized.wcp")
             val listener =
                 Downloader.DownloadListener { downloadedBytes, totalBytes ->
-                    transferState.value =
+                    updateTransferState(
                         TransferState(
-                            title = transferState.value?.title ?: label,
+                            title = title,
                             detail = getString(R.string.setup_wizard_downloading, label),
                             currentIndex = currentIndex,
                             total = total,
@@ -874,11 +1111,36 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                                 } else {
                                     null
                                 },
-                        )
+                        ),
+                    )
                 }
             val success = Downloader.downloadFileWinNativeFirst(url, output, listener)
             if (success) output else null
         }
+
+    private fun updateTransferState(next: TransferState?) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            transferState.value = next
+        } else {
+            runOnUiThread { transferState.value = next }
+        }
+    }
+
+    private fun updateWizardError(message: String?) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            wizardError.value = message
+        } else {
+            runOnUiThread { wizardError.value = message }
+        }
+    }
+
+    private fun updateRecommendedUrls(urls: Set<String>) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            recommendedUrlsState.value = urls
+        } else {
+            runOnUiThread { recommendedUrlsState.value = urls }
+        }
+    }
 
     private fun installDownloadedPackage(
         file: File,
@@ -943,55 +1205,70 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         return if (failed) null else installedProfile
     }
 
-    private fun resolveRecommendedComponentSpecs(): List<PackageSpec> {
-        val componentTypes =
-            setOf(
-                ContentProfile.ContentType.CONTENT_TYPE_DXVK,
-                ContentProfile.ContentType.CONTENT_TYPE_VKD3D,
-                ContentProfile.ContentType.CONTENT_TYPE_FEXCORE,
-                ContentProfile.ContentType.CONTENT_TYPE_BOX64,
-                ContentProfile.ContentType.CONTENT_TYPE_WOWBOX64,
-            )
-        val remoteSpecs =
-            fetchRecommendedPackages()
-                .filter { it.type in componentTypes }
-                .map {
-                    PackageSpec(
-                        label = it.verName,
-                        type = it.type,
-                        url = it.remoteUrl,
-                        nameHint = it.verName,
-                    )
+    private fun loadAdvancedProfiles() {
+        if (advancedProfiles.isNotEmpty()) return
+        lifecycleScope.launch {
+            val profiles =
+                withContext(Dispatchers.IO) {
+                    // 1. Fetch recommended (default.json)
+                    val recommended = fetchRecommendedPackages()
+
+                    // 2. Fetch full catalog (content.json)
+                    val fullCatalog =
+                        parseRecommendedPackages(
+                            Downloader.downloadString(ContentsManager.REMOTE_PROFILES),
+                        )
+
+                    // 3. Merge: start with recommended, then add any full catalog entries not already present
+                    val seen = recommended.map { it.remoteUrl }.toMutableSet()
+                    val merged = recommended.toMutableList()
+                    for (spec in fullCatalog) {
+                        if (spec.remoteUrl !in seen) {
+                            seen.add(spec.remoteUrl)
+                            merged.add(spec)
+                        }
+                    }
+
+                    // 4. Emergency Fallback: If everything failed and we have no profiles, use hardcoded ones
+                    if (merged.isEmpty()) {
+                        merged.addAll(getFallbackRemoteSpecs())
+                    }
+                    merged
                 }
-        return remoteSpecs.ifEmpty { recommendedComponents }
-    }
-
-    private fun resolveRecommendedRuntimeSpec(spec: RuntimeSpec): PackageSpec {
-        val resolved =
-            fetchRecommendedPackages().firstOrNull {
-                (
-                    it.type == ContentProfile.ContentType.CONTENT_TYPE_WINE ||
-                        it.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON
-                ) &&
-                    it.verName.contains(spec.archToken, ignoreCase = true)
-            }
-
-        if (resolved != null) {
-            return PackageSpec(
-                label = spec.label,
-                type = resolved.type,
-                url = resolved.remoteUrl,
-                nameHint = resolved.verName,
-            )
+            advancedProfiles.clear()
+            advancedProfiles.addAll(profiles)
+            refreshAdvancedInstalledSet()
         }
-
-        return PackageSpec(
-            label = spec.label,
-            type = spec.fallbackType,
-            url = spec.fallbackUrl,
-            nameHint = spec.fallbackNameHint,
-        )
     }
+
+    private fun fetchAdvancedSizes(specs: List<RemotePackageSpec>) {
+        val urls =
+            specs
+                .map { it.remoteUrl }
+                .filter { it.isNotEmpty() && it !in advancedSizeCache && it !in advancedSizeFetchesInFlight }
+                .distinct()
+        if (urls.isEmpty()) return
+        advancedSizeFetchesInFlight.addAll(urls)
+        urls.forEach { url ->
+            lifecycleScope.launch {
+                val size = withContext(Dispatchers.IO) { Downloader.fetchContentLength(url) }
+                advancedSizeFetchesInFlight.remove(url)
+                if (size > 0L) advancedSizeCache[url] = size
+            }
+        }
+    }
+
+    private fun formatSizeMb(bytes: Long): String =
+        String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024.0 * 1024.0))
+
+    private fun getFallbackRemoteSpecs(): List<RemotePackageSpec> =
+        buildList {
+            recommendedComponents.forEach {
+                add(RemotePackageSpec(it.type, it.label, it.url))
+            }
+            add(RemotePackageSpec(x86ProtonSpec.fallbackType, x86ProtonSpec.label, x86ProtonSpec.fallbackUrl))
+            add(RemotePackageSpec(arm64ProtonSpec.fallbackType, arm64ProtonSpec.label, arm64ProtonSpec.fallbackUrl))
+        }
 
     private fun fetchRecommendedPackages(): List<RemotePackageSpec> {
         val json = Downloader.downloadString(resolveJsonDownloadUrl(DEFAULT_JSON_URL))
@@ -999,13 +1276,13 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             prefs(this).edit().putString(KEY_DEFAULT_JSON_CACHE, json).apply()
             val specs = parseRecommendedPackages(json)
             if (specs.isNotEmpty()) {
-                recommendedUrlsState.value = specs.map { it.remoteUrl }.toSet()
+                updateRecommendedUrls(specs.map { it.remoteUrl }.toSet())
             }
             return specs
         }
         val cached = getCachedRecommendedPackages()
         if (cached.isNotEmpty()) {
-            recommendedUrlsState.value = cached.map { it.remoteUrl }.toSet()
+            updateRecommendedUrls(cached.map { it.remoteUrl }.toSet())
         }
         return cached
     }
@@ -1031,20 +1308,6 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         return parseRecommendedPackages(cachedJson)
     }
 
-    private fun getCachedRecommendedComponentSpecs(): List<PackageSpec> =
-        getCachedRecommendedPackages()
-            .filter {
-                it.type != ContentProfile.ContentType.CONTENT_TYPE_WINE &&
-                    it.type != ContentProfile.ContentType.CONTENT_TYPE_PROTON
-            }.map {
-                PackageSpec(
-                    label = it.verName,
-                    type = it.type,
-                    url = it.remoteUrl,
-                    nameHint = it.verName,
-                )
-            }
-
     private fun parseRecommendedPackages(json: String?): List<RemotePackageSpec> {
         if (json.isNullOrBlank()) return emptyList()
 
@@ -1068,187 +1331,21 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         desiredName: String,
     ): Container {
         val containerManager = ContainerManager(this)
-        containerManager.containers.firstOrNull { it.name == desiredName }?.let {
-            val resolvedWineVersion = ContentsManager.getEntryName(profile)
-            if (it.wineVersion != resolvedWineVersion) {
-                it.setWineVersion(resolvedWineVersion)
-                it.putExtra("wineprefixNeedsUpdate", "t")
-                it.saveData()
-            }
-            applyRecommendedContainerDefaults(it)
-            return it
-        }
-
         val contentsManager = ContentsManager(this)
         contentsManager.syncContents()
-        val data =
-            JSONObject().apply {
-                put("name", desiredName)
-                put("wineVersion", ContentsManager.getEntryName(profile))
-            }
 
-        return requireNotNull(containerManager.createContainer(data, contentsManager)) {
-            "Unable to create container for ${profile.verName}"
-        }.also {
-            applyRecommendedContainerDefaults(it)
-        }
-    }
-
-    private fun applyRecommendedContainerDefaults(container: Container) {
-        val contentsManager = ContentsManager(this)
-        contentsManager.syncContents()
-        val wineInfo = WineInfo.fromIdentifier(this, contentsManager, container.wineVersion)
-        val isArm64 = wineInfo.isArm64EC
-        val normalizedDrives =
-            com.winlator.cmod.runtime.wine.WineUtils.normalizePersistentDrives(
+        return requireNotNull(
+            ContainerCreation.getOrCreateContainerForProfile(
                 this,
-                container.drives ?: Container.DEFAULT_DRIVES,
-            )
-
-        container.setGraphicsDriver(Container.DEFAULT_GRAPHICS_DRIVER)
-        container.setCPUList(Container.getFallbackCPUList())
-        container.setCPUListWoW64(Container.getFallbackCPUListWoW64())
-        container.setDrives(normalizedDrives)
-        container.setGraphicsDriverConfig(
-            replaceDelimitedConfigValue(
-                Container.DEFAULT_GRAPHICSDRIVERCONFIG,
-                ';',
-                "version",
-                resolvePreferredDriverVersion(),
+                containerManager,
+                contentsManager,
+                profile,
+                desiredName,
             ),
-        )
-        container.setDXWrapper(Container.DEFAULT_DXWRAPPER)
-        container.setDXWrapperConfig(
-            replaceDelimitedConfigValue(
-                replaceDelimitedConfigValue(
-                    Container.DEFAULT_DXWRAPPERCONFIG,
-                    ',',
-                    "version",
-                    resolvePreferredContentVersion(
-                        contentsManager,
-                        ContentProfile.ContentType.CONTENT_TYPE_DXVK,
-                        "",
-                        if (isArm64) Regex("arm64ec", RegexOption.IGNORE_CASE) else null,
-                        if (isArm64) null else Regex("arm64ec", RegexOption.IGNORE_CASE),
-                    ),
-                ),
-                ',',
-                "vkd3dVersion",
-                resolvePreferredContentVersion(
-                    contentsManager,
-                    ContentProfile.ContentType.CONTENT_TYPE_VKD3D,
-                    "None",
-                    if (isArm64) Regex("arm64ec", RegexOption.IGNORE_CASE) else null,
-                    if (isArm64) null else Regex("arm64ec", RegexOption.IGNORE_CASE),
-                ),
-            ),
-        )
-
-        if (isArm64) {
-            container.setEmulator("fexcore")
-            container.setEmulator64("fexcore")
-            container.setBox64Version(
-                resolvePreferredContentVersion(
-                    contentsManager,
-                    ContentProfile.ContentType.CONTENT_TYPE_WOWBOX64,
-                    "",
-                ),
-            )
-            container.setFEXCoreVersion(
-                resolvePreferredContentVersion(
-                    contentsManager,
-                    ContentProfile.ContentType.CONTENT_TYPE_FEXCORE,
-                    "",
-                ),
-            )
-        } else {
-            container.setEmulator("box64")
-            container.setEmulator64("box64")
-            container.setBox64Version(
-                resolvePreferredContentVersion(
-                    contentsManager,
-                    ContentProfile.ContentType.CONTENT_TYPE_BOX64,
-                    "",
-                ),
-            )
-            container.setFEXCoreVersion(
-                resolvePreferredContentVersion(
-                    contentsManager,
-                    ContentProfile.ContentType.CONTENT_TYPE_FEXCORE,
-                    "",
-                ),
-            )
+        ) {
+            "Unable to create container for ${profile.verName}"
         }
-
-        container.saveData()
     }
-
-    private fun resolvePreferredDriverVersion(): String {
-        val adrenotoolsManager = AdrenotoolsManager(this)
-        val installedDrivers = adrenotoolsManager.enumarateInstalledDrivers()
-        val preferredDriver = getLastInstalledDriverId(this)
-        if (preferredDriver.isNotBlank() && installedDrivers.contains(preferredDriver)) {
-            return preferredDriver
-        }
-        return "System"
-    }
-
-    private fun resolvePreferredContentVersion(
-        manager: ContentsManager,
-        type: ContentProfile.ContentType,
-        fallback: String,
-        includePattern: Regex? = null,
-        excludePattern: Regex? = null,
-    ): String {
-        val preferenceKey = "last_content_${type.toString().lowercase()}"
-        val preferred = prefs(this).getString(preferenceKey, "") ?: ""
-        val installedProfiles = manager.getProfiles(type).orEmpty().filter { it.isInstalled }
-        val matchingProfiles =
-            installedProfiles
-                .filter { profile ->
-                    val versionName = profile.verName
-                    (includePattern == null || includePattern.containsMatchIn(versionName)) &&
-                        (excludePattern == null || !excludePattern.containsMatchIn(versionName))
-                }.ifEmpty { installedProfiles }
-
-        if (preferred.isNotBlank() && matchingProfiles.any { contentVersionIdentifier(it) == preferred }) {
-            return preferred
-        }
-
-        val newestInstalled =
-            matchingProfiles.maxWithOrNull(
-                compareBy<ContentProfile> { it.verCode }.thenBy { it.verName.lowercase() },
-            )
-        return newestInstalled?.let(::contentVersionIdentifier) ?: fallback
-    }
-
-    private fun replaceDelimitedConfigValue(
-        config: String,
-        delimiter: Char,
-        key: String,
-        value: String,
-    ): String {
-        val parts = config.split(delimiter).toMutableList()
-        var replaced = false
-        for (index in parts.indices) {
-            if (parts[index].startsWith("$key=")) {
-                parts[index] = "$key=$value"
-                replaced = true
-            }
-        }
-        if (!replaced) {
-            parts += "$key=$value"
-        }
-        return parts.joinToString(delimiter.toString())
-    }
-
-    private fun isPackageInstalled(
-        manager: ContentsManager,
-        spec: PackageSpec,
-    ): Boolean =
-        manager.getProfiles(spec.type).orEmpty().any { profile ->
-            profile.isInstalled && profile.verName.contains(spec.nameHint, ignoreCase = true)
-        }
 
     private fun openDrivers() {
         if (supportFragmentManager.findFragmentByTag(SetupWizardDriversDialogFragment.TAG) == null) {
@@ -1259,35 +1356,6 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         }
     }
 
-    private fun loadAdvancedProfiles() {
-        if (advancedProfiles.isNotEmpty()) return
-        lifecycleScope.launch {
-            val profiles =
-                withContext(Dispatchers.IO) {
-                    // Fetch recommended (default.json) for marking recommendations
-                    val recommended = fetchRecommendedPackages()
-                    // Fetch full catalog (content.json) for all categories
-                    val fullCatalog =
-                        parseRecommendedPackages(
-                            Downloader.downloadString(ContentsManager.REMOTE_PROFILES),
-                        )
-                    // Merge: start with recommended, then add any full catalog entries not already present
-                    val seen = recommended.map { it.remoteUrl }.toMutableSet()
-                    val merged = recommended.toMutableList()
-                    for (spec in fullCatalog) {
-                        if (spec.remoteUrl !in seen) {
-                            seen.add(spec.remoteUrl)
-                            merged.add(spec)
-                        }
-                    }
-                    merged
-                }
-            advancedProfiles.clear()
-            advancedProfiles.addAll(profiles)
-            refreshAdvancedInstalledSet()
-        }
-    }
-
     private fun refreshAdvancedInstalledSet() {
         val manager = ContentsManager(this)
         manager.syncContents()
@@ -1295,11 +1363,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         advancedProfiles.forEach { spec ->
             val installedByName =
                 manager.getProfiles(spec.type).orEmpty().any {
-                    it.isInstalled && (
-                        it.verName.equals(spec.verName, ignoreCase = true) ||
-                            it.verName.contains(spec.verName, ignoreCase = true) ||
-                            spec.verName.contains(it.verName, ignoreCase = true)
-                    )
+                    it.isInstalled && it.verName.equals(spec.verName, ignoreCase = true)
                 }
             val installedByUrl = manager.isRemoteUrlInstalled(spec.remoteUrl)
             if (installedByName || installedByUrl) advancedInstalledSet.add(spec.verName)
@@ -1312,157 +1376,127 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         }
     }
 
-    private fun installAllRecommended() {
-        if (transferState.value != null) return
-        val pending =
-            advancedProfiles
-                .filter { isRecommendedSpec(it) && it.verName !in advancedInstalledSet }
-        if (pending.isEmpty()) return
-
-        lifecycleScope.launch {
-            wizardError.value = null
-            for ((index, spec) in pending.withIndex()) {
-                val profile =
-                    withContext(Dispatchers.IO) {
-                        try {
-                            transferState.value =
-                                TransferState(
-                                    title = getString(R.string.setup_wizard_recommended_components),
-                                    detail = getString(R.string.setup_wizard_downloading, spec.verName),
-                                    currentIndex = index + 1,
-                                    total = pending.size,
-                                    progress = 0f,
-                                )
-                            val downloaded =
-                                downloadFileToCache(
-                                    label = spec.verName,
-                                    url = spec.remoteUrl,
-                                    currentIndex = index + 1,
-                                    total = pending.size,
-                                )
-                            if (downloaded == null) return@withContext null
-
-                            transferState.value =
-                                TransferState(
-                                    title = getString(R.string.setup_wizard_recommended_components),
-                                    detail = getString(R.string.setup_wizard_downloading, spec.verName),
-                                    currentIndex = index + 1,
-                                    total = pending.size,
-                                    progress = 1f,
-                                )
-                            kotlinx.coroutines.delay(500)
-
-                            transferState.value =
-                                TransferState(
-                                    title = getString(R.string.setup_wizard_recommended_components),
-                                    detail = getString(R.string.setup_wizard_installing_package, spec.verName),
-                                    currentIndex = index + 1,
-                                    total = pending.size,
-                                    progress = null,
-                                )
-
-                            val installed = installDownloadedPackage(downloaded, spec.remoteUrl)
-                            downloaded.delete()
-                            if (installed == null) {
-                                wizardError.value =
-                                    lastInstallFailureMessage
-                                        ?: getString(R.string.setup_wizard_install_failed_reason, spec.verName)
-                            }
-                            installed
-                        } catch (e: Exception) {
-                            wizardError.value =
-                                getString(
-                                    R.string.setup_wizard_install_failed_reason,
-                                    e.message ?: getString(R.string.common_ui_unknown_error),
-                                )
-                            null
-                        }
-                    }
-                if (profile != null) {
-                    if (spec.verName !in advancedInstalledSet) {
-                        advancedInstalledSet.add(spec.verName)
-                    }
-                } else {
-                    break
-                }
-            }
-            transferState.value = null
-            refreshAdvancedInstalledSet()
-            refreshWizardState()
-        }
+    private fun enqueueAllRecommended() {
+        advancedProfiles
+            .filter { isRecommendedSpec(it) && it.verName !in advancedInstalledSet }
+            .forEach { enqueueAdvancedComponent(it) }
     }
 
-    private fun installAdvancedComponent(spec: RemotePackageSpec) {
-        if (transferState.value != null) return
+    private fun startInstallQueue() {
+        if (queueWorkerRunning) return
+        queueWorkerRunning = true
+        val keepAliveTag = "install_queue_${System.currentTimeMillis()}"
+        com.winlator.cmod.runtime.system.SessionKeepAliveService.startDownload(this, keepAliveTag)
         lifecycleScope.launch {
-            wizardError.value = null
-            val profile =
-                withContext(Dispatchers.IO) {
-                    try {
-                        transferState.value =
-                            TransferState(
-                                title = spec.verName,
-                                detail = getString(R.string.downloads_queue_preparing_download),
-                                currentIndex = 1,
-                                total = 1,
-                            )
-                        val downloaded =
-                            downloadFileToCache(
-                                label = spec.verName,
-                                url = spec.remoteUrl,
-                                currentIndex = 1,
-                                total = 1,
-                            )
-                        if (downloaded == null) return@withContext null
-
-                        // Show 100% briefly so the bar visually completes
-                        transferState.value =
-                            TransferState(
-                                title = spec.verName,
-                                detail = getString(R.string.setup_wizard_downloading, spec.verName),
-                                currentIndex = 1,
-                                total = 1,
-                                progress = 1f,
-                            )
-                        kotlinx.coroutines.delay(500)
-
-                        transferState.value =
-                            TransferState(
-                                title = spec.verName,
-                                detail = getString(R.string.setup_wizard_installing),
-                                currentIndex = 1,
-                                total = 1,
-                                progress = null,
-                            )
-
-                        val installed = installDownloadedPackage(downloaded, spec.remoteUrl)
-                        downloaded.delete()
-                        if (installed == null) {
-                            wizardError.value =
-                                lastInstallFailureMessage
-                                    ?: getString(R.string.setup_wizard_install_failed_reason, spec.verName)
-                        }
-                        installed
-                    } catch (e: Exception) {
-                        wizardError.value =
-                            getString(
-                                R.string.setup_wizard_install_failed_reason,
-                                e.message ?: getString(R.string.common_ui_unknown_error),
-                            )
-                        null
-                    } finally {
-                        transferState.value = null
+            updateWizardError(null)
+            try {
+                while (installQueue.isNotEmpty()) {
+                    val spec = installQueue.removeAt(0)
+                    val key = spec.remoteUrl
+                    if (spec.verName in advancedInstalledSet) {
+                        queueStatus.remove(key)
+                        queueCompleted += 1
+                        continue
                     }
-                }
-            if (profile != null) {
-                // Eagerly mark as installed so UI updates immediately
-                if (spec.verName !in advancedInstalledSet) {
-                    advancedInstalledSet.add(spec.verName)
+                    queueStatus[key] = QueueItemStatus.ACTIVE
+                    val position = queueCompleted + 1
+                    val total = queueTotal
+                    val title = spec.verName
+                    val profile =
+                        withContext(Dispatchers.IO) {
+                            try {
+                                updateTransferState(
+                                    TransferState(
+                                        title = title,
+                                        detail = getString(R.string.downloads_queue_preparing_download),
+                                        currentIndex = position,
+                                        total = total,
+                                        progress = 0f,
+                                    ),
+                                )
+                                val downloaded =
+                                    downloadFileToCache(
+                                        label = spec.verName,
+                                        url = spec.remoteUrl,
+                                        currentIndex = position,
+                                        total = total,
+                                        title = title,
+                                    ) ?: return@withContext null
+
+                                updateTransferState(
+                                    TransferState(
+                                        title = title,
+                                        detail = getString(R.string.setup_wizard_downloading, spec.verName),
+                                        currentIndex = position,
+                                        total = total,
+                                        progress = 1f,
+                                    ),
+                                )
+                                kotlinx.coroutines.delay(500)
+
+                                updateTransferState(
+                                    TransferState(
+                                        title = title,
+                                        detail = getString(R.string.setup_wizard_installing),
+                                        currentIndex = position,
+                                        total = total,
+                                        progress = null,
+                                    ),
+                                )
+
+                                val installed = installDownloadedPackage(downloaded, spec.remoteUrl)
+                                downloaded.delete()
+                                if (installed == null) {
+                                    updateWizardError(
+                                        lastInstallFailureMessage
+                                            ?: getString(R.string.setup_wizard_install_failed_reason, spec.verName),
+                                    )
+                                }
+                                installed
+                            } catch (e: Exception) {
+                                updateWizardError(
+                                    getString(
+                                        R.string.setup_wizard_install_failed_reason,
+                                        e.message ?: getString(R.string.common_ui_unknown_error),
+                                    ),
+                                )
+                                null
+                            }
+                        }
+                    queueCompleted += 1
+                    if (profile != null) {
+                        queueStatus.remove(key)
+                        if (spec.verName !in advancedInstalledSet) {
+                            advancedInstalledSet.add(spec.verName)
+                        }
+                    } else {
+                        queueStatus[key] = QueueItemStatus.FAILED
+                    }
                 }
                 refreshAdvancedInstalledSet()
                 refreshWizardState()
+            } finally {
+                updateTransferState(null)
+                queueWorkerRunning = false
+                queueTotal = 0
+                queueCompleted = 0
+                com.winlator.cmod.runtime.system.SessionKeepAliveService.stopDownload(
+                    applicationContext,
+                    keepAliveTag,
+                )
             }
         }
+    }
+
+    private fun enqueueAdvancedComponent(spec: RemotePackageSpec) {
+        if (spec.verName in advancedInstalledSet) return
+        val key = spec.remoteUrl
+        val status = queueStatus[key]
+        if (status == QueueItemStatus.QUEUED || status == QueueItemStatus.ACTIVE) return
+        queueStatus[key] = QueueItemStatus.QUEUED
+        installQueue.add(spec)
+        queueTotal += 1
+        startInstallQueue()
     }
 
     private fun openContainerDefaultSettings(
@@ -1494,17 +1528,6 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         }
     }
 
-    private fun clearRootDir(rootDir: File) {
-        if (rootDir.isDirectory) {
-            rootDir.listFiles()?.forEach { file ->
-                if (file.isDirectory && file.name == "home") return@forEach
-                FileUtils.delete(file)
-            }
-        } else {
-            rootDir.mkdirs()
-        }
-    }
-
     private fun launchApp() {
         startActivity(
             Intent(this, UnifiedActivity::class.java)
@@ -1532,6 +1555,26 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 else -> true
             }
         val lastPage = totalPages - 1
+
+        LaunchedEffect(page) {
+            onTabIndexChange = null
+            resetNav(REGION_CONTENT)
+        }
+
+        val region by navRegion
+        val navIdx by navIndex
+        val activate by activateSignal
+        val controller by controllerConnected
+
+        LaunchedEffect(activate) {
+            if (activate == 0) return@LaunchedEffect
+            if (region == REGION_NAV) {
+                when (navIdx) {
+                    0 -> if (page > 0) pageIndex.intValue -= 1
+                    1 -> advanceWizardPage()
+                }
+            }
+        }
 
         // Particle seeds — stable across recomposition
         val particles =
@@ -1728,7 +1771,6 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                         .windowInsetsPadding(WindowInsets.safeDrawing)
                         .padding(horizontal = 18.dp, vertical = 12.dp),
             ) {
-                // ---- Header ----
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1784,7 +1826,6 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 )
                 Spacer(Modifier.height(12.dp))
 
-                // ---- Content ----
                 BoxWithConstraints(
                     modifier =
                         Modifier
@@ -1793,6 +1834,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                     contentAlignment = Alignment.Center,
                 ) {
                     val isCompact = maxWidth < 500.dp
+                    wideLayout = !isCompact
                     AnimatedContent(
                         targetState = page,
                         transitionSpec = {
@@ -1842,34 +1884,35 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                     }
                 }
 
-                if (transferState.value == null) {
-                    Spacer(Modifier.height(10.dp))
+                val transferActive = transferState.value != null
+                Spacer(Modifier.height(10.dp))
 
-                    // ---- Action bar ----
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        GhostPillButton(
-                            label = stringResource(R.string.common_ui_back),
-                            enabled = page > 0,
-                            onClick = { if (page > 0) pageIndex.intValue -= 1 },
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    GhostPillButton(
+                        label = stringResource(R.string.common_ui_back),
+                        enabled = page > 0,
+                        highlighted = controller && region == REGION_NAV && navIdx == 0,
+                        onClick = { setNav(REGION_NAV, 0); if (page > 0) pageIndex.intValue -= 1 },
+                    )
+
+                    if (page < lastPage) {
+                        AccentPillButton(
+                            label = stringResource(R.string.setup_wizard_next),
+                            enabled = canGoNext,
+                            highlighted = controller && region == REGION_NAV && navIdx == 1,
+                            onClick = { setNav(REGION_NAV, 1); if (canGoNext) pageIndex.intValue += 1 },
                         )
-
-                        if (page < lastPage) {
-                            AccentPillButton(
-                                label = stringResource(R.string.setup_wizard_next),
-                                enabled = canGoNext,
-                                onClick = { if (canGoNext) pageIndex.intValue += 1 },
-                            )
-                        } else {
-                            AccentPillButton(
-                                label = stringResource(R.string.setup_wizard_finish),
-                                enabled = !creatingContainer.value,
-                                onClick = { finishWizard() },
-                            )
-                        }
+                    } else {
+                        AccentPillButton(
+                            label = stringResource(R.string.setup_wizard_finish),
+                            enabled = !creatingContainer.value && !transferActive,
+                            highlighted = controller && region == REGION_NAV && navIdx == 1,
+                            onClick = { setNav(REGION_NAV, 1); finishWizard() },
+                        )
                     }
                 }
             }
@@ -2104,11 +2147,13 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
     private fun GhostPillButton(
         label: String,
         enabled: Boolean = true,
+        highlighted: Boolean = false,
         onClick: () -> Unit,
     ) {
         OutlinedButton(
             onClick = onClick,
             enabled = enabled,
+            modifier = Modifier.navHighlight(highlighted, cornerRadius = 12.dp),
             shape = RoundedCornerShape(12.dp),
             border = BorderStroke(1.dp, if (enabled) Color(0xFF434D5C) else Color(0xFF222D3D)),
             colors =
@@ -2125,6 +2170,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
     private fun AccentPillButton(
         label: String,
         enabled: Boolean,
+        highlighted: Boolean = false,
         onClick: () -> Unit,
     ) {
         val borderColor by animateColorAsState(
@@ -2135,6 +2181,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         OutlinedButton(
             onClick = onClick,
             enabled = enabled,
+            modifier = Modifier.navHighlight(highlighted, cornerRadius = 12.dp),
             shape = RoundedCornerShape(12.dp),
             border = BorderStroke(1.5.dp, borderColor),
             colors =
@@ -2149,6 +2196,27 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
 
     @Composable
     private fun PagePermissions(isCompact: Boolean) {
+        val region by navRegion
+        val navIdx by navIndex
+        val activate by activateSignal
+        val controller by controllerConnected
+
+        LaunchedEffect(isCompact) {
+            setTabCount(0)
+            setContentLayout(3, if (isCompact) 1 else 3)
+        }
+        val lastActivate = remember { mutableStateOf(activate) }
+        LaunchedEffect(activate) {
+            if (activate == lastActivate.value) return@LaunchedEffect
+            lastActivate.value = activate
+            if (region != REGION_CONTENT) return@LaunchedEffect
+            when (navIdx) {
+                0 -> requestFileAccess()
+                1 -> requestNotifications()
+                2 -> if (!imageFsInstalling.value) installImageFs()
+            }
+        }
+
         val fileAccessCard: @Composable (Modifier) -> Unit = { mod ->
             WizardActionCard(
                 modifier = mod,
@@ -2156,7 +2224,8 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 subtitle = stringResource(R.string.common_ui_required),
                 completed = storageGranted.value,
                 buttonLabel = stringResource(if (storageGranted.value) R.string.setup_wizard_granted else R.string.setup_wizard_grant),
-                onClick = { requestFileAccess() },
+                highlighted = controller && region == REGION_CONTENT && navIdx == 0,
+                onClick = { setNav(REGION_CONTENT, 0); requestFileAccess() },
             )
         }
         val notifCard: @Composable (Modifier) -> Unit = { mod ->
@@ -2164,14 +2233,15 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 modifier = mod,
                 title = stringResource(R.string.common_ui_notifications),
                 subtitle = stringResource(R.string.common_ui_optional),
-                completed = notifGranted.value,
+                completed = backgroundSessionEnabled.value,
                 buttonLabel =
                     when {
-                        notifGranted.value -> stringResource(R.string.setup_wizard_granted)
+                        backgroundSessionEnabled.value -> stringResource(R.string.setup_wizard_granted)
                         notifDenied.value -> stringResource(R.string.setup_wizard_denied)
                         else -> stringResource(R.string.setup_wizard_allow)
                     },
-                onClick = { requestNotifications() },
+                highlighted = controller && region == REGION_CONTENT && navIdx == 1,
+                onClick = { setNav(REGION_CONTENT, 1); requestNotifications() },
             )
         }
         val systemCard: @Composable (Modifier) -> Unit = { mod ->
@@ -2186,7 +2256,8 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                         imageFsInstalling.value -> "${imageFsProgress.intValue}%"
                         else -> stringResource(R.string.setup_wizard_install_system_files)
                     },
-                onClick = { installImageFs() },
+                highlighted = controller && region == REGION_CONTENT && navIdx == 2,
+                onClick = { setNav(REGION_CONTENT, 2); installImageFs() },
                 enabled = !imageFsInstalling.value,
                 progress = if (imageFsInstalling.value) imageFsProgress.intValue / 100f else null,
             )
@@ -2250,7 +2321,6 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         val glassBorder = Color.White.copy(alpha = SetupGlassBorderAlpha)
         val mutedDot = Color(0xFF4A5568)
 
-        // Build tab keys/labels
         val tabs =
             buildList {
                 add(TabInfo("recommended", recommendedLabel, turquoise, highlight = true))
@@ -2274,6 +2344,24 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 }
             }
 
+        val region by navRegion
+        val navIdx by navIndex
+        val activate by activateSignal
+        val controller by controllerConnected
+
+        LaunchedEffect(tabs.size) {
+            setTabCount(tabs.size)
+            onTabIndexChange = { i -> tabs.getOrNull(i)?.let { selectedTab = it.key } }
+        }
+        LaunchedEffect(selectedTab) {
+            lastContentIndex = 0
+            if (navRegion.intValue == REGION_CONTENT) navIndex.intValue = 0
+            val i = tabs.indexOfFirst { it.key == selectedTab }
+            if (i >= 0 && navRegion.intValue == REGION_TABS && navIndex.intValue != i) {
+                navIndex.intValue = i
+            }
+        }
+
         // Content panel (shared between layouts)
         @Composable
         fun ContentPanel(modifier: Modifier) {
@@ -2286,6 +2374,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             ) {
                 when (selectedTab) {
                     "drivers" -> {
+                        LaunchedEffect(selectedTab) { setContentLayout(0, 1) }
                         if (!imageFsDone.value) {
                             Column(
                                 modifier = Modifier.fillMaxSize(),
@@ -2339,6 +2428,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                             }
                         when {
                             advancedProfiles.isEmpty() -> {
+                                LaunchedEffect(selectedTab) { setContentLayout(0, 1) }
                                 Row(
                                     modifier = Modifier.align(Alignment.Center),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -2359,6 +2449,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                             }
 
                             tabProfiles.isEmpty() -> {
+                                LaunchedEffect(selectedTab) { setContentLayout(0, 1) }
                                 Text(
                                     text = stringResource(R.string.setup_wizard_no_components_available),
                                     color = Color(0xFF8B949E),
@@ -2377,14 +2468,39 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                                     isRecommendedTab &&
                                         transferState.value == null &&
                                         !allRecommendedInstalled
+                                val installAllSlots = if (isRecommendedTab) 1 else 0
+                                val listState = rememberLazyListState()
+
+                                LaunchedEffect(selectedTab, tabProfiles.size, installAllSlots) {
+                                    setContentLayout(tabProfiles.size + installAllSlots, 1)
+                                }
+                                LaunchedEffect(tabProfiles) { fetchAdvancedSizes(tabProfiles) }
+                                LaunchedEffect(region, navIdx) {
+                                    if (region == REGION_CONTENT) runCatching { listState.scrollToSelected(navIdx) }
+                                }
+                                val lastActivate = remember { mutableStateOf(activate) }
+                                LaunchedEffect(activate) {
+                                    if (activate == lastActivate.value) return@LaunchedEffect
+                                    lastActivate.value = activate
+                                    if (region != REGION_CONTENT) return@LaunchedEffect
+                                    if (isRecommendedTab && navIdx == 0) {
+                                        if (!allRecommendedInstalled) enqueueAllRecommended()
+                                    } else {
+                                        tabProfiles.getOrNull(navIdx - installAllSlots)?.let { spec ->
+                                            if (spec.verName !in advancedInstalledSet) enqueueAdvancedComponent(spec)
+                                        }
+                                    }
+                                }
 
                                 LazyColumn(
+                                    state = listState,
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
                                     if (isRecommendedTab) {
                                         item {
-                                            val installAllEnabled = transferState.value == null && !allRecommendedInstalled
+                                            val installAllEnabled = !allRecommendedInstalled
+                                            val navHere = controller && region == REGION_CONTENT && navIdx == 0
                                             val installAllShape = RoundedCornerShape(8.dp)
                                             Box(
                                                 modifier = Modifier.fillMaxWidth(),
@@ -2423,11 +2539,12 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                                                                         shape = installAllShape,
                                                                     )
                                                                 },
-                                                            ).clickable(
+                                                            ).navHighlight(navHere, cornerRadius = 8.dp)
+                                                            .clickable(
                                                                 enabled = installAllEnabled,
                                                                 interactionSource = remember { MutableInteractionSource() },
                                                                 indication = null,
-                                                            ) { installAllRecommended() }
+                                                            ) { setNav(REGION_CONTENT, 0); enqueueAllRecommended() }
                                                             .padding(horizontal = 14.dp, vertical = 8.dp),
                                                     contentAlignment = Alignment.Center,
                                                 ) {
@@ -2458,14 +2575,18 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                                             }
                                         }
                                     }
-                                    items(tabProfiles) { spec ->
+                                    itemsIndexed(tabProfiles) { i, spec ->
                                         val installed = spec.verName in advancedInstalledSet
+                                        val navHere = controller && region == REGION_CONTENT && navIdx == i + installAllSlots
                                         AdvancedComponentCard(
                                             name = spec.verName,
                                             installed = installed,
-                                            onClick = { installAdvancedComponent(spec) },
-                                            enabled = transferState.value == null && !installed,
+                                            highlighted = navHere,
+                                            onClick = { setNav(REGION_CONTENT, i + installAllSlots); enqueueAdvancedComponent(spec) },
+                                            enabled = !installed,
                                             recommended = isRecommendedSpec(spec),
+                                            status = queueStatus[spec.remoteUrl],
+                                            sizeBytes = advancedSizeCache[spec.remoteUrl],
                                         )
                                     }
                                 }
@@ -2479,10 +2600,12 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         @Composable
         fun TabItem(
             tab: TabInfo,
+            index: Int,
             fillWidth: Boolean,
             fontSize: TextUnit,
         ) {
             val isSelected = selectedTab == tab.key
+            val highlighted = controller && region == REGION_TABS && navIdx == index
             val interactionSource = remember { MutableInteractionSource() }
             val bgColor = if (isSelected) glassSurfaceActive else Color.Transparent
             val labelColor =
@@ -2496,10 +2619,11 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                     Modifier
                         .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier)
                         .background(bgColor, RoundedCornerShape(8.dp))
+                        .navHighlight(highlighted, cornerRadius = 8.dp)
                         .clickable(
                             interactionSource = interactionSource,
                             indication = null,
-                        ) { selectedTab = tab.key }
+                        ) { setNav(REGION_TABS, index) }
                         .padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -2537,7 +2661,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                             .padding(horizontal = 6.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    tabs.forEach { tab -> TabItem(tab, fillWidth = false, fontSize = 12.sp) }
+                    tabs.forEachIndexed { i, tab -> TabItem(tab, i, fillWidth = false, fontSize = 12.sp) }
                 }
 
                 ContentPanel(
@@ -2554,18 +2678,22 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 // Left rail
-                Column(
+                val tabListState = rememberLazyListState()
+                LaunchedEffect(region, navIdx) {
+                    if (region == REGION_TABS) runCatching { tabListState.scrollToSelected(navIdx) }
+                }
+                LazyColumn(
+                    state = tabListState,
                     modifier =
                         Modifier
                             .weight(0.38f)
                             .fillMaxHeight()
                             .background(glassSurface, glassShape)
                             .border(1.dp, glassBorder, glassShape)
-                            .verticalScroll(rememberScrollState())
                             .padding(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    tabs.forEach { tab -> TabItem(tab, fillWidth = true, fontSize = 13.sp) }
+                    itemsIndexed(tabs) { i, tab -> TabItem(tab, i, fillWidth = true, fontSize = 13.sp) }
                 }
 
                 ContentPanel(
@@ -2585,6 +2713,9 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         onClick: () -> Unit,
         enabled: Boolean = true,
         recommended: Boolean = false,
+        status: QueueItemStatus? = null,
+        highlighted: Boolean = false,
+        sizeBytes: Long? = null,
     ) {
         val turquoise = Color(0xFF57CBDE)
         val completedTurquoise = Color(0xFF3FAFBE)
@@ -2607,6 +2738,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                     .fillMaxWidth()
                     .background(bgColor, cardShape)
                     .border(1.dp, outlineColor, cardShape)
+                    .navHighlight(highlighted, cornerRadius = 12.dp)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -2628,6 +2760,16 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                             fontSize = 9.sp,
                             letterSpacing = 0.5.sp,
                         )
+                        sizeBytes?.takeIf { it > 0L }?.let { bytes ->
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = formatSizeMb(bytes),
+                                color = Color(0xFF8B949E),
+                                fontFamily = InterFont,
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                            )
+                        }
                     }
                     Spacer(Modifier.height(3.dp))
                 }
@@ -2637,32 +2779,73 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                     fontFamily = InterFont,
                     fontWeight = FontWeight.Medium,
                     fontSize = 12.sp,
+                    lineHeight = 14.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (!recommended) {
+                    sizeBytes?.takeIf { it > 0L }?.let { bytes ->
+                        Text(
+                            text = formatSizeMb(bytes),
+                            color = Color(0xFF8B949E),
+                            fontFamily = InterFont,
+                            fontSize = 9.sp,
+                            lineHeight = 10.sp,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onClick,
-                enabled = enabled && !installed,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.height(28.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor =
-                            if (installed) completedTurquoise.copy(alpha = 0.14f) else turquoise.copy(alpha = 0.14f),
-                        contentColor = if (installed) completedTurquoise else turquoise,
-                        disabledContainerColor = if (installed) completedTurquoise.copy(alpha = 0.14f) else turquoise.copy(alpha = 0.16f),
-                        disabledContentColor = if (installed) completedTurquoise else turquoise,
-                    ),
-            ) {
-                Text(
-                    text = stringResource(if (installed) R.string.common_ui_installed else R.string.common_ui_install),
-                    fontFamily = InterFont,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp,
-                )
+            when {
+                !installed && status == QueueItemStatus.ACTIVE ->
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = turquoise,
+                        strokeWidth = 2.dp,
+                    )
+
+                !installed && status == QueueItemStatus.QUEUED ->
+                    Text(
+                        text = stringResource(R.string.downloads_queue_phase_queued),
+                        color = turquoise,
+                        fontFamily = InterFont,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 10.sp,
+                    )
+
+                else -> {
+                    val isRetry = !installed && status == QueueItemStatus.FAILED
+                    Button(
+                        onClick = onClick,
+                        enabled = enabled && !installed,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor =
+                                    if (installed) completedTurquoise.copy(alpha = 0.14f) else turquoise.copy(alpha = 0.14f),
+                                contentColor = if (installed) completedTurquoise else turquoise,
+                                disabledContainerColor = if (installed) completedTurquoise.copy(alpha = 0.14f) else turquoise.copy(alpha = 0.16f),
+                                disabledContentColor = if (installed) completedTurquoise else turquoise,
+                            ),
+                    ) {
+                        Text(
+                            text =
+                                stringResource(
+                                    when {
+                                        installed -> R.string.common_ui_installed
+                                        isRetry -> R.string.session_drawer_retry
+                                        else -> R.string.common_ui_install
+                                    },
+                                ),
+                            fontFamily = InterFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
             }
         }
     }
@@ -2722,6 +2905,14 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             ) {
                 val gridColumns = 3
                 val compactGrid = maxWidth < 720.dp || maxHeight < 280.dp
+                val region by navRegion
+                val navIdx by navIndex
+                val activate by activateSignal
+                val controller by controllerConnected
+                LaunchedEffect(installedRuntimes.size, gridColumns) {
+                    setTabCount(0)
+                    setContentLayout(installedRuntimes.size, gridColumns)
+                }
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(gridColumns),
                     modifier =
@@ -2733,8 +2924,14 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                     verticalArrangement = Arrangement.spacedBy(if (compactGrid) 6.dp else 10.dp),
                     contentPadding = PaddingValues(bottom = if (compactGrid) 4.dp else 12.dp),
                 ) {
-                    gridItems(installedRuntimes) { profile ->
-                        RuntimeContainerCard(profile, compact = compactGrid)
+                    gridItemsIndexed(installedRuntimes) { i, profile ->
+                        RuntimeContainerCard(
+                            profile,
+                            compact = compactGrid,
+                            highlighted = controller && region == REGION_CONTENT && navIdx == i,
+                            activate = activate,
+                            onTap = { setNav(REGION_CONTENT, i) },
+                        )
                     }
                 }
             }
@@ -2745,9 +2942,12 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
     private fun RuntimeContainerCard(
         profile: ContentProfile,
         compact: Boolean = false,
+        highlighted: Boolean = false,
+        activate: Int = 0,
+        onTap: () -> Unit = {},
     ) {
         val entryName = ContentsManager.getEntryName(profile)
-        val displayName = runtimeDisplayLabel(profile)
+        val displayName = ContainerCreation.displayNameForProfile(profile)
         val isArm64 = profile.verName.contains("arm64ec", ignoreCase = true)
         val archLabel = if (isArm64) "ARM64EC" else "x86-64"
 
@@ -2772,12 +2972,59 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 Color.White.copy(alpha = SetupGlassBorderAlpha)
             }
 
+        val createContainer = {
+            if (!creating && transferState.value == null) {
+                creatingContainer.value = true
+                lifecycleScope.launch {
+                    wizardError.value = null
+                    val container =
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val c = ensureContainerForProfile(profile, displayName)
+                                if (isArm64) {
+                                    saveDefaultArm64ContainerId(this@SetupWizardActivity, c.id)
+                                } else {
+                                    saveDefaultX86ContainerId(this@SetupWizardActivity, c.id)
+                                }
+                                c
+                            } catch (e: Exception) {
+                                updateWizardError("Container creation failed: ${e.message}")
+                                null
+                            }
+                        }
+                    existingContainer = container
+                    creatingContainer.value = false
+                    refreshAdvancedInstalledSet()
+                    refreshWizardState()
+                }
+            }
+        }
+        val openSettings = {
+            existingContainer?.let { openContainerDefaultSettings(it.id, if (isArm64) "arm64" else "x86") }
+            Unit
+        }
+
+        val lastActivate = remember { mutableStateOf(activate) }
+        LaunchedEffect(activate) {
+            if (activate != lastActivate.value) {
+                lastActivate.value = activate
+                if (highlighted) {
+                    if (existingContainer == null) createContainer() else openSettings()
+                }
+            }
+        }
+
         Row(
             modifier =
                 Modifier
                     .fillMaxWidth()
                     .background(bgColor, cardShape)
                     .border(1.dp, outlineColor, cardShape)
+                    .navHighlight(highlighted, cornerRadius = 12.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onTap() }
                     .padding(horizontal = if (compact) 10.dp else 12.dp, vertical = if (compact) 6.dp else 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -2816,32 +3063,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
             Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
             if (existingContainer == null) {
                 Button(
-                    onClick = {
-                        if (creating) return@Button
-                        creatingContainer.value = true
-                        lifecycleScope.launch {
-                            wizardError.value = null
-                            val container =
-                                withContext(Dispatchers.IO) {
-                                    try {
-                                        val c = ensureContainerForProfile(profile, displayName)
-                                        if (isArm64) {
-                                            saveDefaultArm64ContainerId(this@SetupWizardActivity, c.id)
-                                        } else {
-                                            saveDefaultX86ContainerId(this@SetupWizardActivity, c.id)
-                                        }
-                                        c
-                                    } catch (e: Exception) {
-                                        wizardError.value = "Container creation failed: ${e.message}"
-                                        null
-                                    }
-                                }
-                            existingContainer = container
-                            creatingContainer.value = false
-                            refreshAdvancedInstalledSet()
-                            refreshWizardState()
-                        }
-                    },
+                    onClick = { onTap(); createContainer() },
                     enabled = !creating && transferState.value == null,
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.height(if (compact) 24.dp else 28.dp),
@@ -2875,11 +3097,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 }
             } else {
                 Button(
-                    onClick = {
-                        val id = existingContainer!!.id
-                        val type = if (isArm64) "arm64" else "x86"
-                        openContainerDefaultSettings(id, type)
-                    },
+                    onClick = { onTap(); openSettings() },
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.height(if (compact) 24.dp else 28.dp),
                     contentPadding = PaddingValues(horizontal = if (compact) 9.dp else 12.dp, vertical = 0.dp),
@@ -2910,6 +3128,7 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
         onClick: () -> Unit,
         enabled: Boolean = true,
         progress: Float? = null,
+        highlighted: Boolean = false,
     ) {
         val turquoise = Color(0xFF57CBDE)
         val completedTurquoise = Color(0xFF3FAFBE)
@@ -2926,11 +3145,18 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 progress != null -> turquoise
                 else -> Color.White.copy(alpha = SetupGlassBorderAlpha)
             }
+        val buttonFocused = highlighted && enabled && !completed
         Column(
             modifier =
                 modifier
                     .background(glassSurface, glassShape)
                     .border(1.dp, borderColor, glassShape)
+                    .navHighlight(highlighted, cornerRadius = 12.dp)
+                    .clickable(
+                        enabled = enabled && !completed,
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onClick() }
                     .padding(horizontal = 12.dp, vertical = 11.dp),
         ) {
             // Status chip
@@ -2994,12 +3220,33 @@ class SetupWizardActivity : FixedFontScaleFragmentActivity() {
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .height(32.dp),
+                        .height(32.dp)
+                        .then(
+                            if (buttonFocused) {
+                                Modifier.chasingBorder(
+                                    cornerRadius = 8.dp,
+                                    borderWidth = 1.5.dp,
+                                    animationDurationMs = 8200,
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                 colors =
                     ButtonDefaults.buttonColors(
-                        containerColor = if (completed) completedTurquoise.copy(alpha = 0.16f) else turquoise,
-                        contentColor = if (completed) completedTurquoise else Color(0xFF111822),
+                        containerColor =
+                            when {
+                                completed -> completedTurquoise.copy(alpha = 0.16f)
+                                buttonFocused -> Color(0xFF0E2A38)
+                                else -> turquoise
+                            },
+                        contentColor =
+                            when {
+                                completed -> completedTurquoise
+                                buttonFocused -> Color(0xFFE6EDF3)
+                                else -> Color(0xFF111822)
+                            },
                         disabledContainerColor =
                             when {
                                 completed -> completedTurquoise.copy(alpha = 0.16f)
@@ -3045,20 +3292,4 @@ private fun resolveJsonDownloadUrl(url: String): String {
     }
 
     return "https://raw.githubusercontent.com/$ownerRepo/$branch/$filePath"
-}
-
-private fun runtimeDisplayLabel(profile: ContentProfile): String {
-    val prefix =
-        when (profile.type) {
-            ContentProfile.ContentType.CONTENT_TYPE_WINE -> "Wine"
-            ContentProfile.ContentType.CONTENT_TYPE_PROTON -> "Proton"
-            else -> profile.type.toString()
-        }
-    val version =
-        Regex("(?i)(?:wine|proton)-([0-9]+(?:\\.[0-9]+)?)")
-            .find(profile.verName)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?: profile.verName
-    return "$prefix $version"
 }

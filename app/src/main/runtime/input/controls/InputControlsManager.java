@@ -25,11 +25,23 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public class InputControlsManager {
-  private static final int ASSET_PROFILE_SYNC_REVISION = 3;
+  private static final int ASSET_PROFILE_SYNC_REVISION = 8;
+  public static final int LAST_BUILTIN_PROFILE_ID = 8;
+  public static final int VIRTUAL_GAMEPAD_BUILTIN_ID = 3;
+  public static final int GAMEHUB_LAYOUT_BUILTIN_ID = 7;
+  // Retired bundled layout ids whose installed copies are removed on sync.
+  private static final int[] RETIRED_PROFILE_IDS = {4, 5};
+  // Bundled layouts replaced in this revision: reinstall pristine copies once.
+  private static final int[] REFRESHED_PROFILE_IDS = {8};
+
   private final Context context;
   private ArrayList<ControlsProfile> profiles;
   private int maxProfileId;
   private boolean profilesLoaded = false;
+
+  public static boolean isBuiltinProfile(ControlsProfile profile) {
+    return profile != null && profile.id <= LAST_BUILTIN_PROFILE_ID;
+  }
 
   public InputControlsManager(Context context) {
     this.context = context;
@@ -39,6 +51,45 @@ public class InputControlsManager {
     File profilesDir = new File(context.getFilesDir(), "profiles");
     if (!profilesDir.isDirectory()) profilesDir.mkdir();
     return profilesDir;
+  }
+
+  public static File getBackupsDir(Context context) {
+    File backupsDir = new File(context.getFilesDir(), "profile_backups");
+    if (!backupsDir.isDirectory()) backupsDir.mkdir();
+    return backupsDir;
+  }
+
+  public static File getBackupFile(Context context, int id) {
+    return new File(getBackupsDir(context), "controls-" + id + ".icp");
+  }
+
+  public static void backupProfile(Context context, int id) {
+    File working = ControlsProfile.getProfileFile(context, id);
+    if (working.isFile()) FileUtils.copy(working, getBackupFile(context, id));
+  }
+
+  public boolean canResetProfile(ControlsProfile profile) {
+    return profile != null && getBackupFile(context, profile.id).isFile();
+  }
+
+  /**
+   * Restores {@code profile} to its pristine snapshot (the layout it had when first installed,
+   * downloaded or imported) and returns the reloaded profile. Returns the unchanged profile if no
+   * snapshot exists. Built-in profiles are editable in place — this is how a user undoes edits.
+   */
+  public ControlsProfile resetProfile(ControlsProfile profile) {
+    if (profile == null) return null;
+    File backup = getBackupFile(context, profile.id);
+    if (!backup.isFile()) return profile;
+    File working = ControlsProfile.getProfileFile(context, profile.id);
+    FileUtils.copy(backup, working);
+    ControlsProfile refreshed = loadProfile(context, working);
+    if (refreshed == null) return profile;
+    if (profiles != null) {
+      int index = profiles.indexOf(profile);
+      if (index != -1) profiles.set(index, refreshed);
+    }
+    return refreshed;
   }
 
   public ArrayList<ControlsProfile> getProfiles() {
@@ -57,14 +108,9 @@ public class InputControlsManager {
   }
 
   private void copyAssetProfilesIfNeeded() {
-    File profilesDir = InputControlsManager.getProfilesDir(context);
-    if (FileUtils.isEmpty(profilesDir)) {
-      FileUtils.copy(context, "inputcontrols/profiles", profilesDir);
-      return;
-    }
+    InputControlsManager.getProfilesDir(context);
 
     SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
-
     int newVersion = AppUtils.getVersionCode(context);
     int oldVersion = preferences.getInt("inputcontrols_app_version", 0);
     int oldSyncRevision = preferences.getInt("inputcontrols_asset_sync_revision", 0);
@@ -75,31 +121,25 @@ public class InputControlsManager {
         .putInt("inputcontrols_asset_sync_revision", ASSET_PROFILE_SYNC_REVISION)
         .apply();
 
-    File[] files = profilesDir.listFiles();
-    if (files == null) return;
+    for (int id : RETIRED_PROFILE_IDS) {
+      ControlsProfile.getProfileFile(context, id).delete();
+      getBackupFile(context, id).delete();
+    }
+    for (int id : REFRESHED_PROFILE_IDS) {
+      ControlsProfile.getProfileFile(context, id).delete();
+    }
 
     try {
       AssetManager assetManager = context.getAssets();
       String[] assetFiles = assetManager.list("inputcontrols/profiles");
+      if (assetFiles == null) return;
       for (String assetFile : assetFiles) {
         String assetPath = "inputcontrols/profiles/" + assetFile;
         ControlsProfile originProfile = loadProfile(context, assetManager.open(assetPath));
-
-        File targetFile = null;
-        for (File file : files) {
-          ControlsProfile targetProfile = loadProfile(context, file);
-          if (originProfile.id == targetProfile.id
-              && originProfile.getName().equals(targetProfile.getName())) {
-            targetFile = file;
-            break;
-          }
-        }
-
-        if (targetFile != null) {
-          FileUtils.copy(context, assetPath, targetFile);
-        } else {
-          FileUtils.copy(context, assetPath, new File(profilesDir, assetFile));
-        }
+        if (originProfile == null) continue;
+        File workingFile = ControlsProfile.getProfileFile(context, originProfile.id);
+        if (!workingFile.isFile()) FileUtils.copy(context, assetPath, workingFile);
+        FileUtils.copy(context, assetPath, getBackupFile(context, originProfile.id));
       }
     } catch (IOException e) {
     }
@@ -134,6 +174,7 @@ public class InputControlsManager {
     ControlsProfile profile = new ControlsProfile(context, newId);
     profile.setName(name);
     profile.save();
+    backupProfile(context, newId);
     profiles.add(profile);
     return profile;
   }
@@ -165,6 +206,7 @@ public class InputControlsManager {
     } catch (JSONException e) {
     }
 
+    backupProfile(context, newId);
     ControlsProfile profile = loadProfile(context, newFile);
     profiles.add(profile);
     return profile;
@@ -172,7 +214,11 @@ public class InputControlsManager {
 
   public void removeProfile(ControlsProfile profile) {
     File file = ControlsProfile.getProfileFile(context, profile.id);
-    if (file.isFile() && file.delete()) profiles.remove(profile);
+    if (file.isFile() && file.delete()) {
+      profiles.remove(profile);
+      File backup = getBackupFile(context, profile.id);
+      if (backup.isFile()) backup.delete();
+    }
   }
 
   public synchronized ControlsProfile importProfile(JSONObject data) {
@@ -191,6 +237,7 @@ public class InputControlsManager {
       File targetFile = ControlsProfile.getProfileFile(context, targetId);
       data.put("id", targetId);
       FileUtils.writeString(targetFile, data.toString());
+      backupProfile(context, targetId);
       ControlsProfile newProfile = loadProfile(context, targetFile);
 
       if (newProfile == null) {
@@ -215,6 +262,11 @@ public class InputControlsManager {
   private ControlsProfile findProfileByName(String name) {
     String normalizedName = normalizeProfileName(name);
     for (ControlsProfile profile : profiles) {
+      // Never match a bundled built-in profile: importing a legacy ICP whose name collides with
+      // a built-in (e.g. a Winlator "Xbox Controller.icp") must create a fresh, visible profile
+      // rather than silently overwriting the read-only asset — which would land it on a hidden
+      // legacy slot and make the import appear to do nothing.
+      if (isBuiltinProfile(profile)) continue;
       if (normalizeProfileName(profile.getName()).equals(normalizedName)) {
         return profile;
       }

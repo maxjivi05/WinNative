@@ -18,6 +18,7 @@ import androidx.core.text.HtmlCompat
 import androidx.fragment.app.Fragment
 import androidx.preference.PreferenceManager
 import com.winlator.cmod.R
+import com.winlator.cmod.app.shell.UnifiedActivity
 import com.winlator.cmod.runtime.compat.box64.Box64Preset
 import com.winlator.cmod.runtime.compat.box64.Box64PresetManager
 import com.winlator.cmod.runtime.compat.fexcore.FEXCorePreset
@@ -213,6 +214,7 @@ class PresetsFragment : Fragment() {
                             refresh()
                         },
                         suggestedNewPresetName = { buildDefaultPresetName(currentEngine) },
+                        bridge = (requireActivity() as? UnifiedActivity)?.settingsNavBridge,
                     )
                 }
             }
@@ -261,9 +263,7 @@ class PresetsFragment : Fragment() {
         super.onSaveInstanceState(outState)
     }
 
-    // ========================================================================
     // State builders
-    // ========================================================================
 
     /**
      * Re-loads each engine's presets + resolved selection + env-var values from the
@@ -436,9 +436,7 @@ class PresetsFragment : Fragment() {
         return plainText.ifBlank { getString(R.string.container_presets_no_description) }
     }
 
-    // ========================================================================
     // Persistence helpers
-    // ========================================================================
 
     private fun setSelectedPreset(
         engine: PresetEngine,
@@ -532,9 +530,7 @@ class PresetsFragment : Fragment() {
 
     private fun sanitizePresetName(rawName: String): String = rawName.trim().replace(Regex("[,|]+"), "")
 
-    // ========================================================================
     // Engine metadata
-    // ========================================================================
 
     private val PresetEngine.preferenceKey: String
         get() =
@@ -547,7 +543,7 @@ class PresetsFragment : Fragment() {
         get() =
             when (this) {
                 PresetEngine.BOX64 -> Box64Preset.PERFORMANCE
-                PresetEngine.FEXCORE -> FEXCorePreset.PERFORMANCE
+                PresetEngine.FEXCORE -> FEXCorePreset.PERFORMANCE_TSO
             }
 
     private val PresetEngine.assetFile: String

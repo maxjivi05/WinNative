@@ -25,6 +25,7 @@ import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.pm.PackageInfoCompat;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
@@ -92,7 +93,7 @@ public abstract class AppUtils {
   }
 
   public static void restartApplication(Context context, int selectedMenuItemId) {
-    AppTerminationHelper.stopManagedServices(context, "restart_application");
+    AppTerminationHelper.stopManagedServices(context, "restart_application", true);
     Intent intent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
     Intent mainIntent = Intent.makeRestartActivityTask(intent.getComponent());
     if (selectedMenuItemId > 0) mainIntent.putExtra("selected_menu_item_id", selectedMenuItemId);
@@ -146,6 +147,16 @@ public abstract class AppUtils {
       insetsController.setSystemBarsBehavior(
           WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
     }
+  }
+
+  // Like hideSystemUI but skips the insets relayout when bars are already hidden; safe to call every frame.
+  public static void hideSystemUIIfVisible(final Activity activity) {
+    final View decorView = activity.getWindow().getDecorView();
+    final WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(decorView);
+    if (insets != null && !insets.isVisible(WindowInsetsCompat.Type.systemBars())) {
+      return;
+    }
+    hideSystemUI(activity);
   }
 
   public static void showSystemUI(final Activity activity) {
@@ -368,10 +379,8 @@ public abstract class AppUtils {
       return;
     }
 
-    // Create a Timer to schedule the task
     Timer timer = new Timer();
 
-    // Schedule the task with the specified delay
     timer.schedule(
         new TimerTask() {
           @Override

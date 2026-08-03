@@ -7,10 +7,22 @@
     <uses-feature
         android:glEsVersion="0x00020000"
         android:required="true" />
+    <!-- USB host for GameSir GCM vendor rumble (e.g. G8+); optional so non-OTG devices still install -->
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Bluetooth LE for GameSir GCM rumble (e.g. X5s) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
@@ -19,8 +31,11 @@
     <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
@@ -88,12 +103,60 @@
             android:supportsPictureInPicture="true"
             android:screenOrientation="sensorLandscape"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation"
-            android:exported="true" />
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/x-desktop" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.desktop" />
+            </intent-filter>
+        </activity>
 
         <activity
             android:name="com.winlator.cmod.runtime.input.ControlsEditorActivity"
             android:theme="@style/AppThemeFullscreen.Dark"
             android:screenOrientation="sensorLandscape"
+            android:exported="false" />
+
+        <activity
+            android:name="com.winlator.cmod.feature.retro.RetroActivity"
+            android:theme="@style/AppThemeFullscreen"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation"
+            android:exported="false" />
+
+        <!-- The 3D engine. Runs in its own process like the Dolphin host does,
+             so a crash in SDL or the Lua engine cannot take WinNative's UI
+             process down with it. -->
+        <activity
+            android:name="com.winlator.cmod.feature.retro.Gen1EngineActivity"
+            android:process=":engine3d"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:launchMode="singleTop"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation|uiMode"
+            android:exported="false" />
+
+        <activity
+            android:name="com.winlator.cmod.feature.retro.RetroAchievementsActivity"
+            android:theme="@style/AppThemeTranslucent"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation"
+            android:exported="false" />
+
+        <activity
+            android:name="com.winlator.cmod.feature.retro.RetroCheatsActivity"
+            android:theme="@style/AppThemeTranslucent"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation"
             android:exported="false" />
 
         <receiver
@@ -112,6 +175,18 @@
             android:foregroundServiceType="dataSync" />
 
         <service
+            android:name="com.winlator.cmod.feature.stores.steam.chat.ChatOverlayService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <activity
+            android:name="com.winlator.cmod.feature.stores.steam.chat.ChatImagePickerActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
+        <service
             android:name="com.winlator.cmod.feature.stores.epic.service.EpicService"
             android:enabled="true"
             android:exported="false"
@@ -122,6 +197,21 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Need for keep the container alive when the process is paused,
+             also required to prevent the system from killing a component download/install
+             is in flight. -->
+        <service
+            android:name="com.winlator.cmod.runtime.system.SessionKeepAliveService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|dataSync"
+            android:stopWithTask="false">
+
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Required to prevent the container from closing even when the process is paused."/>
+        </service>
 
         <!-- AppCompat per-app language backport storage (pre-Android 13) -->
         <service
@@ -168,7 +258,19 @@
             android:value="@string/play_games_app_id" />
         <meta-data
             android:name="com.google.android.gms.games.should_auto_sign_in"
-            android:value="true" />
+            android:value="false" />
+
+        <provider
+            android:name="com.google.android.gms.games.provider.PlayGamesInitProvider"
+            tools:node="remove" />
+
+        <receiver
+            android:name="com.winlator.cmod.feature.stores.steam.service.HybridModeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.winnative.cmod.action.HYBRID_MODE" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>

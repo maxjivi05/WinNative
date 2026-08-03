@@ -17,11 +17,13 @@ public class ContentProfile {
   public static final String MARK_WINE_BINPATH = "binPath";
   public static final String MARK_WINE_LIBPATH = "libPath";
   public static final String MARK_WINE_PREFIX_PACK = "prefixPack";
+  public static final String MARK_OFFICIAL = "official";
 
   public enum ContentType {
     CONTENT_TYPE_WINE("Wine"),
     CONTENT_TYPE_PROTON("Proton"),
     CONTENT_TYPE_DXVK("DXVK"),
+    CONTENT_TYPE_D7VK("D7VK"),
     CONTENT_TYPE_VKD3D("VKD3D"),
     CONTENT_TYPE_BOX64("Box64"),
     CONTENT_TYPE_WOWBOX64("WOWBox64"),
@@ -60,4 +62,6 @@ public class ContentProfile {
   public String winePrefixPack;
   public String remoteUrl;
   public boolean isInstalled;
+  /** True for first-party "WinNative" builds, flagged via "official" in contents.json. */
+  public boolean isOfficial;
 }

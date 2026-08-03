@@ -17,9 +17,8 @@ public class ControlsProfile implements Comparable<ControlsProfile> {
   public final int id;
   private String name;
   private float cursorSpeed = 1.0f;
-  private final ArrayList<ControlElement> elements = new ArrayList<>();
+  private volatile List<ControlElement> elements = new ArrayList<>();
   private final ArrayList<ExternalController> controllers = new ArrayList<>();
-  private final List<ControlElement> immutableElements = Collections.unmodifiableList(elements);
   private boolean elementsLoaded = false;
   private boolean controllersLoaded = false;
   private boolean virtualGamepad = false;
@@ -192,18 +191,18 @@ public class ControlsProfile implements Comparable<ControlsProfile> {
     return new File(InputControlsManager.getProfilesDir(context), "controls-" + id + ".icp");
   }
 
-  public void addElement(ControlElement element) {
+  public synchronized void addElement(ControlElement element) {
     elements.add(element);
     elementsLoaded = true;
   }
 
-  public void removeElement(ControlElement element) {
+  public synchronized void removeElement(ControlElement element) {
     elements.remove(element);
     elementsLoaded = true;
   }
 
   public List<ControlElement> getElements() {
-    return immutableElements;
+    return Collections.unmodifiableList(elements);
   }
 
   public int getElementCountFromFile() {
@@ -268,26 +267,32 @@ public class ControlsProfile implements Comparable<ControlsProfile> {
   }
 
   public void loadElements(InputControlsView inputControlsView) {
-    elements.clear();
-    elementsLoaded = false;
-    virtualGamepad = false;
-
     File file = getProfileFile(context, id);
-    if (!file.isFile()) return;
+    if (!file.isFile()) {
+      elements = new ArrayList<>();
+      elementsLoaded = false;
+      return;
+    }
 
     try {
       String jsonStr = FileUtils.readString(file);
       if (jsonStr == null) return;
       JSONObject profileJSONObject = new JSONObject(jsonStr);
       JSONArray elementsJSONArray = profileJSONObject.getJSONArray("elements");
+      ArrayList<ControlElement> tempElements = new ArrayList<>();
+      boolean tempVirtualGamepad = false;
+
       for (int i = 0; i < elementsJSONArray.length(); i++) {
         JSONObject elementJSONObject = elementsJSONArray.getJSONObject(i);
         ControlElement element = new ControlElement(inputControlsView);
         element.setType(ControlElement.Type.valueOf(elementJSONObject.getString("type")));
         element.setShape(ControlElement.Shape.valueOf(elementJSONObject.getString("shape")));
         element.setToggleSwitch(elementJSONObject.getBoolean("toggleSwitch"));
-        element.setX((int) (elementJSONObject.getDouble("x") * inputControlsView.getMaxWidth()));
-        element.setY((int) (elementJSONObject.getDouble("y") * inputControlsView.getMaxHeight()));
+        element.setSwipeable(elementJSONObject.optBoolean("swipeable", true));
+        element.setX(
+            (int) Math.round(elementJSONObject.getDouble("x") * inputControlsView.getMaxWidth()));
+        element.setY(
+            (int) Math.round(elementJSONObject.getDouble("y") * inputControlsView.getMaxHeight()));
         element.setScale((float) elementJSONObject.getDouble("scale"));
         element.setText(elementJSONObject.getString("text"));
         element.setIconId(elementJSONObject.getInt("iconId"));
@@ -309,10 +314,15 @@ public class ControlsProfile implements Comparable<ControlsProfile> {
           if (binding.isGamepad()) hasGamepadBinding = true;
         }
 
-        if (!virtualGamepad && hasGamepadBinding) virtualGamepad = true;
-        elements.add(element);
+        if (!tempVirtualGamepad && hasGamepadBinding) tempVirtualGamepad = true;
+        tempElements.add(element);
       }
-      elementsLoaded = true;
+
+      synchronized (this) {
+        this.elements = tempElements;
+        this.virtualGamepad = tempVirtualGamepad;
+        this.elementsLoaded = true;
+      }
     } catch (JSONException e) {
       e.printStackTrace();
     }

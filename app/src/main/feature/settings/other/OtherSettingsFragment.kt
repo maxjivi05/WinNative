@@ -26,7 +26,9 @@ import androidx.fragment.app.Fragment
 import androidx.preference.PreferenceManager
 import com.winlator.cmod.R
 import com.winlator.cmod.app.config.SettingsConfig
+import com.winlator.cmod.app.shell.UnifiedActivity
 import com.winlator.cmod.app.update.UpdateChecker
+import com.winlator.cmod.feature.shortcuts.FrontendExporter
 import com.winlator.cmod.feature.setup.SetupWizardActivity
 import com.winlator.cmod.runtime.audio.midi.MidiManager
 import com.winlator.cmod.runtime.display.environment.ImageFsInstaller
@@ -82,6 +84,7 @@ class OtherSettingsFragment : Fragment() {
                         ),
                 ) {
                     OtherSettingsScreen(
+                        bridge = (requireActivity() as? UnifiedActivity)?.settingsNavBridge,
                         state = uiState,
                         onCheckForUpdatesChanged = { checked ->
                             preferences.edit { putBoolean("check_for_updates", checked) }
@@ -135,12 +138,9 @@ class OtherSettingsFragment : Fragment() {
                                 SettingsConfig.DEFAULT_SHORTCUT_EXPORT_PATH,
                             )
                         },
+                        onExportAll = { exportAllShortcuts(ctx) },
                         onCursorSpeedChanged = { percent ->
                             preferences.edit { putFloat("cursor_speed", percent / 100f) }
-                            refresh()
-                        },
-                        onUseDRI3Changed = { checked ->
-                            preferences.edit { putBoolean("use_dri3", checked) }
                             refresh()
                         },
                         onCursorLockChanged = { checked ->
@@ -156,12 +156,25 @@ class OtherSettingsFragment : Fragment() {
                             WinToast.show(ctx, R.string.settings_general_take_effect_next_startup)
                             refresh()
                         },
+                        onAutoScrapingChanged = { checked ->
+                            preferences.edit { putBoolean("enable_auto_scraping", checked) }
+                            WinToast.show(ctx, R.string.settings_general_take_effect_next_startup)
+                            refresh()
+                        },
                         onOpenInBrowserChanged = { checked ->
                             preferences.edit { putBoolean("open_with_android_browser", checked) }
                             refresh()
                         },
                         onShareClipboardChanged = { checked ->
                             preferences.edit { putBoolean("share_android_clipboard", checked) }
+                            refresh()
+                        },
+                        onEnableBackgroundSessionChanged = { checked ->
+                            preferences.edit { putBoolean("enable_background_session", checked) }
+                            refresh()
+                        },
+                        onExternalDisplayOutputChanged = { checked ->
+                            preferences.edit { putBoolean("external_display_output", checked) }
                             refresh()
                         },
                         onRunSetupWizard = {
@@ -221,13 +234,16 @@ class OtherSettingsFragment : Fragment() {
                 cursorSpeedPercent =
                     (preferences.getFloat("cursor_speed", 1.0f) * 100)
                         .toInt()
-                        .coerceIn(10, 200),
-                useDRI3 = preferences.getBoolean("use_dri3", true),
+                        .coerceIn(10, 300),
+
                 cursorLock = preferences.getBoolean("cursor_lock", false),
                 xinputDisabled = preferences.getBoolean("xinput_toggle", false),
+                enableAutoScraping = preferences.getBoolean("enable_auto_scraping", false),
                 enableFileProvider = preferences.getBoolean("enable_file_provider", true),
                 openInBrowser = preferences.getBoolean("open_with_android_browser", false),
                 shareClipboard = preferences.getBoolean("share_android_clipboard", false),
+                enableBackgroundSession = preferences.getBoolean("enable_background_session", false),
+                externalDisplayOutput = preferences.getBoolean("external_display_output", false),
                 imagefsInstallProgress = uiState.imagefsInstallProgress,
             )
     }
@@ -272,7 +288,15 @@ class OtherSettingsFragment : Fragment() {
 
                 override fun onFinished(success: Boolean) {
                     main.post {
-                        uiState = uiState.copy(imagefsInstallProgress = null)
+                        if (success) {
+                            uiState = uiState.copy(imagefsInstallProgress = 100)
+                            main.postDelayed(
+                                { uiState = uiState.copy(imagefsInstallProgress = null) },
+                                500L,
+                            )
+                        } else {
+                            uiState = uiState.copy(imagefsInstallProgress = null)
+                        }
                     }
                 }
             },
@@ -294,6 +318,20 @@ class OtherSettingsFragment : Fragment() {
             }
             refresh()
         }
+    }
+
+    private fun exportAllShortcuts(ctx: Context) {
+        Thread {
+            val count = FrontendExporter.exportAll(ctx)
+            val dir = FrontendExporter.resolveExportDir(ctx)
+            activity?.runOnUiThread {
+                if (count > 0) {
+                    WinToast.show(ctx, getString(R.string.shortcuts_export_all_done, count, dir?.path ?: ""))
+                } else {
+                    WinToast.show(ctx, R.string.shortcuts_export_all_none)
+                }
+            }
+        }.start()
     }
 
     private fun installSoundFont(uri: Uri) {

@@ -69,7 +69,7 @@ public class ControllerManager {
       String deviceIdentifier = preferences.getString(PREF_PLAYER_SLOT_PREFIX + i, null);
       if (deviceIdentifier != null) slotAssignments.put(i, deviceIdentifier);
       enabledSlots[i] = preferences.getBoolean(PREF_ENABLED_SLOTS_PREFIX + i, i == 0);
-      vibrationEnabled[i] = preferences.getBoolean(PREF_VIBRATE_SLOT_PREFIX + i, i == 0);
+      vibrationEnabled[i] = preferences.getBoolean(PREF_VIBRATE_SLOT_PREFIX + i, true);
     }
     globalVibrationEnabled = preferences.getBoolean(PREF_VIBRATION_GLOBAL, true);
   }

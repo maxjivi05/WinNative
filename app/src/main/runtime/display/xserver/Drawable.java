@@ -7,6 +7,7 @@ import com.winlator.cmod.shared.math.Mathf;
 import com.winlator.cmod.shared.util.Callback;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class Drawable extends XResource {
   public final short width;
@@ -14,49 +15,31 @@ public class Drawable extends XResource {
   public final Visual visual;
   private Texture texture = new Texture();
   private ByteBuffer data;
-  // volatile because the GLThread reads these in `isDirectScanoutContent`
-  // (called outside renderLock for the candidate-search pass) while the
-  // X-server worker thread mutates them via setDirectScanout/setScanoutSource
-  // from PresentExtension and DRI3Extension. Without volatile, the GLThread
-  // can observe stale values across frames. Long-form mutations of texture
-  // / scanoutSource still serialize on `renderLock` for atomicity with reads
-  // that take the lock (see `renderDrawable`, the Direct-Composition path).
+  // volatile: the render thread reads these outside renderLock during the
+  // direct-scanout candidate scan while the X-server worker mutates them.
   private volatile boolean directScanout = false;
   private volatile Drawable scanoutSource;
-  /**
-   * Producer-side acquire fence FD. -1 means "no fence; buffer is ready for
-   * immediate read."
-   *
-   * <p>Today in this fork the value is always -1: the in-process Java X server
-   * receives the {@code AHardwareBuffer} from the Wine client over the DRI3
-   * {@code PIXMAP_FROM_BUFFERS} unix-socket path, which the X-server worker
-   * thread processes only after the client has already submitted its Vulkan
-   * command buffer. Empirically this CPU-side handoff latency exceeds the
-   * GPU-write completion time, so we observe no tearing without an explicit
-   * fence — but this is an observation about THIS pipeline, not a Vulkan or
-   * Mesa contract. If a future codepath drives presents at a higher rate or
-   * skips that handoff cost, an explicit acquire fence will become necessary.
-   *
-   * <p>Forward-compatible plumbing: when the X-server PRESENT/DRI3 parsing
-   * gains real {@code wait_fence} support, that code calls
-   * {@link #setAcquireFenceFd}. The Direct Composition push at
-   * {@code GLRenderer.maybePushDirectComposition} consumes the value under
-   * {@link #renderLock} via {@link #takeAcquireFenceFd} (atomic
-   * read-and-clear), and forwards it to
-   * {@code DirectCompositionLayer.pushBuffer} which transfers ownership to
-   * the framework via {@code ASurfaceTransaction_setBuffer}.
-   *
-   * <p>Stored as {@link java.util.concurrent.atomic.AtomicInteger} so the
-   * "consume" semantic is atomic with respect to concurrent
-   * setAcquireFenceFd writes — without it, a producer could overwrite a
-   * still-pending FD between the consumer's read and clear, leaking the
-   * old FD.
-   */
-  private final java.util.concurrent.atomic.AtomicInteger acquireFenceFd =
-      new java.util.concurrent.atomic.AtomicInteger(-1);
+  private short scanoutX;
+  private short scanoutY;
+  private short presentedSourceWidth;
+  private short presentedSourceHeight;
+  private boolean presentedSourceValid = false;
+  private boolean hasContent = false;
   private Runnable onDrawListener;
   private Callback<Drawable> onDestroyListener;
   public final Object renderLock = new Object();
+
+  /**
+   * Producer-side acquire fence FD, or -1 when the buffer needs no wait.
+   *
+   * <p>Usually -1: the X-server worker only processes DRI3 PIXMAP_FROM_BUFFERS
+   * after the client has already submitted its Vulkan commands, and that
+   * handoff latency has empirically exceeded GPU-write completion.
+   *
+   * <p>AtomicInteger so take-and-clear is atomic against a concurrent producer
+   * write, which would otherwise leak the previous FD.
+   */
+  private final AtomicInteger acquireFenceFd = new AtomicInteger(-1);
 
   static {
     System.loadLibrary("winlator");
@@ -71,11 +54,14 @@ public class Drawable extends XResource {
     if (this.data == null) {
       throw new IllegalStateException("Drawable.data initialized as null!");
     }
+    this.presentedSourceWidth = (short) Math.max(0, Math.min(Short.MAX_VALUE, width));
+    this.presentedSourceHeight = (short) Math.max(0, Math.min(Short.MAX_VALUE, height));
   }
 
   public static Drawable fromBitmap(Bitmap bitmap) {
     Drawable drawable = new Drawable(0, bitmap.getWidth(), bitmap.getHeight(), null);
     fromBitmap(bitmap, drawable.data);
+    drawable.hasContent = true;
     return drawable;
   }
 
@@ -87,6 +73,7 @@ public class Drawable extends XResource {
     if (texture instanceof GPUImage) {
       ByteBuffer virtualData = ((GPUImage) texture).getVirtualData();
       if (virtualData != null) data = virtualData;
+      hasContent = true;
     }
     this.texture = texture;
   }
@@ -96,57 +83,62 @@ public class Drawable extends XResource {
   }
 
   public void setScanoutSource(Drawable scanoutSource) {
+    setScanoutSource(scanoutSource, (short) 0, (short) 0);
+  }
+
+  public void setScanoutSource(Drawable scanoutSource, short x, short y) {
     this.scanoutSource = scanoutSource;
-    if (texture != null) texture.setNeedsUpdate(true);
+    this.scanoutX = x;
+    this.scanoutY = y;
+    markTextureDirty(0, 0, width, height);
     if (onDrawListener != null) onDrawListener.run();
   }
 
   public void clearScanoutSource() {
     if (scanoutSource == null) return;
     scanoutSource = null;
-    if (texture != null) texture.setNeedsUpdate(true);
+    scanoutX = 0;
+    scanoutY = 0;
+    markTextureDirty(0, 0, width, height);
   }
 
-  /**
-   * Atomic read-and-clear of the acquire fence FD: returns the current value
-   * (or -1 if none) AND resets the field to -1 in a single CAS.
-   *
-   * <p>This is single-consumer "take" semantics: the caller now owns the FD
-   * and is responsible for either closing it or transferring ownership
-   * elsewhere (e.g. by passing it to {@code ASurfaceTransaction_setBuffer},
-   * which closes it via the framework). A second concurrent caller of
-   * {@code takeAcquireFenceFd} will get -1 — they did not own the original
-   * fence.
-   *
-   * <p>Returns -1 today because no producer code currently calls
-   * {@link #setAcquireFenceFd}.
-   */
-  public int takeAcquireFenceFd() {
-    return acquireFenceFd.getAndSet(-1);
+  public short getScanoutX() {
+    return scanoutX;
   }
 
-  /**
-   * Sets the producer acquire fence FD. Should be called by Present/DRI3
-   * extension code immediately before the buffer is published to the GLRenderer
-   * (i.e. before {@link #setScanoutSource}). Ownership transfers to the
-   * Drawable; the next consumer of {@link #takeAcquireFenceFd} takes
-   * ownership in turn. If the previous fence is still set (consumer hasn't
-   * taken it yet), this method closes the previous fence to avoid a leak.
-   * Pass {@code -1} to clear without setting a new fence.
-   */
-  public void setAcquireFenceFd(int fd) {
-    int prior = acquireFenceFd.getAndSet(fd);
-    if (prior >= 0 && prior != fd) {
-      try {
-        android.os.ParcelFileDescriptor.adoptFd(prior).close();
-      } catch (java.io.IOException ignored) {
-        // best-effort close; the FD is still leaked but we did our part
-      }
-    }
+  public short getScanoutY() {
+    return scanoutY;
+  }
+
+  public void setPresentedSourceSize(int width, int height) {
+    this.presentedSourceWidth = (short) Math.max(0, Math.min(Short.MAX_VALUE, width));
+    this.presentedSourceHeight = (short) Math.max(0, Math.min(Short.MAX_VALUE, height));
+    this.presentedSourceValid = this.presentedSourceWidth > 0 && this.presentedSourceHeight > 0;
+  }
+
+  public boolean hasPresentedSourceSize() {
+    return presentedSourceValid;
+  }
+
+  public short getPresentedSourceWidth() {
+    return presentedSourceWidth;
+  }
+
+  public short getPresentedSourceHeight() {
+    return presentedSourceHeight;
+  }
+
+  private void markTextureDirty(int x, int y, int width, int height) {
+    hasContent = true;
+    if (texture != null) texture.markDirty(x, y, width, height, this.width, this.height);
   }
 
   public ByteBuffer getData() {
     return data;
+  }
+
+  public boolean hasContent() {
+    return hasContent;
   }
 
   public void setData(ByteBuffer data) {
@@ -154,6 +146,7 @@ public class Drawable extends XResource {
       throw new IllegalArgumentException("Attempting to set Drawable.data to null!");
     }
     this.data = data;
+    hasContent = true;
   }
 
   public void setDirectScanout(boolean value) {
@@ -162,6 +155,36 @@ public class Drawable extends XResource {
 
   public boolean isDirectScanout() {
     return directScanout;
+  }
+
+  /**
+   * Atomic read-and-clear of the acquire fence FD: returns the current value
+   * (or -1 if none) AND resets the field to -1 in a single CAS. Single-consumer
+   * "take" semantics — the caller now owns the FD and is responsible for
+   * either closing it or transferring ownership (e.g. to
+   * ASurfaceTransaction_setBuffer, which closes it via the framework).
+   */
+  public int takeAcquireFenceFd() {
+    return acquireFenceFd.getAndSet(-1);
+  }
+
+  /**
+   * Sets the producer acquire fence FD. Should be called by Present/DRI3
+   * extension code immediately before the buffer is published. Ownership
+   * transfers to this Drawable; the next consumer of
+   * {@link #takeAcquireFenceFd} takes ownership in turn. If the previous fence
+   * is still set (consumer hasn't taken it yet), this method closes the
+   * previous fence to avoid a leak. Pass {@code -1} to clear without setting.
+   */
+  public void setAcquireFenceFd(int fd) {
+    int prior = acquireFenceFd.getAndSet(fd);
+    if (prior >= 0 && prior != fd) {
+      try {
+        android.os.ParcelFileDescriptor.adoptFd(prior).close();
+      } catch (java.io.IOException ignored) {
+        // best-effort close
+      }
+    }
   }
 
   private short getStride() {
@@ -211,7 +234,11 @@ public class Drawable extends XResource {
     this.data.rewind();
     data.rewind();
 
-    texture.setNeedsUpdate(true);
+    if (depth == 1) {
+      markTextureDirty(0, 0, width, height);
+    } else {
+      markTextureDirty(dstX, dstY, width, height);
+    }
     if (onDrawListener != null) onDrawListener.run();
   }
 
@@ -287,7 +314,7 @@ public class Drawable extends XResource {
     this.data.rewind();
     drawable.data.rewind();
 
-    texture.setNeedsUpdate(true);
+    markTextureDirty(dstX, dstY, width, height);
     if (onDrawListener != null) onDrawListener.run();
   }
 
@@ -306,7 +333,7 @@ public class Drawable extends XResource {
         (short) x, (short) y, (short) width, (short) height, color, this.getStride(), this.data);
     this.data.rewind();
 
-    texture.setNeedsUpdate(true);
+    markTextureDirty(x, y, width, height);
     if (onDrawListener != null) onDrawListener.run();
   }
 
@@ -336,7 +363,11 @@ public class Drawable extends XResource {
 
     this.data.rewind();
 
-    texture.setNeedsUpdate(true);
+    int minX = Math.min(x0, x1);
+    int minY = Math.min(y0, y1);
+    int maxX = Math.max(x0, x1) + lineWidth;
+    int maxY = Math.max(y0, y1) + lineWidth;
+    markTextureDirty(minX, minY, maxX - minX, maxY - minY);
     if (onDrawListener != null) onDrawListener.run();
   }
 
@@ -362,7 +393,7 @@ public class Drawable extends XResource {
         this.data);
     this.data.rewind();
 
-    texture.setNeedsUpdate(true);
+    markTextureDirty(0, 0, width, height);
     if (onDrawListener != null) onDrawListener.run();
   }
 

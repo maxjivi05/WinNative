@@ -8,9 +8,45 @@ plugins {
     alias(libs.plugins.spotless)
 }
 
+/*
+abstract class InstallVulkanValidationLayerTask extends DefaultTask {
+    @Input
+    abstract Property<String> getLayerVersion()
+
+    @OutputFile
+    abstract RegularFileProperty getOutputFile()
+
+    @TaskAction
+    void install() {
+        def version = layerVersion.get()
+        def zipFile = new File(temporaryDir, "android-binaries-${version}.zip")
+        if (!zipFile.exists()) {
+            temporaryDir.mkdirs()
+            def url = new URL("https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases/download/vulkan-sdk-${version}/android-binaries-${version}.zip")
+            url.withInputStream { input ->
+                zipFile.withOutputStream { output -> output << input }
+            }
+        }
+
+        def targetFile = outputFile.get().asFile
+        targetFile.parentFile.mkdirs()
+        new java.util.zip.ZipFile(zipFile).withCloseable { zip ->
+            def entry = zip.entries().find {
+                it.name.endsWith("/arm64-v8a/libVkLayer_khronos_validation.so")
+            }
+            if (entry == null) {
+                throw new GradleException("arm64-v8a Vulkan validation layer not found in ${zipFile.name}")
+            }
+            zip.getInputStream(entry).withCloseable { input ->
+                targetFile.withOutputStream { output -> output << input }
+            }
+        }
+    }
+}
+*/
+
 task checkSubmodules {
-    // Resolve the file path during the configuration phase so we don't
-    // pass the Gradle Project object into the execution closure (which breaks the Configuration Cache).
+    // Keep the execution closure configuration-cache friendly.
     def submodulePath = file("src/main/cpp/adrenotools").absolutePath
 
     doFirst {
@@ -23,6 +59,67 @@ task checkSubmodules {
 
 preBuild.dependsOn(checkSubmodules)
 
+abstract class FetchLibretroDroidTask extends DefaultTask {
+    @Input
+    abstract Property<String> getTag()
+
+    @Input
+    abstract Property<String> getSha256()
+
+    @OutputFile
+    abstract RegularFileProperty getOutputFile()
+
+    static String digestOf(File file) {
+        def digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.withInputStream { input ->
+            byte[] buffer = new byte[1 << 16]
+            int read
+            while ((read = input.read(buffer)) >= 0) digest.update(buffer, 0, read)
+        }
+        digest.digest().collect { String.format("%02x", it) }.join()
+    }
+
+    @TaskAction
+    void fetch() {
+        def expected = sha256.get()
+        def target = outputFile.get().asFile
+        if (target.isFile() && digestOf(target) == expected) return
+
+        target.parentFile.mkdirs()
+        def source = "https://github.com/WinNative-Emu/LibretroDroid/releases/download/${tag.get()}/libretrodroid.aar"
+        def staging = new File(target.parentFile, target.name + ".part")
+        new URL(source).withInputStream { input ->
+            staging.withOutputStream { output -> output << input }
+        }
+
+        def actual = digestOf(staging)
+        if (actual != expected) {
+            staging.delete()
+            throw new GradleException("libretrodroid.aar from ${tag.get()} has checksum ${actual}, expected ${expected}")
+        }
+        target.delete()
+        staging.renameTo(target)
+    }
+}
+
+def libretroDroidPin = rootProject.file("tools/libretrodroid.version").readLines()
+        .collect { it.trim() }
+        .findAll { !it.isEmpty() }
+def libretroDroidAar = layout.buildDirectory.file("libretrodroid/libretrodroid.aar")
+
+def fetchLibretroDroid = tasks.register("fetchLibretroDroid", FetchLibretroDroidTask) {
+    tag.set(libretroDroidPin[0])
+    sha256.set(libretroDroidPin[1])
+    outputFile.set(libretroDroidAar)
+}
+
+/*
+def installVulkanValidationLayer = tasks.register("installVulkanValidationLayer", InstallVulkanValidationLayerTask) {
+    layerVersion.set("1.4.341.0")
+    outputFile.set(layout.projectDirectory.file("src/debug/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so"))
+}
+*/
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -30,6 +127,9 @@ ksp {
 def appVersionName = providers.gradleProperty("VERSION_NAME")
         .orElse(providers.environmentVariable("VERSION_NAME"))
         .getOrElse("Nightly")
+
+def coldClientVersionFile = rootProject.file("tools/gbe_fork.version")
+def coldClientVersion = coldClientVersionFile.exists() ? coldClientVersionFile.text.trim() : "unknown"
 
 android {
     namespace 'com.winlator.cmod'
@@ -39,13 +139,15 @@ android {
         applicationId "com.winnative.cmod"
         minSdk 26
         targetSdk 28
-        versionCode 21
+        versionCode 2
         versionName appVersionName
 
         externalNativeBuild {
             cmake {
                 cppFlags ''
-                arguments "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384", "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
+                arguments "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384",
+                          "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-z,max-page-size=16384",
+                          "-DANDROID_STL=c++_shared"
             }
         }
 
@@ -53,13 +155,14 @@ android {
             abiFilters 'arm64-v8a'
         }
 
-        resConfigs "en", "da", "de", "es", "fr", "it", "ko", "pl", "pt-rBR", "ro", "uk", "zh-rCN", "zh-rTW"
+        resConfigs "en", "da", "de", "es", "b+es+419", "fi", "fr", "hi", "it", "ja", "ko", "no", "pl", "pt", "pt-rBR", "ro", "ru", "sv", "th", "tr", "uk", "zh-rCN", "zh-rTW"
 
-        buildConfigField("boolean", "GOLD", "false")
-        buildConfigField("String", "POSTHOG_API_KEY", "\"\"")
-        buildConfigField("String", "POSTHOG_HOST", "\"\"")
-        buildConfigField("String", "SUPABASE_URL", "\"\"")
-        buildConfigField("String", "SUPABASE_KEY", "\"\"")
+        buildConfigField("String", "COLD_CLIENT_VERSION", "\"${coldClientVersion}\"")
+        buildConfigField "String", "RESHADE_CATALOG_URL", "\"https://raw.githubusercontent.com/nicholasx417/WinNative-Components/main/Reshade.json\""
+    }
+
+    androidResources {
+        noCompress += ['tzst', 'txz']
     }
 
     compileOptions {
@@ -92,11 +195,14 @@ android {
     buildTypes {
         debug {
             minifyEnabled false
-            // Use release signing if available, otherwise fall back to default debug signing
+            proguardFiles 'proguard-rules.pro'
+            // Prefer release signing when configured.
             signingConfig signingConfigs.release.storeFile != null ? signingConfigs.release : signingConfigs.debug
         }
         release {
             minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                          'proguard-rules.pro'
             signingConfig signingConfigs.release
         }
     }
@@ -116,6 +222,10 @@ android {
             dimension "branding"
             applicationId "com.tencent.ig"
         }
+        antutu {
+            dimension "branding"
+            applicationId "com.antutu.ABenchMark"
+        }
     }
 
     ndkVersion '27.3.13750724'
@@ -132,15 +242,10 @@ android {
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
         jniLibs {
+            // PulseAudio runs libpulseaudio.so directly from nativeLibraryDir and loads
+            // libpulse*/libltdl/libsndfile as its dependencies, so these must be packaged
+            // and extracted to disk (useLegacyPackaging) rather than excluded.
             useLegacyPackaging = true
-            excludes += [
-                    "lib/arm64-v8a/libltdl.so",
-                    "lib/arm64-v8a/libpulseaudio.so",
-                    "lib/arm64-v8a/libpulse.so",
-                    "lib/arm64-v8a/libpulsecommon-13.0.so",
-                    "lib/arm64-v8a/libpulsecore-13.0.so",
-                    "lib/arm64-v8a/libsndfile.so"
-            ]
         }
     }
 
@@ -148,6 +253,7 @@ android {
         compose true
         viewBinding true
         buildConfig true
+        prefab true   // native Steam/runtime components link OpenSSL + curl via NDK Prefab AARs
     }
 
     sourceSets {
@@ -157,13 +263,24 @@ android {
                     'src/main/feature',
                     'src/main/sharedmemory',
                     'src/main/runtime',
-                    'src/main/shared'
+                    'src/main/shared',
+                    // SDL2 and love-android glue, vendored for the 3D engine.
+                    // Their class names are a JNI contract with liblove.so and
+                    // cannot be renamed or repackaged, so they are kept apart
+                    // from WinNative's own sources with their upstream licence
+                    // headers intact. See EMULATOR_CREDITS.md.
+                    'src/main/engine'
             ]
         }
     }
 
     applicationVariants.configureEach { variant ->
         if (variant.buildType.name == "debug") {
+/*
+            tasks.named("pre${variant.name.capitalize()}Build").configure {
+                dependsOn installVulkanValidationLayer
+            }
+*/
             variant.outputs.configureEach { output ->
                 output.outputFileName = "${variant.flavorName}.apk"
             }
@@ -176,8 +293,8 @@ dependencies {
 
     implementation libs.okhttp
     implementation libs.okhttpDnsOverHttps
-    implementation libs.okhttpLoggingInterceptor
     implementation libs.serializationJson
+    implementation 'org.yaml:snakeyaml:2.2'
 
     implementation libs.jwtDecode
     implementation libs.securityCrypto
@@ -197,7 +314,6 @@ dependencies {
     implementation libs.composeMaterialIconsExtended
     implementation libs.activityCompose
     implementation libs.navigationCompose
-    implementation libs.lifecycleRuntimeCompose
     implementation libs.lifecycleViewmodelCompose
     implementation libs.composeUiTextGoogleFonts
     implementation libs.coilCompose
@@ -207,9 +323,7 @@ dependencies {
     implementation libs.zxingCore
     implementation libs.commonsIo
     implementation libs.commonsLang3
-    implementation libs.protobufJava
     implementation("com.github.luben:zstd-jni:${libs.versions.zstdJni.get()}@aar")
-    implementation libs.bouncyCastle
     implementation libs.flexbox
 
     implementation libs.appcompat
@@ -224,13 +338,18 @@ dependencies {
     implementation libs.recyclerview
     implementation libs.coreKtx
 
-    implementation libs.javaSteam
-    implementation libs.javaSteamDepotDownloader
+
+    implementation 'com.android.ndk.thirdparty:openssl:1.1.1q-beta-1'
+    implementation 'com.android.ndk.thirdparty:curl:7.85.0-beta-1'
 
     implementation libs.playServicesGamesV2
-    implementation libs.playServicesAuth
 
     implementation libs.workRuntimeKtx
+
+    implementation files(libretroDroidAar) { builtBy fetchLibretroDroid }
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.5.1'
+    implementation project(':armsx2')
+    implementation project(':dolphin')
 }
 
 spotless {

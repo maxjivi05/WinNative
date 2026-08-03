@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.util.Base64
+import android.util.Log
 import android.widget.Toast
 import androidx.room.withTransaction
 import com.winlator.cmod.BuildConfig
@@ -20,6 +21,7 @@ import com.winlator.cmod.feature.stores.steam.data.CachedLicense
 import com.winlator.cmod.feature.stores.steam.data.DepotInfo
 import com.winlator.cmod.feature.stores.steam.data.DownloadFailedException
 import com.winlator.cmod.feature.stores.steam.data.DownloadInfo
+import com.winlator.cmod.feature.stores.steam.data.WnDownloadTransientException
 import com.winlator.cmod.feature.stores.steam.data.DownloadingAppInfo
 import com.winlator.cmod.feature.stores.steam.data.EncryptedAppTicket
 import com.winlator.cmod.feature.stores.steam.data.GameProcessInfo
@@ -30,6 +32,7 @@ import com.winlator.cmod.feature.stores.steam.data.PostSyncInfo
 import com.winlator.cmod.feature.stores.steam.data.SteamApp
 import com.winlator.cmod.feature.stores.steam.data.SteamControllerConfigDetail
 import com.winlator.cmod.feature.stores.steam.data.SteamFriend
+import com.winlator.cmod.feature.stores.steam.data.SteamFriendEntry
 import com.winlator.cmod.feature.stores.steam.data.SteamLicense
 import com.winlator.cmod.feature.stores.steam.data.UserFileInfo
 import com.winlator.cmod.feature.stores.steam.db.dao.AppInfoDao
@@ -40,7 +43,6 @@ import com.winlator.cmod.feature.stores.steam.db.dao.EncryptedAppTicketDao
 import com.winlator.cmod.feature.stores.steam.db.dao.FileChangeListsDao
 import com.winlator.cmod.feature.stores.steam.db.dao.SteamAppDao
 import com.winlator.cmod.feature.stores.steam.db.dao.SteamLicenseDao
-import com.winlator.cmod.feature.stores.steam.enums.AppType
 import com.winlator.cmod.feature.stores.steam.enums.ControllerSupport
 import com.winlator.cmod.feature.stores.steam.enums.DownloadPhase
 import com.winlator.cmod.feature.stores.steam.enums.GameSource
@@ -53,9 +55,25 @@ import com.winlator.cmod.feature.stores.steam.enums.SaveLocation
 import com.winlator.cmod.feature.stores.steam.enums.SyncResult
 import com.auth0.android.jwt.JWT
 import com.winlator.cmod.feature.stores.common.StoreAuthStatus
+import com.winlator.cmod.feature.stores.common.StoreArtworkCache
 import com.winlator.cmod.feature.stores.common.StoreInstallPathSafety
 import com.winlator.cmod.feature.stores.steam.events.AndroidEvent
 import com.winlator.cmod.feature.stores.steam.events.SteamEvent
+import com.winlator.cmod.feature.stores.steam.inventorygen.InventoryItemsGenerator
+import com.winlator.cmod.feature.stores.steam.wnsteam.CaBundleExtractor
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnAuthCallback
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnDownloadListener
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnAuthResult
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnAuthenticator
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnLibraryStore
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnQrCallback
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnSteamSession
+import com.winlator.cmod.feature.stores.steam.wnsteam.WnSteamStateObserver
+import com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlin.coroutines.resume
 import com.winlator.cmod.feature.stores.steam.statsgen.StatType
 import com.winlator.cmod.feature.stores.steam.statsgen.StatsAchievementsGenerator
 import com.winlator.cmod.feature.stores.steam.statsgen.VdfParser
@@ -65,78 +83,32 @@ import com.winlator.cmod.feature.stores.steam.utils.MarkerUtils
 import com.winlator.cmod.feature.stores.steam.utils.Net
 import com.winlator.cmod.feature.stores.steam.utils.PrefManager
 import com.winlator.cmod.feature.stores.steam.utils.SteamUtils
+import com.winlator.cmod.feature.stores.steam.utils.WnKeyValue
 import com.winlator.cmod.feature.stores.steam.utils.generateSteamApp
+import com.winlator.cmod.feature.steamcloudsync.SteamAutoCloud
 import com.winlator.cmod.feature.sync.google.CloudSyncManager
 import com.winlator.cmod.runtime.container.Container
 import com.winlator.cmod.runtime.container.ContainerManager
 import com.winlator.cmod.runtime.display.environment.ImageFs
 import com.winlator.cmod.runtime.system.GPUInformation
+import com.winlator.cmod.runtime.system.SessionKeepAliveService
 import com.winlator.cmod.shared.android.AppTerminationHelper
 import com.winlator.cmod.shared.ui.toast.WinToast
 import com.winlator.cmod.shared.android.NotificationHelper
 import com.winlator.cmod.shared.io.StorageUtils
 import dagger.hilt.android.AndroidEntryPoint
-import `in`.dragonbra.javasteam.base.ClientMsgProtobuf
-import `in`.dragonbra.javasteam.depotdownloader.DepotDownloader
-import `in`.dragonbra.javasteam.depotdownloader.IDownloadListener
-import `in`.dragonbra.javasteam.depotdownloader.Steam3Session
-import `in`.dragonbra.javasteam.depotdownloader.data.AppItem
-import `in`.dragonbra.javasteam.depotdownloader.data.DownloadItem
-import `in`.dragonbra.javasteam.enums.EDepotFileFlag
-import `in`.dragonbra.javasteam.enums.ELicenseFlags
-import `in`.dragonbra.javasteam.enums.EMsg
-import `in`.dragonbra.javasteam.enums.EOSType
-import `in`.dragonbra.javasteam.enums.EPersonaState
-import `in`.dragonbra.javasteam.enums.EResult
-import `in`.dragonbra.javasteam.networking.steam3.ProtocolTypes
-import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesAuthSteamclient.CAuthentication_PollAuthSessionStatus_Request
-import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesClientObjects.ECloudPendingRemoteOperation
-import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesClientserverUserstats
-import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesFamilygroupsSteamclient
-import `in`.dragonbra.javasteam.rpc.service.Authentication
-import `in`.dragonbra.javasteam.rpc.service.FamilyGroups
-import `in`.dragonbra.javasteam.steam.authentication.AuthPollResult
-import `in`.dragonbra.javasteam.steam.authentication.AuthSessionDetails
-import `in`.dragonbra.javasteam.steam.authentication.AuthenticationException
-import `in`.dragonbra.javasteam.steam.authentication.IAuthenticator
-import `in`.dragonbra.javasteam.steam.authentication.IChallengeUrlChanged
-import `in`.dragonbra.javasteam.steam.authentication.QrAuthSession
-import `in`.dragonbra.javasteam.steam.discovery.FileServerListProvider
-import `in`.dragonbra.javasteam.steam.discovery.ServerQuality
-import `in`.dragonbra.javasteam.steam.handlers.steamapps.GamePlayedInfo
-import `in`.dragonbra.javasteam.steam.handlers.steamapps.License
-import `in`.dragonbra.javasteam.steam.handlers.steamapps.PICSRequest
-import `in`.dragonbra.javasteam.steam.handlers.steamapps.SteamApps
-import `in`.dragonbra.javasteam.steam.handlers.steamapps.callback.LicenseListCallback
-import `in`.dragonbra.javasteam.steam.handlers.steamcloud.SteamCloud
-import `in`.dragonbra.javasteam.steam.handlers.steamfriends.SteamFriends
-import `in`.dragonbra.javasteam.steam.handlers.steamfriends.callback.PersonaStateCallback
-import `in`.dragonbra.javasteam.steam.handlers.steamgameserver.SteamGameServer
-import `in`.dragonbra.javasteam.steam.handlers.steammasterserver.SteamMasterServer
-import `in`.dragonbra.javasteam.steam.handlers.steamscreenshots.SteamScreenshots
-import `in`.dragonbra.javasteam.steam.handlers.steamunifiedmessages.SteamUnifiedMessages
-import `in`.dragonbra.javasteam.steam.handlers.steamuser.ChatMode
-import `in`.dragonbra.javasteam.steam.handlers.steamuser.LogOnDetails
-import `in`.dragonbra.javasteam.steam.handlers.steamuser.SteamUser
-import `in`.dragonbra.javasteam.steam.handlers.steamuser.callback.LoggedOffCallback
-import `in`.dragonbra.javasteam.steam.handlers.steamuser.callback.LoggedOnCallback
-import `in`.dragonbra.javasteam.steam.handlers.steamuser.callback.PlayingSessionStateCallback
-import `in`.dragonbra.javasteam.steam.handlers.steamuserstats.Stats
-import `in`.dragonbra.javasteam.steam.handlers.steamuserstats.SteamUserStats
-import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.SteamWorkshop
-import `in`.dragonbra.javasteam.steam.steamclient.AsyncJobFailedException
-import `in`.dragonbra.javasteam.steam.steamclient.SteamClient
-import `in`.dragonbra.javasteam.steam.steamclient.callbackmgr.CallbackManager
-import `in`.dragonbra.javasteam.steam.steamclient.callbacks.ConnectedCallback
-import `in`.dragonbra.javasteam.steam.steamclient.callbacks.DisconnectedCallback
-import `in`.dragonbra.javasteam.steam.steamclient.configuration.SteamConfiguration
-import `in`.dragonbra.javasteam.types.DepotManifest
-import `in`.dragonbra.javasteam.types.FileData
-import `in`.dragonbra.javasteam.types.KeyValue
-import `in`.dragonbra.javasteam.types.PublishedFileID
-import `in`.dragonbra.javasteam.types.SteamID
-import `in`.dragonbra.javasteam.util.log.LogListener
-import `in`.dragonbra.javasteam.util.log.LogManager
+import com.winlator.cmod.feature.stores.steam.enums.EDepotFileFlag
+import com.winlator.cmod.feature.stores.steam.enums.ELicenseFlags
+import com.winlator.cmod.feature.stores.steam.enums.ELicenseType
+import com.winlator.cmod.feature.stores.steam.enums.EPaymentMethod
+import com.winlator.cmod.feature.stores.steam.enums.EOSType
+import com.winlator.cmod.feature.stores.steam.enums.EPersonaState
+import com.winlator.cmod.feature.stores.steam.enums.EResult
+import com.winlator.cmod.feature.stores.steam.data.AsyncJobFailedException
+import com.winlator.cmod.feature.stores.steam.data.GamePlayedInfo
+import com.winlator.cmod.feature.stores.steam.data.PICSRequest
+import com.winlator.cmod.feature.stores.steam.data.SteamID
+import com.winlator.cmod.feature.stores.steam.utils.KeyValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -151,7 +123,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.filter
@@ -165,12 +139,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.FormBody
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import timber.log.Timber
-import java.io.Closeable
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -181,41 +153,25 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.Collections
+import java.util.Date
 import java.util.EnumSet
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import kotlin.io.path.pathString
 import kotlin.time.Duration.Companion.seconds
 
+internal fun JSONArray?.toIntList(): List<Int> {
+    val len = this?.length() ?: 0
+    if (len == 0) return emptyList()
+    val out = ArrayList<Int>(len)
+    for (i in 0 until len) out.add(this!!.getInt(i))
+    return out
+}
+
 @AndroidEntryPoint
-class SteamService :
-    Service(),
-    IChallengeUrlChanged {
-    // To view log messages in android logcat properly
-    private val logger =
-        object : LogListener {
-            override fun onLog(
-                clazz: Class<*>,
-                message: String?,
-                throwable: Throwable?,
-            ) {
-                val logMessage = message ?: "No message given"
-                Timber.i(throwable, "[${clazz.simpleName}] -> $logMessage")
-            }
-
-            override fun onError(
-                clazz: Class<*>,
-                message: String?,
-                throwable: Throwable?,
-            ) {
-                val logMessage = message ?: "No message given"
-                Timber.e(throwable, "[${clazz.simpleName}] -> $logMessage")
-            }
-        }
-
+class SteamService : Service() {
     @Inject
     lateinit var db: PluviaDatabase
 
@@ -243,27 +199,34 @@ class SteamService :
     @Inject
     lateinit var downloadingAppInfoDao: DownloadingAppInfoDao
 
-    private lateinit var notificationHelper: NotificationHelper
+    internal lateinit var notificationHelper: NotificationHelper
 
-    internal var callbackManager: CallbackManager? = null
-    internal var steamClient: SteamClient? = null
-    internal val callbackSubscriptions: ArrayList<Closeable> = ArrayList()
+    internal var _unifiedFriends: SteamUnifiedFriends? = null
 
-    private var _unifiedFriends: SteamUnifiedFriends? = null
-    private var _steamUser: SteamUser? = null
-    private var _steamApps: SteamApps? = null
-    private var _steamFriends: SteamFriends? = null
-    private var _steamCloud: SteamCloud? = null
-    private var _steamUserStats: SteamUserStats? = null
-    private var _steamFamilyGroups: FamilyGroups? = null
+    internal var _loginResult: LoginResult = LoginResult.Failed
 
-    private var _loginResult: LoginResult = LoginResult.Failed
+    internal var retryAttempt = 0
 
-    private var licenses: List<License> = emptyList()
+    // Auto-reconnect coroutine for the C++ WN-Steam-Client session.
+    @Volatile internal var connectJob: Job? = null
 
-    private var retryAttempt = 0
+    // Pending backoff-delayed reconnect scheduled by onWnDisconnected.
+    @Volatile internal var reconnectJob: Job? = null
 
-    private val appPicsChannel =
+    // Resets retryAttempt to 0 only after the session stays up STABLE_CONNECTION_MS; a flapping connection must not reset it (unbounded reconnect / battery drain).
+    @Volatile internal var stableConnectionJob: Job? = null
+    @Volatile internal var refreshTokenWatchdogJob: Job? = null
+
+    // App-lifecycle gating: while backgrounded with nothing needing Steam (no download, no running game) the session is suspended — disconnected, reconnect/PICS loops cancelled — to draw no power; wakes on foreground. Driven from PluviaApp lifecycle callbacks.
+    @Volatile internal var appInForeground = true
+    @Volatile internal var suspendedForBackground = false
+
+    @Volatile internal var suspendedForBionic = false
+
+    // Cancellable timer deferring the background suspend by BACKGROUND_IDLE_GRACE_MS — see scheduleBackgroundSuspendCheck.
+    @Volatile internal var backgroundIdleJob: Job? = null
+
+    internal val appPicsChannel =
         Channel<List<PICSRequest>>(
             capacity = 1_000,
             onBufferOverflow = BufferOverflow.SUSPEND,
@@ -272,7 +235,7 @@ class SteamService :
             },
         )
 
-    private val packagePicsChannel =
+    internal val packagePicsChannel =
         Channel<List<PICSRequest>>(
             capacity = 1_000,
             onBufferOverflow = BufferOverflow.SUSPEND,
@@ -281,9 +244,9 @@ class SteamService :
             },
         )
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    internal val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val onEndProcess: (AndroidEvent.EndProcess) -> Unit = {
+    internal val onEndProcess: (AndroidEvent.EndProcess) -> Unit = {
         Companion.stop()
     }
 
@@ -292,9 +255,8 @@ class SteamService :
 
     private val appTokens: ConcurrentHashMap<Int, Long> = ConcurrentHashMap()
 
-    // Add these as class properties
-    private var picsGetProductInfoJob: Job? = null
-    private var picsChangesCheckerJob: Job? = null
+    internal var picsGetProductInfoJob: Job? = null
+    internal var picsChangesCheckerJob: Job? = null
     private var friendCheckerJob: Job? = null
 
     private val _isPlayingBlocked = MutableStateFlow(false)
@@ -307,9 +269,35 @@ class SteamService :
         )
     val localPersona = _localPersona.asStateFlow()
 
+    internal val _friendsList = MutableStateFlow<List<SteamFriendEntry>>(emptyList())
+    val friendsList = _friendsList.asStateFlow()
+
+    internal val _incomingChat =
+        MutableSharedFlow<Pair<Long, com.winlator.cmod.feature.stores.steam.data.SteamChatMessage>>(
+            replay = 32,
+            extraBufferCapacity = 256,
+        )
+    val incomingChat = _incomingChat.asSharedFlow()
+
+    internal val _unreadCounts = MutableStateFlow<Map<Long, Int>>(emptyMap())
+    val unreadCounts = _unreadCounts.asStateFlow()
+
+    internal val _recentChats = MutableStateFlow<Map<Long, Long>>(emptyMap())
+    val recentChats = _recentChats.asStateFlow()
+
+    internal val activeConversations = java.util.concurrent.ConcurrentHashMap<Long, Int>()
+    internal var messagePollerJob: Job? = null
+
     data class ManifestSizes(
         val installSize: Long = 0L,
         val downloadSize: Long = 0L,
+    )
+
+    data class SteamUpdateInfo(
+        val hasUpdate: Boolean = false,
+        val downloadSize: Long = 0L,
+        val depotIds: List<Int> = emptyList(),
+        val message: String? = null,
     )
 
     companion object {
@@ -317,27 +305,40 @@ class SteamService :
 
         const val MAX_RETRY_ATTEMPTS = 20
 
+        // Session must stay logged on this long before its reconnect counts as successful and resets the retry budget.
+        private const val STABLE_CONNECTION_MS = 60_000L
+
+        // Reconnect backoff cap — even a permanently-flapping connection reconnects at most once per this interval.
+        internal const val RECONNECT_BACKOFF_CAP_MS = 5 * 60_000L
+
+        // connectAndLogon gives up after this many consecutive failed bring-up attempts (exponential backoff) instead of retrying a doomed logon forever.
+        internal const val CONNECT_LOGON_MAX_ATTEMPTS = 8
+
+        internal const val REFRESH_TOKEN_ROTATION_THRESHOLD_DAYS = 7
+        internal const val REFRESH_TOKEN_ROTATION_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
+
+        // Grace before a backgrounded session may suspend, so a brief app-switch doesn't thrash disconnect/reconnect (battery drain). While connection-critical work runs the check repeats once per interval.
+        internal const val BACKGROUND_IDLE_GRACE_MS = 60_000L
+
+        // Stay fully offline this long after a PlanW game closes so Steam reaps the launcher's games-played registration (else next launch hits AlreadyRunning 0x10).
+        internal const val WN_PLANW_REAP_OFFLINE_MS = 10_000L
+
         const val INVALID_APP_ID: Int = Int.MAX_VALUE
         const val INVALID_PKG_ID: Int = Int.MAX_VALUE
-        private const val STEAM_CONTROLLER_CONFIG_FILENAME = "steam_controller_config.vdf"
-        private const val DOWNLOAD_INFO_DIR = ".DownloadInfo"
-        private const val DOWNLOAD_INFO_FILE = "depot_bytes.json"
-        private const val LEGACY_DOWNLOAD_INFO_FILE = "bytes_downloaded.txt"
-        private const val COMPONENTS_BASE_URL = "https://github.com/maxjivi05/Components/releases/download/Components"
+        internal const val STEAM_CONTROLLER_CONFIG_FILENAME = "steam_controller_config.vdf"
+        internal const val DOWNLOAD_INFO_DIR = ".DownloadInfo"
+        internal const val DOWNLOAD_INFO_FILE = "depot_bytes.json"
+        internal const val LEGACY_DOWNLOAD_INFO_FILE = "bytes_downloaded.txt"
+        internal const val COMPONENTS_BASE_URL = "https://github.com/maxjivi05/Components/releases/download/Components"
         @Volatile
         private var startupMetadataRepairJob: Job? = null
 
-        /**
-         * Default timeout to use when making requests
-         */
+        /** Default timeout when making requests. */
         var requestTimeout = 30.seconds
 
-        /**
-         * Default timeout to use when reading the response body
-         */
+        /** Default timeout when reading the response body. */
         var responseTimeout = 120.seconds
 
-        private val PROTOCOL_TYPES = EnumSet.of(ProtocolTypes.WEB_SOCKET)
 
         internal var instance: SteamService? = null
 
@@ -351,20 +352,13 @@ class SteamService :
             cachedAchievementsAppId = null
         }
 
-        private fun downloadUrlsFor(fileName: String): List<String> {
-            val alternate =
-                when (fileName) {
-                    "steam-token.tzst" -> "steam-token-r2.tzst"
-                    else -> null
-                }
-            return if (alternate != null) {
-                listOf(
-                    "$COMPONENTS_BASE_URL/$fileName",
-                    "$COMPONENTS_BASE_URL/$alternate",
-                )
-            } else {
-                listOf("$COMPONENTS_BASE_URL/$fileName")
-            }
+        // Generate (CM schema + unlock state) and return achievements for a game.
+        suspend fun loadAchievements(
+            appId: Int,
+            configDirectory: String,
+        ): List<com.winlator.cmod.feature.stores.steam.statsgen.Achievement> {
+            runCatching { generateAchievements(appId, configDirectory) }
+            return if (cachedAchievementsAppId == appId) cachedAchievements ?: emptyList() else emptyList()
         }
 
         fun pauseAll() {
@@ -379,6 +373,79 @@ class SteamService :
 
         fun resumeAll() {
             DownloadCoordinator.runOnScope { DownloadCoordinator.resumeAll() }
+        }
+
+        fun bionicHandoffAcquire() {
+            instance?.bionicHandoffAcquireImpl()
+        }
+
+        fun bionicHandoffRelease() {
+            instance?.bionicHandoffReleaseImpl()
+        }
+
+        fun bionicHandoffReleaseAndKickPlayingSessionAsync(onlyGame: Boolean = true) {
+            instance?.bionicHandoffReleaseAndKickPlayingSessionAsyncImpl(onlyGame)
+        }
+
+        @JvmStatic
+        fun bionicHandoffReleaseAndKickPlayingSessionBlocking(
+            onlyGame: Boolean = true,
+            maxWaitMs: Long = 4_000L,
+        ): Boolean =
+            runBlocking(Dispatchers.IO) {
+                val svc = instance
+                if (svc == null) {
+                    runCatching {
+                        com.winlator.cmod.feature.stores.steam.wnsteam.WnSteamBootstrap.stop()
+                    }
+                    return@runBlocking false
+                }
+                svc.bionicHandoffReleaseAndKickPlayingSessionBlockingImpl(
+                    onlyGame,
+                    maxWaitMs.coerceAtLeast(0L),
+                )
+            }
+
+        @JvmStatic
+        fun isBionicHandoffActive(): Boolean =
+            instance?.suspendedForBionic == true
+
+        @JvmStatic
+        fun kickPlayingSessionIfReadyBlocking(onlyGame: Boolean = true): Boolean =
+            runBlocking(Dispatchers.IO) {
+                kickPlayingSessionIfReady(onlyGame)
+            }
+
+
+        fun setHybridModeRuntime(enabled: Boolean) {
+            val svc = instance ?: return
+            if (enabled) {
+                if (!isLoggedIn) return                      // takeover fires from onWnLoggedOn on next sign-in
+                if (svc.suspendedForBionic) return           // bootstrap already owns the session
+                svc.scope.launch {
+                    Timber.i("Hybrid mode live-toggle ON — bootstrap takeover")
+                    val renewed = svc.renewRefreshTokenForHandoff()
+                    Timber.i("Hybrid mode live-toggle: token renewal " +
+                        if (renewed) "OK (fresh token saved)"
+                        else "skipped/failed — using existing token")
+                    svc.bionicHandoffAcquireImpl()
+                    delay(1800)
+                    try {
+                        com.winlator.cmod.feature.stores.steam.wnsteam
+                            .WnSteamBootstrap.prewarm(svc.applicationContext)
+                        Timber.i("Hybrid mode live-toggle: bootstrap prewarm dispatched")
+                    } catch (t: Throwable) {
+                        Timber.e(t, "Hybrid mode live-toggle: prewarm failed; reverting")
+                        svc.bionicHandoffReleaseImpl()
+                    }
+                }
+            } else {
+                if (!svc.suspendedForBionic) return           // wn-session already owns
+                svc.scope.launch {
+                    Timber.i("Hybrid mode live-toggle OFF — bringing wn-session back")
+                    svc.bionicHandoffReleaseImpl()
+                }
+            }
         }
 
         fun resumeDownload(appId: Int) {
@@ -397,39 +464,12 @@ class SteamService :
             }
         }
 
-        // The cross-store DownloadCoordinator now owns global queue draining. This legacy
-        // entry point is kept for binary compatibility with any callers that haven't been
-        // migrated; instead of running the old Steam-only queue logic (which would race the
-        // coordinator and double-start downloads) it just delegates to the coordinator.
+        // Legacy entry point kept for binary compat — delegates to the coordinator instead of the old Steam-only queue logic (which would race it and double-start downloads).
         fun checkQueue() {
             DownloadCoordinator.blockingTick()
         }
 
-        private val downloadJobs = ConcurrentHashMap<Int, DownloadInfo>()
-
-        private fun notifyDownloadStarted(appId: Int) {
-            PluviaApp.events.emit(AndroidEvent.DownloadStatusChanged(appId, true))
-        }
-
-        private fun notifyDownloadStopped(appId: Int) {
-            PluviaApp.events.emit(AndroidEvent.DownloadStatusChanged(appId, false))
-        }
-
-        private fun removeDownloadJob(
-            appId: Int,
-            forceRemove: Boolean = false,
-        ) {
-            if (forceRemove) {
-                val removed = downloadJobs.remove(appId)
-                if (removed != null) {
-                    notifyDownloadStopped(appId)
-                }
-            } else {
-                notifyDownloadStopped(appId)
-            }
-            checkQueue()
-            Unit
-        }
+        internal val downloadJobs = ConcurrentHashMap<Int, DownloadInfo>()
 
         fun clearCompletedDownloads() {
             clearCompletedDownloadsInternal(dispatchQueueAfterClear = true)
@@ -440,220 +480,6 @@ class SteamService :
         fun clearCompletedDownloadsForShutdown() {
             clearCompletedDownloadsInternal(dispatchQueueAfterClear = false)
         }
-
-        private fun clearCompletedDownloadsInternal(dispatchQueueAfterClear: Boolean) {
-            val toRemove =
-                downloadJobs
-                    .filterValues {
-                        val status = it.getStatusFlow().value
-                        status == DownloadPhase.COMPLETE ||
-                            status == DownloadPhase.CANCELLED ||
-                            status == DownloadPhase.FAILED
-                    }.keys
-            toRemove.forEach { appId ->
-                val removed = downloadJobs.remove(appId)
-                if (removed != null) {
-                    notifyDownloadStopped(appId)
-                }
-            }
-            if (dispatchQueueAfterClear && toRemove.isNotEmpty()) {
-                checkQueue()
-            }
-        }
-
-        /** Returns true if there is an incomplete download on disk (in-progress marker or actively downloading). */
-        private fun hasPartialDownloadFiles(appDirPath: String): Boolean {
-            val appDir = File(appDirPath)
-            if (!appDir.exists()) return false
-
-            val persistenceFile = File(File(appDirPath, DOWNLOAD_INFO_DIR), DOWNLOAD_INFO_FILE)
-            if (persistenceFile.exists() && persistenceFile.length() > 0L) {
-                return true
-            }
-
-            // If a complete install marker exists and there is no persisted resume file,
-            // treat this as fully installed (not a resumable partial download).
-            if (MarkerUtils.hasMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)) {
-                return false
-            }
-
-            // Check for in-progress marker (this fork's convention)
-            if (MarkerUtils.hasMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)) {
-                return true
-            }
-
-            val rootFiles = appDir.listFiles() ?: return false
-            return rootFiles.any { file ->
-                if (file.name != DOWNLOAD_INFO_DIR) {
-                    true
-                } else {
-                    val nestedFiles = file.listFiles().orEmpty()
-                    nestedFiles.any { nested ->
-                        nested.name != DOWNLOAD_INFO_FILE && nested.name != LEGACY_DOWNLOAD_INFO_FILE
-                    }
-                }
-            }
-        }
-
-        private fun inferResumeDlcAppIds(
-            appId: Int,
-            appDirPath: String,
-        ): List<Int> {
-            // Try to recover selected DLCs from persisted depot progress when metadata row is missing.
-            return runCatching {
-                val persistenceFile = File(File(appDirPath, DOWNLOAD_INFO_DIR), DOWNLOAD_INFO_FILE)
-                if (!persistenceFile.exists() || !persistenceFile.canRead()) return@runCatching emptyList()
-
-                val text = persistenceFile.readText().trim()
-                if (text.isEmpty()) return@runCatching emptyList()
-
-                val persistedDepotIds = mutableSetOf<Int>()
-                val json = JSONObject(text)
-                for (key in json.keys()) {
-                    val depotId = key.toIntOrNull() ?: continue
-                    persistedDepotIds.add(depotId)
-                }
-                if (persistedDepotIds.isEmpty()) return@runCatching emptyList()
-
-                val context = instance!!.applicationContext
-                val container =
-                    if (ContainerUtils.hasContainer(context, "STEAM_$appId")) {
-                        ContainerUtils.getContainer(context, "STEAM_$appId")
-                    } else {
-                        null
-                    }
-                val containerLanguage = container?.language ?: PrefManager.containerLanguage
-                val depots = getDownloadableDepots(appId = appId, preferredLanguage = containerLanguage)
-                depots
-                    .asSequence()
-                    .filter { (depotId, _) -> depotId in persistedDepotIds }
-                    .map { (_, depot) -> depot.dlcAppId }
-                    .filter { it != INVALID_APP_ID }
-                    .distinct()
-                    .toList()
-            }.getOrElse {
-                emptyList()
-            }
-        }
-
-        private fun hasPersistedDepotResumeMetadata(appDirPath: String): Boolean {
-            return runCatching {
-                val persistenceFile = File(File(appDirPath, DOWNLOAD_INFO_DIR), DOWNLOAD_INFO_FILE)
-                if (!persistenceFile.exists() || !persistenceFile.canRead()) return@runCatching false
-
-                val text = persistenceFile.readText().trim()
-                if (text.isEmpty()) return@runCatching false
-
-                val json = JSONObject(text)
-                json.keys().asSequence().any { key -> key.toIntOrNull() != null }
-            }.getOrElse {
-                false
-            }
-        }
-
-        private fun clearPersistedProgressSnapshot(appDirPath: String) {
-            val persistenceDir = File(appDirPath, DOWNLOAD_INFO_DIR)
-            val persistenceFile = File(persistenceDir, DOWNLOAD_INFO_FILE)
-            if (persistenceFile.exists()) {
-                persistenceFile.delete()
-            }
-            val legacyFile = File(persistenceDir, LEGACY_DOWNLOAD_INFO_FILE)
-            if (legacyFile.exists()) {
-                legacyFile.delete()
-            }
-            if (persistenceDir.exists() && persistenceDir.list().isNullOrEmpty()) {
-                persistenceDir.delete()
-            }
-        }
-
-        private fun clearFailedResumeState(appId: Int) {
-            val appDirPath = getAppDirPath(appId)
-            clearPersistedProgressSnapshot(appDirPath)
-            runBlocking(Dispatchers.IO) {
-                instance?.downloadingAppInfoDao?.deleteApp(appId)
-            }
-        }
-
-        private fun deleteRecursivelyWithRetries(
-            target: File,
-            maxAttempts: Int = 5,
-            delayMs: Long = 250L,
-        ): Boolean {
-            if (!target.exists()) return true
-
-            repeat(maxAttempts) {
-                if (target.deleteRecursively()) return true
-                try {
-                    Thread.sleep(delayMs)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    return !target.exists()
-                }
-            }
-
-            return !target.exists()
-        }
-
-        private fun cleanupSteamAppCacheDirs(appId: Int) {
-            steamAppCacheDirs(appId).forEach { dir ->
-                if (!dir.exists()) return@forEach
-                Timber.i("Deleting Steam cache folder for appId $appId: ${dir.absolutePath}")
-                if (!deleteRecursivelyWithRetries(dir)) {
-                    Timber.w("Failed to fully delete Steam cache folder for appId $appId: ${dir.absolutePath}")
-                }
-            }
-        }
-
-        private fun steamAppCacheDirs(appId: Int): List<File> {
-            val appIdString = appId.toString()
-            val dirs = linkedMapOf<String, File>()
-
-            fun addDir(dir: File) {
-                val normalized =
-                    try {
-                        dir.canonicalFile
-                    } catch (_: IOException) {
-                        dir.absoluteFile
-                    }
-                dirs[normalized.path] = normalized
-            }
-
-            fun addSteamAppsRoot(root: File) {
-                addDir(File(root, "staging/$appIdString"))
-                addDir(File(root, "shadercache/$appIdString"))
-            }
-
-            fun addInstallRoot(installRoot: String) {
-                if (installRoot.isBlank()) return
-                val root = File(installRoot)
-                val steamAppsRoot =
-                    if (root.name.equals("common", ignoreCase = true)) {
-                        root.parentFile ?: root
-                    } else {
-                        root
-                    }
-                addSteamAppsRoot(steamAppsRoot)
-            }
-
-            addDir(File(defaultAppStagingPath, appIdString))
-            if (defaultStoragePath.isNotBlank()) {
-                addDir(File(defaultStoragePath, "Steam/steamapps/shadercache/$appIdString"))
-            }
-
-            addInstallRoot(internalAppInstallPath)
-            addInstallRoot(externalAppInstallPath)
-            addInstallRoot(defaultAppInstallPath)
-            allInstallPaths.forEach(::addInstallRoot)
-
-            return dirs.values.toList()
-        }
-
-        private fun steamProtectedInstallRoots(): List<String> =
-            listOf(
-                internalAppInstallPath,
-                externalAppInstallPath,
-                defaultAppInstallPath,
-            ).filter { it.isNotBlank() }.distinct()
 
         fun hasPartialDownload(appId: Int): Boolean {
             if (isAppInstalled(appId)) return false
@@ -687,30 +513,7 @@ class SteamService :
             return false
         }
 
-        private val syncInProgressApps = ConcurrentHashMap<Int, AtomicBoolean>()
-
-        private fun getSyncFlag(appId: Int): AtomicBoolean {
-            val existing = syncInProgressApps[appId]
-            if (existing != null) {
-                return existing
-            }
-            val created = AtomicBoolean(false)
-            val prior = syncInProgressApps.putIfAbsent(appId, created)
-            return prior ?: created
-        }
-
-        private fun tryAcquireSync(appId: Int): Boolean {
-            val flag = getSyncFlag(appId)
-            return flag.compareAndSet(false, true)
-        }
-
-        private fun releaseSync(appId: Int) {
-            val flag = syncInProgressApps[appId]
-            flag?.set(false)
-            if (flag != null && !flag.get()) {
-                syncInProgressApps.remove(appId, flag)
-            }
-        }
+        internal val syncInProgressApps = ConcurrentHashMap<Int, AtomicBoolean>()
 
         // Track whether a game is currently running to prevent premature service stop
         @JvmStatic
@@ -730,75 +533,96 @@ class SteamService :
         var isImporting: Boolean = false
 
         var isStopping: Boolean = false
-            private set
+            internal set
         private val _isConnectedFlow = MutableStateFlow(false)
         val isConnectedFlow = _isConnectedFlow.asStateFlow()
 
-        /**
-         * Pure getter over [isConnectedFlow]. Do not read `steamClient.isConnected` here —
-         * concurrent readers were mutating the flow as a side-effect, producing UI flicker
-         * during CM reconnect gaps. Callbacks (`onConnected` / `onDisconnected` / `clearValues`)
-         * are the only authoritative writers of the flow.
-         */
+        /** Pure getter over [isConnectedFlow] — do not read the live socket here; only callbacks may write the flow, else concurrent reads flicker the UI during CM reconnect gaps. */
         var isConnected: Boolean
             get() = _isConnectedFlow.value
-            private set(value) {
+            internal set(value) {
                 _isConnectedFlow.value = value
             }
 
         var isRunning: Boolean = false
-            private set
+            internal set
         var isLoggingOut: Boolean = false
-            private set
+            internal set
 
-        private val _isLoggedInFlow = MutableStateFlow(false)
+        internal val _isLoggedInFlow = MutableStateFlow(false)
         val isLoggedInFlow = _isLoggedInFlow.asStateFlow()
 
-        /**
-         * Pure getter over [isLoggedInFlow]. Previously this read `steamClient.steamID.isValid`
-         * and wrote the flow as a side-effect, which caused UI flicker whenever any caller
-         * (StoresFragment.onResume, CloudSyncManager.rehydrateSteamSession, the 10s poll) read
-         * the value during a transient CM disconnect. The flow is now only mutated by
-         * authoritative sources: initLoginStatus(), onLoggedOn, onLoggedOff, logOut, clearValues.
-         */
+        // Master chat switch (default on). When off, the Steam session stays logged on for
+        // downloads/library, but the chat layer is killed: offline presence, no message
+        // poller, no friends refresh, no chat overlay/notifications.
+        private val _chatServiceEnabledFlow = MutableStateFlow(true)
+        val chatServiceEnabledFlow = _chatServiceEnabledFlow.asStateFlow()
+
+        /** Flip the master chat switch: persists, updates the reactive flag, and applies at once (presence, poller, overlay). */
+        fun setChatServiceEnabled(context: Context, enabled: Boolean) {
+            PrefManager.chatServiceEnabled = enabled
+            _chatServiceEnabledFlow.value = enabled
+            instance?.applyChatServiceState(enabled)
+            if (!enabled) {
+                com.winlator.cmod.feature.stores.steam.chat.ChatOverlayService.stop(context)
+            } else if (PrefManager.chatHeadsEnabled) {
+                com.winlator.cmod.feature.stores.steam.chat.ChatOverlayService.start(context)
+            }
+        }
+
+        /** Pure getter over [isLoggedInFlow] — never write the flow from a read (caused UI flicker on transient CM disconnect); only authoritative sources mutate it (initLoginStatus, onLoggedOn/Off, logOut, clearValues). */
+        // Invoked by name via reflection from SteamBridge/SteamClientManager — keep in the companion; do not move to an extension file.
         val isLoggedIn: Boolean
             get() = !isLoggingOut && _isLoggedInFlow.value
 
         var isWaitingForQRAuth: Boolean = false
-            private set
+            internal set
 
-        /**
-         * Keeps [isConnectedFlow] in sync with the live socket state. Previously also wrote
-         * [isLoggedInFlow] from `steamID.isValid`, which flipped the UI to "signed out"
-         * whenever Valve's CM load-balanced us. The login flow is now purely callback-driven
-         * (see [isLoggedIn] docs), so this method only touches the connected flow.
-         */
+        // In-flight credentials/QR auth session; held in the companion so stopLoginWithQr() can cancel anywhere; cleared on success (ownership → wnSession) or failure.
+        private var wnAuthSession: WnSteamSession? = null
+
+        // Long-lived session carrying the post-logon CM connection — the sole Steam connection, from refresh-token acquisition through logout. @Volatile: logOut() reads on UI thread while the auth flow writes on IO.
+        @Volatile internal var wnSession: WnSteamSession? = null
+
+        @JvmStatic
+        fun wnSessionStateForDiag(): Int = wnSession?.state() ?: -1
+
+        @JvmStatic
+        fun wnSessionSuspensionReasonForDiag(): String =
+            instance?.suspensionReasonForDiag() ?: "no-service"
+
+        // True once onWnLoggedOn ran for the current wnSession; reset on disconnect/teardown so reconnect re-runs it. Guards the state observer double-firing.
+        @Volatile internal var wnLoggedOnHandled = false
+
+        // Serializes session bring-up: concurrent callers racing into bringUpWnSession() spin up separate CM sessions that kick each other (ClientLoggedOff eresult=34) since Steam allows one per account-instance. Only bring-up is gated; reusing a logged-on session stays lock-free.
+        private val wnSessionBringUpMutex = kotlinx.coroutines.sync.Mutex()
+
+        @Volatile internal var logonGateUntilMs: Long = 0L
+            internal set
+        @Volatile internal var lastLogonFailureEresult: Int = 0
+            internal set
+        @Volatile internal var consecutiveLogonFailures: Int = 0
+            internal set
+
+        /** Live Kotlin facade over wnSession's native library store; created with the session, torn down by teardownPriorWnSession()/logOut(). Collect `snapshots` to observe library changes; `current` is the latest value. */
+        @Volatile var wnLibrary: WnLibraryStore? = null
+            internal set
+        @Volatile internal var wnLibraryMirrorJob: Job? = null
+
+        /** Keeps [isConnectedFlow] in sync with the live socket; only touches the connected flow (writing isLoggedInFlow from a read flipped the UI to "signed out" on CM load-balancing). */
         fun syncStates() {
-            val connected = instance?.steamClient?.isConnected == true
+            // Connected == the C++ WN-Steam-Client channel is up (state >= 2).
+            val connected = (wnSession?.state() ?: 0) >= 2
             if (connected != _isConnectedFlow.value) _isConnectedFlow.value = connected
         }
 
-        /**
-         * Checks if the user has stored Steam credentials (refresh token).
-         * Used to determine if auto-reconnection should be attempted on app start.
-         */
+        /** True if a stored refresh token exists — gates whether auto-reconnect is attempted on app start. */
         fun hasStoredCredentials(context: Context): Boolean {
             PrefManager.init(context)
             return PrefManager.refreshToken.isNotBlank()
         }
 
-        /**
-         * Classifies the current Steam session using the same [StoreAuthStatus] model Epic
-         * uses. Lets the UI distinguish "reconnecting" / "token expired" / "no login" rather
-         * than painting every non-ACTIVE state as "signed out."
-         *
-         * - LOGGED_OUT: no stored refresh token.
-         * - EXPIRED:    refresh-token JWT's `exp` claim is in the past (~200 days old).
-         * - ACTIVE:     [isLoggedInFlow] is true (JavaSteam callback confirmed login).
-         * - REFRESHABLE: have a valid-looking refresh token but not yet logged on — the
-         *                 service is still connecting, or we're mid-reconnect after a CM bounce.
-         * - UNKNOWN:    refresh token exists but can't be parsed as a JWT.
-         */
+        /** Classifies the session into [StoreAuthStatus] so the UI can show reconnecting / expired / no-login: LOGGED_OUT (no token), EXPIRED (JWT exp past), ACTIVE (logged in), REFRESHABLE (valid token, not yet logged on / mid-reconnect), UNKNOWN (token unparseable). */
         fun getAuthStatus(context: Context): StoreAuthStatus {
             PrefManager.init(context)
             val refreshToken = PrefManager.refreshToken
@@ -817,18 +641,13 @@ class SteamService :
             return if (jwtExpired == null) StoreAuthStatus.UNKNOWN else StoreAuthStatus.REFRESHABLE
         }
 
-        /**
-         * Pre-seeds the login flow with stored credential state so the UI
-         * doesn't flash a "sign in" prompt while the service is connecting.
-         */
+        /** Pre-seeds the login flow from stored credentials so the UI doesn't flash "sign in" while connecting. */
         fun initLoginStatus(context: Context) {
             if (!isLoggingOut) {
                 _isLoggedInFlow.value = hasStoredCredentials(context)
             }
         }
 
-        private val serverListPath: String
-            get() = Paths.get(DownloadService.baseCacheDirPath, "server_list.bin").pathString
 
         val internalAppInstallPath: String
             get() = Paths.get(DownloadService.baseDataDirPath, "Steam", "steamapps", "common").pathString
@@ -915,7 +734,12 @@ class SteamService :
             }
 
         val userSteamId: SteamID?
-            get() = instance?.steamClient?.steamID
+            get() {
+                // Prefer the live native session; fall back during reconnect gaps.
+                val live = wnSession?.steamId()?.takeIf { it != 0L }
+                val id = live ?: PrefManager.steamUserSteamId64.takeIf { it != 0L }
+                return id?.let { SteamID(it) }
+            }
 
         val familyMembers: List<Int>
             get() = instance?.familyGroupMembers ?: emptyList()
@@ -926,13 +750,108 @@ class SteamService :
         suspend fun setPersonaState(state: EPersonaState) =
             withContext(Dispatchers.IO) {
                 PrefManager.personaState = state.code()
-                instance?._steamFriends?.setPersonaState(state)
+                if (!PrefManager.wnHybridMode) {
+                    withWnSession { session -> session.setPersonaState(state.code()) }
+                } else {
+                    Timber.d("Hybrid: setPersonaState($state) local-only; " +
+                        "Steam-side broadcast deferred until IClientFriends RE")
+                }
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setPersonaState(state.code())
+                // Reflect locally — Steam doesn't echo our own persona state back, so the UI would stay stale until the next requestUserPersona().
+                instance?._localPersona?.update { it.copy(state = state) }
+                instance?.localPersona?.value?.let {
+                    PluviaApp.events.emit(SteamEvent.PersonaStateReceived(it))
+                }
             }
 
         suspend fun requestUserPersona() =
             withContext(Dispatchers.IO) {
-                // in order to get user avatar url and other info
-                userSteamId?.let { instance?._steamFriends?.requestFriendInfo(it) }
+                val svc = instance ?: return@withContext
+
+                run {
+                    val bs = com.winlator.cmod.feature.stores.steam.wnsteam
+                        .WnSteamBootstrap
+                    val playerName = bs.personaName()
+                    if (!playerName.isNullOrEmpty()) {
+                        val stateCode = bs.personaState()
+                        svc._localPersona.update {
+                            it.copy(
+                                name = playerName,
+                                state = EPersonaState.from(stateCode) ?: EPersonaState.Offline,
+                            )
+                        }
+                        PrefManager.steamUserName = playerName
+                        PluviaApp.events.emit(
+                            SteamEvent.PersonaStateReceived(svc.localPersona.value),
+                        )
+                        Timber.i("user persona via libsteamclient.so: name='$playerName' state=$stateCode")
+                        return@withContext
+                    }
+                    Timber.d("libsteamclient.so persona empty; falling through to wn-session")
+                }
+
+                // Fetch local persona: CMsgClientRequestFriendData is sent; the CMsgClientPersonaState reply is server-pushed and cached — poll getSelfPersona() for it.
+                val json =
+                    withWnSession { session ->
+                        session.requestUserPersona()
+                        var j: String? = null
+                        for (i in 0 until 25) {
+                            j = session.getSelfPersona()
+                            if (j != null) break
+                            delay(200)
+                        }
+                        j
+                    } ?: return@withContext
+                try {
+                    val obj = JSONObject(json)
+                    val avatarHash = obj.optString("avatarHash")
+                    val playerName = obj.optString("playerName")
+                    val gameAppId = obj.optInt("gameAppId")
+                    svc._localPersona.update {
+                        it.copy(
+                            avatarHash = avatarHash.ifEmpty { it.avatarHash },
+                            name = playerName.ifEmpty { it.name },
+                            state = EPersonaState.from(obj.optInt("personaState")) ?: EPersonaState.Offline,
+                            gameAppID = gameAppId,
+                            gameName = svc.appDao.findApp(gameAppId)?.name
+                                ?: obj.optString("gameName"),
+                        )
+                    }
+                    if (avatarHash.isNotEmpty()) PrefManager.steamUserAvatarHash = avatarHash
+                    if (playerName.isNotEmpty()) PrefManager.steamUserName = playerName
+                    PluviaApp.events.emit(SteamEvent.PersonaStateReceived(svc.localPersona.value))
+                    Timber.i("user persona via wn-steam-client: name='$playerName'")
+
+                    if (playerName.isNotEmpty()) {
+                        com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                            .setPersonaName(playerName)
+                    }
+                    com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                        .setPersonaState(obj.optInt("personaState"))
+
+                    if (avatarHash.isNotEmpty() && avatarHash.length % 2 == 0) {
+                        val selfSid = withWnSession { it.steamId() } ?: 0L
+                        if (selfSid != 0L) {
+                            val bytes = ByteArray(avatarHash.length / 2)
+                            var ok = true
+                            for (k in bytes.indices) {
+                                val hi = Character.digit(avatarHash[k * 2], 16)
+                                val lo = Character.digit(avatarHash[k * 2 + 1], 16)
+                                if (hi < 0 || lo < 0) { ok = false; break }
+                                bytes[k] = ((hi shl 4) or lo).toByte()
+                            }
+                            if (ok) {
+                                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                                    .setFriendAvatarHash(selfSid, bytes)
+                                com.winlator.cmod.feature.stores.steam.wnsteam.AvatarFetcher
+                                    .enqueueAllTiers(selfSid, avatarHash)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e, "requestUserPersona: persona parse failed")
+                }
             }
 
         suspend fun getSelfCurrentlyPlayingAppId(): Int? =
@@ -943,32 +862,51 @@ class SteamService :
 
         suspend fun kickPlayingSession(onlyGame: Boolean = true): Boolean =
             withContext(Dispatchers.IO) {
-                val user = instance?._steamUser ?: return@withContext false
                 try {
                     instance?._isPlayingBlocked?.value = true
-                    user.kickPlayingSession(onlyStopGame = onlyGame)
-
-                    // Wait for PlayingSessionStateCallback to indicate unblocked
-                    val deadline = System.currentTimeMillis() + 5000
-                    while (System.currentTimeMillis() < deadline) {
-                        if (instance?._isPlayingBlocked?.value == false) return@withContext true
-                        delay(100)
-                    }
-                    false
+                    // Kick + wait: the server-pushed CMsgClientPlayingSessionState updates the playing-blocked cache; poll it for the unblock.
+                    val cleared = withWnSession { session ->
+                        // Invalidate the playing-blocked cache before the kick: the session is reused, so the loop must only observe a post-kick server push.
+                        session.markPlayingBlocked()
+                        session.kickPlayingSession(onlyGame)
+                        val deadline = System.currentTimeMillis() + 5000
+                        var ok = false
+                        while (System.currentTimeMillis() < deadline) {
+                            delay(100)
+                            if (!session.isPlayingBlocked()) { ok = true; break }
+                        }
+                        ok
+                    } == true
+                    instance?._isPlayingBlocked?.value = !cleared
+                    cleared
                 } catch (_: Exception) {
                     false
                 }
             }
 
-        /**
-         * Get licenses from database for use with DepotDownloader
-         */
-        suspend fun getLicensesFromDb(): List<License> =
+        // Fire-and-skip: use the already-logged-on wn-session if one exists, else return false without bringing one up — clears server-side "playing" state on game termination without blocking teardown 5-15s on a cold bring-up.
+        @JvmStatic
+        suspend fun kickPlayingSessionIfReady(onlyGame: Boolean = true): Boolean =
             withContext(Dispatchers.IO) {
-                val cached = instance?.cachedLicenseDao?.getAll() ?: return@withContext emptyList()
-                cached.mapNotNull { cachedLicense ->
-                    LicenseSerializer.deserializeLicense(cachedLicense.licenseJson)
+                try {
+                    val session = wnSession?.takeIf { it.state() == 3 } ?: return@withContext false
+                    session.markPlayingBlocked()
+                    session.kickPlayingSession(onlyGame)
+                    // kickPlayingSession clears only playing-BLOCKED, not the launcher's games-played registration — clear that too (empty CMsgClientGamesPlayed) or the next launch hits AlreadyRunning.
+                    session.notifyGamesPlayed("[]", EOSType.AndroidUnknown.code())
+                    instance?._isPlayingBlocked?.value = true
+                    Timber.i("kickPlayingSessionIfReady: dispatched (onlyGame=$onlyGame) + cleared games-played")
+                    true
+                } catch (e: Throwable) {
+                    Timber.w(e, "kickPlayingSessionIfReady failed")
+                    false
                 }
+            }
+
+        // Single caller only needs whether any licenses exist — returns the raw cached rows.
+        suspend fun getLicensesFromDb(): List<CachedLicense> =
+            withContext(Dispatchers.IO) {
+                instance?.cachedLicenseDao?.getAll() ?: emptyList()
             }
 
         fun getPkgInfoOf(appId: Int): SteamLicense? =
@@ -978,7 +916,11 @@ class SteamService :
                 )
             }
 
-        fun getAppInfoOf(appId: Int): SteamApp? = runBlocking(Dispatchers.IO) { instance?.appDao?.findApp(appId) }
+        fun getAppInfoOf(appId: Int): SteamApp? =
+            runBlocking(Dispatchers.IO) {
+                val dao = instance?.appDao ?: runCatching { PluviaDatabase.getInstance().steamAppDao() }.getOrNull()
+                dao?.findApp(appId)
+            }
 
         fun getDownloadingAppInfoOf(appId: Int): DownloadingAppInfo? =
             runBlocking(Dispatchers.IO) {
@@ -988,37 +930,74 @@ class SteamService :
         fun getDownloadableDlcAppsOf(appId: Int): List<SteamApp>? =
             runBlocking(Dispatchers.IO) { instance?.appDao?.findDownloadableDLCApps(appId) }
 
+        fun getSelectableDlcAppsOf(appId: Int): List<SteamApp> =
+            runBlocking(Dispatchers.IO) {
+                val service = instance ?: return@runBlocking emptyList()
+                val appInfo = service.appDao.findApp(appId) ?: return@runBlocking emptyList()
+                val preferredLanguage = PrefManager.containerLanguage
+                val has64Bit =
+                    appInfo.depots.values.any {
+                        it.osArch == OSArch.Arch64 &&
+                            (it.osList.contains(OS.windows) || (it.osList.isEmpty() || it.osList.contains(OS.none)))
+                    }
+
+                val mainAppDlcIds =
+                    appInfo.depots.values
+                        .asSequence()
+                        .filter { depot ->
+                            depot.dlcAppId != INVALID_APP_ID &&
+                                filterForDownloadableDepots(depot, has64Bit, preferredLanguage, ownedDlc = null)
+                        }.map { it.dlcAppId }
+
+                val indirectDlcApps = service.appDao.findDownloadableDLCApps(appId).orEmpty()
+                val hiddenDlcApps = service.appDao.findHiddenDLCApps(appId).orEmpty()
+                val dlcAppsById = (indirectDlcApps + hiddenDlcApps).associateBy { it.id }
+                val indirectDlcIds = indirectDlcApps.map { it.id }.asSequence()
+                val hiddenDlcIds = hiddenDlcApps.map { it.id }.asSequence()
+                val groupedBaseDlcIds =
+                    getGroupedBaseAppDlcIds(
+                        appInfo = appInfo,
+                        preferredLanguage = preferredLanguage,
+                        has64Bit = has64Bit,
+                    ).asSequence()
+
+                val declaredDlcIds = appInfo.dlcAppIds.asSequence()
+
+                val selectableDlcIds = (mainAppDlcIds + groupedBaseDlcIds + indirectDlcIds + hiddenDlcIds + declaredDlcIds).distinct().toList()
+
+                if (selectableDlcIds.isEmpty()) return@runBlocking emptyList()
+
+                // Single bulk SELECT instead of N findApp() calls; keeps DB-first by overlaying dlcAppsById only for IDs not in the DB.
+                val dlcFromDb = service.appDao.findApps(selectableDlcIds).associateBy { it.id }
+                selectableDlcIds
+                    .mapNotNull { dlcAppId ->
+                        (dlcFromDb[dlcAppId] ?: dlcAppsById[dlcAppId])?.takeIf { it.name.isNotBlank() }
+                    }
+                    .sortedBy { it.name.lowercase() }
+            }
+
         fun getHiddenDlcAppsOf(appId: Int): List<SteamApp>? = runBlocking(Dispatchers.IO) { instance?.appDao?.findHiddenDLCApps(appId) }
 
-        fun getInstalledApp(appId: Int): AppInfo? = runBlocking(Dispatchers.IO) { instance?.appInfoDao?.getInstalledApp(appId) }
-
-        fun getInstalledDepotsOf(appId: Int): List<Int>? = getInstalledApp(appId)?.downloadedDepots
-
-        fun getInstalledDlcDepotsOf(appId: Int): List<Int>? = getInstalledApp(appId)?.dlcDepots
-
-        private fun tryRecoverInstalledAppInfo(appId: Int): AppInfo? {
-            val dirPath = getAppDirPath(appId)
-            val hasCompleteMarker = MarkerUtils.hasMarker(dirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
-            val hasInProgressMarker = MarkerUtils.hasMarker(dirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-            if (!hasCompleteMarker || hasInProgressMarker) return null
-
-            val dir = File(dirPath)
-            if (!dir.exists() || !dir.isDirectory) return null
-
-            val downloadedDepotIds = runCatching { getMainAppDepots(appId).keys.sorted() }.getOrDefault(emptyList())
-            val recovered =
-                AppInfo(
-                    id = appId,
-                    isDownloaded = true,
-                    downloadedDepots = downloadedDepotIds,
-                    dlcDepots = emptyList(),
-                )
-
+        fun getInstalledApp(appId: Int): AppInfo? =
             runBlocking(Dispatchers.IO) {
-                PluviaDatabase.getInstance().appInfoDao().insert(recovered)
+                val dao = instance?.appInfoDao ?: runCatching { PluviaDatabase.getInstance().appInfoDao() }.getOrNull()
+                dao?.getInstalledApp(appId)
             }
-            Timber.i("Recovered Steam installed metadata from disk for appId=$appId at $dirPath")
-            return recovered
+
+        fun getInstalledDepotsOf(appId: Int): List<Int>? = getTrustedInstalledAppInfo(appId)?.downloadedDepots
+
+        fun getInstalledDlcDepotsOf(appId: Int): List<Int>? {
+            val installedApp = getTrustedInstalledAppInfo(appId)
+            val installedDlcAppIds = installedApp?.dlcDepots.orEmpty().toMutableSet()
+            installedDlcAppIds.addAll(getInstalledSelectableDlcAppIds(appId))
+
+            if (installedApp != null && installedDlcAppIds != installedApp.dlcDepots.toSet()) {
+                runBlocking(Dispatchers.IO) {
+                    instance?.appInfoDao?.update(installedApp.copy(dlcDepots = installedDlcAppIds.sorted()))
+                }
+            }
+
+            return installedDlcAppIds.sorted()
         }
 
         fun repairInstalledMetadataFromDisk(): Int {
@@ -1040,54 +1019,6 @@ class SteamService :
                 }
                 repairedCount
             }
-        }
-
-        private fun countCompletedInstallMarkers(maxCount: Int = Int.MAX_VALUE): Int {
-            var count = 0
-            for (basePath in allInstallPaths) {
-                val baseDir = File(basePath)
-                val appDirs = baseDir.listFiles() ?: continue
-                for (appDir in appDirs) {
-                    if (!appDir.isDirectory) continue
-                    val hasCompleteMarker = File(appDir, Marker.DOWNLOAD_COMPLETE_MARKER.fileName).exists()
-                    if (!hasCompleteMarker) continue
-
-                    val hasInProgressMarker = File(appDir, Marker.DOWNLOAD_IN_PROGRESS_MARKER.fileName).exists()
-                    if (hasInProgressMarker) continue
-
-                    count++
-                    if (count >= maxCount) return count
-                }
-            }
-            return count
-        }
-
-        private fun shouldRepairInstalledMetadata(): Boolean {
-            val db =
-                runCatching { PluviaDatabase.getInstance() }.getOrElse {
-                    Timber.e(it, "Failed to access database for startup metadata repair gate")
-                    return false
-                }
-
-            val knownAppCount =
-                runBlocking(Dispatchers.IO) {
-                    runCatching { db.steamAppDao().getAllAppIds().size }.getOrElse {
-                        Timber.e(it, "Failed to load Steam app ids for startup metadata repair gate")
-                        return@runBlocking 0
-                    }
-                }
-            if (knownAppCount == 0) return false
-
-            val installedDbCount =
-                runBlocking(Dispatchers.IO) {
-                    runCatching { db.appInfoDao().getAllInstalledAppIds().size }.getOrElse {
-                        Timber.e(it, "Failed to load installed Steam app ids for startup metadata repair gate")
-                        return@runBlocking 0
-                    }
-                }
-
-            val diskInstallCount = countCompletedInstallMarkers(maxCount = installedDbCount + 1)
-            return diskInstallCount > installedDbCount
         }
 
         fun maybeRepairInstalledMetadataOnStartup(context: Context) {
@@ -1112,10 +1043,7 @@ class SteamService :
         fun getAppDownloadInfo(appId: Int): DownloadInfo? = downloadJobs[appId]
 
         fun isAppInstalled(appId: Int): Boolean {
-            val appInfo = getInstalledApp(appId) ?: tryRecoverInstalledAppInfo(appId)
-            if (appInfo?.isDownloaded != true) return false
-            val dirPath = getAppDirPath(appId)
-            return MarkerUtils.hasMarker(dirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+            return getTrustedInstalledAppInfo(appId) != null
         }
 
         fun uninstallApp(
@@ -1177,9 +1105,11 @@ class SteamService :
                 }.orEmpty()
 
         suspend fun getOwnedAppDlc(appId: Int): Map<Int, DepotInfo> {
-            val client = instance?.steamClient ?: return emptyMap()
-            val accountId = client.steamID?.accountID?.toInt() ?: return emptyMap()
-            val ownedGameIds = getOwnedGames(userSteamId!!.convertToUInt64()).map { it.appId }.toHashSet()
+            val ownedGameIds =
+                runCatching {
+                    val steamId = userSteamId ?: return@runCatching emptySet<Int>()
+                    getOwnedGames(steamId.convertToUInt64()).map { it.appId }.toHashSet()
+                }.getOrDefault(emptySet())
 
             return getAppDlc(appId)
                 .filter { (_, depot) ->
@@ -1187,8 +1117,10 @@ class SteamService :
                         // Base-game depots always download
                         depot.dlcAppId == INVALID_APP_ID -> true
 
-                        // ① licence cache
-                        instance?.licenseDao?.findLicense(depot.dlcAppId) != null -> true
+                        // ① licence cache — DLC app IDs live inside package rows, not as package IDs.
+                        runBlocking(Dispatchers.IO) {
+                            instance?.licenseDao?.countLicensesForApp(depot.dlcAppId) ?: 0
+                        } > 0 -> true
 
                         // ② PICS row
                         instance?.appDao?.findApp(depot.dlcAppId) != null -> true
@@ -1208,7 +1140,7 @@ class SteamService :
 
             val appInfo = getAppInfoOf(appId)
             if (appInfo != null) {
-                // for each of the dlcAppId found in main depots, filter the count = 1, add that dlcAppId to dlcAppIds
+                // Hidden DLC can be represented by a single placeholder depot.
                 val checkingAppDlcIds =
                     appInfo.depots
                         .filter { it.value.dlcAppId != INVALID_APP_ID }
@@ -1231,12 +1163,7 @@ class SteamService :
             return mainAppDlcIds
         }
 
-        /**
-         * Refresh the owned games list by querying Steam, diffing with the local DB, and
-         * queueing PICS requests for anything new so metadata gets populated.
-         *
-         * @return number of newly discovered appIds that were scheduled for PICS.
-         */
+        /** Refresh owned games: query Steam, diff the local DB, queue PICS for new apps; returns the count of newly discovered appIds scheduled for PICS. */
         suspend fun refreshOwnedGamesFromServer(): Int =
             withContext(Dispatchers.IO) {
                 val service = instance ?: return@withContext 0
@@ -1269,9 +1196,7 @@ class SteamService :
                 }.getOrDefault(0)
             }
 
-        /**
-         * Common Filter for downloadable depots
-         */
+        /** Common filter for downloadable depots. */
         fun filterForDownloadableDepots(
             depot: DepotInfo,
             has64Bit: Boolean,
@@ -1293,9 +1218,7 @@ class SteamService :
             ) {
                 return false
             }
-            // 3. 64-bit or indeterminate
-            // Arch selection: allow 64-bit and Unknown always.
-            // Allow 32-bit only when no 64-bit depot exists.
+            // 3. Arch: allow 64-bit and Unknown always; 32-bit only when no 64-bit depot exists.
             val archOk =
                 when (depot.osArch) {
                     OSArch.Arch64, OSArch.Unknown -> true
@@ -1335,10 +1258,7 @@ class SteamService :
                 }.associate { it.toPair() }
         }
 
-        /**
-         * Get downloadable depots for a given app, including all DLCs
-         * @return Map of app ID to depot ID to depot info
-         */
+        /** Downloadable depots for an app, including all DLCs. */
         fun getDownloadableDepots(
             appId: Int,
             preferredLanguage: String = PrefManager.containerLanguage,
@@ -1369,7 +1289,6 @@ class SteamService :
                     if (isDepotEntitled(depotId, depot, entitledDlcDepotIds) &&
                         filterForDownloadableDepots(depot, has64Bit, preferredLanguage, null)
                     ) {
-                        // Add DLC Depots with custom object
                         map[depotId] =
                             DepotInfo(
                                 depotId = depot.depotId,
@@ -1380,6 +1299,7 @@ class SteamService :
                                 osList = depot.osList,
                                 osArch = depot.osArch,
                                 language = depot.language,
+                                lowViolence = depot.lowViolence,
                                 manifests = depot.manifests,
                                 encryptedManifests = depot.encryptedManifests,
                             )
@@ -1390,82 +1310,11 @@ class SteamService :
             return map
         }
 
-        private fun getEntitledDepotIds(packageId: Int): Set<Int>? {
-            if (packageId == INVALID_PKG_ID) return null
-            val depotIds =
-                runBlocking(Dispatchers.IO) {
-                    instance
-                        ?.licenseDao
-                        ?.findLicense(packageId)
-                        ?.depotIds
-                        .orEmpty()
-                }
-            return depotIds.takeIf { it.isNotEmpty() }?.toSet()
-        }
-
-        private fun isDepotEntitled(
-            depotId: Int,
-            depot: DepotInfo,
-            entitledDepotIds: Set<Int>?,
-        ): Boolean {
-            if (entitledDepotIds == null) return true
-            if (depotId in entitledDepotIds) return true
-
-            // Shared/proxied depots may not be listed directly on the package even though
-            // they are required to resolve the owning depot's content.
-            return depot.sharedInstall || depot.depotFromApp != INVALID_APP_ID
-        }
-
-        private fun getSelectedDownloadDepots(
-            appId: Int,
-            userSelectedDlcAppIds: Collection<Int>,
-            preferredLanguage: String = PrefManager.containerLanguage,
-        ): Map<Int, DepotInfo> {
-            val downloadableDepots = getDownloadableDepots(appId, preferredLanguage)
-            if (downloadableDepots.isEmpty()) return emptyMap()
-
-            val selectedDlcIds = userSelectedDlcAppIds.toSet()
-            val indirectDlcAppIds = getDownloadableDlcAppsOf(appId).orEmpty().map { it.id }.toSet()
-            val mainDepots = getMainAppDepots(appId)
-
-            val selectedMainDepots =
-                mainDepots.filter { (_, depot) ->
-                    depot.dlcAppId == INVALID_APP_ID ||
-                        (depot.dlcAppId in selectedDlcIds && depot.manifests.isNotEmpty())
-                }
-
-            val selectedDlcDepots =
-                downloadableDepots.filter { (depotId, depot) ->
-                    depotId !in selectedMainDepots &&
-                        depot.dlcAppId in selectedDlcIds &&
-                        depot.dlcAppId in indirectDlcAppIds &&
-                        depot.manifests.isNotEmpty()
-                }
-
-            return selectedMainDepots + selectedDlcDepots
-        }
-
-        private fun resolveDepotManifestInfo(
-            depot: DepotInfo,
-            branch: String,
-            visitedApps: MutableSet<Int> = mutableSetOf(),
-        ): ManifestInfo? {
-            depot.manifests[branch]?.let { return it }
-            depot.encryptedManifests[branch]?.let { return it }
-
-            if (!branch.equals("public", ignoreCase = true)) {
-                depot.manifests["public"]?.let { return it }
-                depot.encryptedManifests["public"]?.let { return it }
-            }
-
-            val sourceAppId = depot.depotFromApp
-            if (sourceAppId == INVALID_APP_ID || !visitedApps.add(sourceAppId)) {
-                return null
-            }
-
-            val sourceDepot = getAppInfoOf(sourceAppId)?.depots?.get(depot.depotId) ?: return null
-            return resolveDepotManifestInfo(sourceDepot, branch, visitedApps)
-        }
+        internal data class GroupedBaseAppDlcDepot(
+            val depotId: Int,
+            val dlcAppId: Int,
+            val depot: DepotInfo,
+        )
 
         fun getSelectedManifestSizes(
             appId: Int,
@@ -1473,55 +1322,114 @@ class SteamService :
             preferredLanguage: String = PrefManager.containerLanguage,
             branch: String = "public",
         ): ManifestSizes {
-            val selectedDepots = getSelectedDownloadDepots(appId, userSelectedDlcAppIds, preferredLanguage)
+            ensureFreshDepotData(appId)
+            val selectedDepots = getSelectedDownloadDepots(appId, userSelectedDlcAppIds, preferredLanguage, branch)
             if (selectedDepots.isEmpty()) return ManifestSizes()
 
-            var totalInstallSize = 0L
-            var totalDownloadSize = 0L
+            return calculateManifestSizes(selectedDepots.values, branch)
+        }
 
-            selectedDepots.values.forEach { depot ->
-                val manifest = resolveDepotManifestInfo(depot, branch)
-                totalInstallSize += manifest?.size ?: 0L
-                totalDownloadSize += manifest?.download ?: 0L
-            }
+        fun getInstallableSelectedManifestSizes(
+            appId: Int,
+            userSelectedDlcAppIds: Collection<Int> = emptyList(),
+            preferredLanguage: String = PrefManager.containerLanguage,
+            branch: String = "public",
+        ): ManifestSizes {
+            ensureFreshDepotData(appId)
+            val selectedDepots = getSelectedDownloadDepots(appId, userSelectedDlcAppIds, preferredLanguage, branch)
+            val installableDepots =
+                filterAlreadyInstalledDepots(
+                    appId = appId,
+                    depots = selectedDepots,
+                    includeInstalledDepots = false,
+                )
+            if (installableDepots.isEmpty()) return ManifestSizes()
 
-            return ManifestSizes(
-                installSize = totalInstallSize,
-                downloadSize = totalDownloadSize,
-            )
+            return calculateManifestSizes(installableDepots.values, branch)
+        }
+
+        fun getDlcOnlyManifestSizes(
+            appId: Int,
+            dlcAppId: Int,
+            preferredLanguage: String = PrefManager.containerLanguage,
+            branch: String = "public",
+        ): ManifestSizes {
+            val service = instance ?: return ManifestSizes()
+            ensureFreshDepotData(appId)
+            ensureFreshDepotData(dlcAppId)
+            val mainAppInfo =
+                runBlocking(Dispatchers.IO) { service.appDao.findApp(appId) } ?: return ManifestSizes()
+            val has64Bit =
+                mainAppInfo.depots.values.any {
+                    it.osArch == OSArch.Arch64 &&
+                        (it.osList.contains(OS.windows) || (it.osList.isEmpty() || it.osList.contains(OS.none)))
+                }
+
+            val mainAppDlcDepots =
+                getSelectedBaseAppDlcContentDepots(appId, listOf(dlcAppId), preferredLanguage, branch).values
+
+            val dlcAppInfo = runBlocking(Dispatchers.IO) { service.appDao.findApp(dlcAppId) }
+            val dlcAppDepots =
+                dlcAppInfo?.depots?.values?.filter { depot ->
+                    filterForDownloadableDepots(depot, has64Bit, preferredLanguage, ownedDlc = null)
+                }.orEmpty()
+
+            val combined = (mainAppDlcDepots + dlcAppDepots).associateBy { it.depotId }.values
+            if (combined.isEmpty()) return ManifestSizes()
+
+            return calculateManifestSizes(combined, branch)
         }
 
         fun getAppDirName(app: SteamApp?): String {
-            // The folder name, if it got made
-            var appName = app?.config?.installDir.orEmpty()
-            if (appName.isEmpty()) {
-                appName = app?.name.orEmpty()
-            }
-            return appName
+            val configuredInstallDir =
+                app?.config?.installDir
+                    .orEmpty()
+                    .trim()
+                    .takeUnless(::isSuspiciousSteamInstallDirLeaf)
+
+            return configuredInstallDir.takeUnless { it.isNullOrEmpty() }
+                ?: app?.name.orEmpty()
         }
 
-        private fun normalizeInstallPath(path: String): String {
-            if (path.isBlank()) return path
-            return try {
-                File(path).canonicalPath
-            } catch (_: IOException) {
-                File(path).absolutePath
-            }
-        }
-
+        // Invoked by name via reflection from SteamBridge — keep in the companion; do not move to an extension file.
         fun getAppDirPath(gameId: Int): String {
             val info = getAppInfoOf(gameId)
 
-            // Check custom install directory first (only if it's a full absolute path)
-            // installDir from PICS metadata is just a folder name, custom installs save full path
+            // Check custom install dir first (full absolute path only): installDir from PICS metadata is just a folder name, custom installs store the full path.
             val customDir = info?.installDir.orEmpty()
             if (customDir.isNotEmpty() && (customDir.startsWith("/") || customDir.contains(File.separator))) {
-                // It's a full path (custom install location)
-                return normalizeInstallPath(customDir)
+                val normalizedCustomDir = normalizeInstallPath(customDir)
+                if (!isSuspiciousSteamInstallPath(normalizedCustomDir)) {
+                    // It's a full path (custom install location)
+                    return normalizedCustomDir
+                }
+                Timber.w(
+                    "getAppDirPath: ignoring suspicious stored install path %s for appId=%d",
+                    normalizedCustomDir,
+                    gameId,
+                )
             }
 
             val appName = getAppDirName(info)
             val oldName = info?.name.orEmpty()
+            val candidateNames =
+                buildList {
+                    if (appName.isNotEmpty()) add(appName)
+                    if (oldName.isNotEmpty() && oldName != appName) add(oldName)
+                }
+
+            // No metadata: fall back to the durably-recorded install path (disk-validated, appId-specific; never a shared root).
+            if (candidateNames.isEmpty()) {
+                val recordedPath = getInstalledApp(gameId)?.installPath.orEmpty()
+                if (recordedPath.isNotEmpty()) {
+                    val normalizedRecorded = normalizeInstallPath(recordedPath)
+                    if (File(normalizedRecorded).isDirectory && !isSuspiciousSteamInstallPath(normalizedRecorded)) {
+                        return normalizedRecorded
+                    }
+                }
+                Timber.w("getAppDirPath: no metadata to resolve install dir for appId=%d", gameId)
+                return ""
+            }
 
             // Respect user-selected default download folder
             val context = PluviaApp.instance.applicationContext
@@ -1533,320 +1441,46 @@ class SteamService :
                             .getFilePathFromUri(context, android.net.Uri.parse(storeDefaultUri))
                     Timber.i("getAppDirPath: resolved baseDir $baseDir from URI $storeDefaultUri")
                     if (baseDir != null) {
-                        val path = Paths.get(baseDir, appName)
-                        if (Files.exists(path)) {
-                            Timber.i("getAppDirPath: found existing path $path")
-                            return normalizeInstallPath(path.pathString)
-                        }
-                        if (oldName.isNotEmpty()) {
-                            val oldPath = Paths.get(baseDir, oldName)
-                            if (Files.exists(oldPath)) {
-                                Timber.i("getAppDirPath: found existing oldPath $oldPath")
-                                return normalizeInstallPath(oldPath.pathString)
+                        for (candidateName in candidateNames) {
+                            val candidatePath = Paths.get(baseDir, candidateName)
+                            if (Files.exists(candidatePath)) {
+                                Timber.i("getAppDirPath: found existing path $candidatePath")
+                                return normalizeInstallPath(candidatePath.pathString)
                             }
                         }
+                        val targetName = candidateNames.firstOrNull().orEmpty()
+                        val targetPath = Paths.get(baseDir, targetName)
                         // If it doesn't exist yet, this is where we'll install it
-                        Timber.i("getAppDirPath: returning new path $path")
-                        return normalizeInstallPath(path.pathString)
+                        Timber.i("getAppDirPath: returning new path $targetPath")
+                        return normalizeInstallPath(targetPath.pathString)
                     }
                 }
             }
 
             for (basePath in allInstallPaths) {
-                val candidate = Paths.get(basePath, appName)
-                if (Files.exists(candidate)) return normalizeInstallPath(candidate.pathString)
-                if (oldName.isNotEmpty()) {
-                    val oldCandidate = Paths.get(basePath, oldName)
-                    if (Files.exists(oldCandidate)) return normalizeInstallPath(oldCandidate.pathString)
+                for (candidateName in candidateNames) {
+                    val candidate = Paths.get(basePath, candidateName)
+                    if (Files.exists(candidate)) return normalizeInstallPath(candidate.pathString)
                 }
             }
 
             // Nothing on disk yet – default to whatever location you want new installs to use
+            val targetName = candidateNames.firstOrNull().orEmpty()
             if (PrefManager.useExternalStorage) {
-                return normalizeInstallPath(Paths.get(externalAppInstallPath, appName).pathString)
+                return normalizeInstallPath(Paths.get(externalAppInstallPath, targetName).pathString)
             }
-            return normalizeInstallPath(Paths.get(internalAppInstallPath, appName).pathString)
+            return normalizeInstallPath(Paths.get(internalAppInstallPath, targetName).pathString)
         }
 
-        private fun createSteamShortcut(
-            context: Context,
-            appId: Int,
-        ) {
-            try {
-                val container = ContainerUtils.getOrCreateContainer(context, "STEAM_$appId")
-                val appInfo = getAppInfoOf(appId) ?: return
-                val installPath = getAppDirPath(appId)
-                val launchExecutable = getInstalledExe(appId)
-                val desktopDir = container.getDesktopDir()
-                if (!desktopDir.exists()) desktopDir.mkdirs()
-
-                val shortcutFile = File(desktopDir, "${appInfo.name}.desktop")
-                val content = StringBuilder()
-                content.append("[Desktop Entry]\n")
-                content.append("Type=Application\n")
-                content.append("Name=${appInfo.name}\n")
-                content.append("Exec=wine \"C:\\\\Program Files (x86)\\\\Steam\\\\steamclient_loader_x64.exe\"\n")
-                content.append("Icon=steam_icon_$appId\n")
-                content.append("\n[Extra Data]\n")
-                content.append("game_source=STEAM\n")
-                content.append("app_id=$appId\n")
-                content.append("container_id=${container.id}\n")
-                content.append("game_install_path=$installPath\n")
-                content.append("launch_exe_path=$launchExecutable\n")
-                content.append("use_container_defaults=1\n")
-
-                com.winlator.cmod.shared.io.FileUtils
-                    .writeString(shortcutFile, content.toString())
-                Timber.i("Created Steam shortcut for ${appInfo.name} in container ${container.id}")
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to create Steam shortcut for appId $appId")
-            }
-        }
-
-        private fun isExecutable(flags: Any): Boolean =
-            when (flags) {
-                // SteamKit-JVM (most forks) – flags is EnumSet<EDepotFileFlag>
-                is EnumSet<*> -> {
-                    flags.contains(EDepotFileFlag.Executable) ||
-                        flags.contains(EDepotFileFlag.CustomExecutable)
-                }
-
-                // SteamKit-C# protobuf port – flags is UInt / Int / Long
-                is Int -> {
-                    (flags and 0x20) != 0 || (flags and 0x80) != 0
-                }
-
-                is Long -> {
-                    ((flags and 0x20L) != 0L) || ((flags and 0x80L) != 0L)
-                }
-
-                else -> {
-                    false
-                }
-            }
-
-        // --------------------------------------------------------------------------
-        // 1. Extra patterns & word lists
-        // --------------------------------------------------------------------------
-
-        // Unreal Engine "Shipping" binaries (e.g. Stray-Win64-Shipping.exe)
-        private val UE_SHIPPING =
-            Regex(
-                """.*-win(32|64)(-shipping)?\.exe$""",
-                RegexOption.IGNORE_CASE,
-            )
-
-        // UE folder hint …/Binaries/Win32|64/…
-        private val UE_BINARIES =
-            Regex(
-                """.*/binaries/win(32|64)/.*\.exe$""",
-                RegexOption.IGNORE_CASE,
-            )
-
-        // Tools / crash-dumpers to push down
-        private val NEGATIVE_KEYWORDS =
-            listOf(
-                "crash",
-                "handler",
-                "viewer",
-                "compiler",
-                "tool",
-                "setup",
-                "unins",
-                "eac",
-                "launcher",
-                "steam",
-            )
-
-        // add near-name helper
-        private fun fuzzyMatch(
-            a: String,
-            b: String,
-        ): Boolean {
-            // strip digits & punctuation, compare first 5 letters
-            val cleanA = a.replace(Regex("[^a-z]"), "")
-            val cleanB = b.replace(Regex("[^a-z]"), "")
-            return cleanA.take(5) == cleanB.take(5)
-        }
-
-        // add generic short-name detector: one letter + digits, ≤4 chars
-        private val GENERIC_NAME = Regex("^[a-z]\\d{1,3}\\.exe$", RegexOption.IGNORE_CASE)
-
-        // --------------------------------------------------------------------------
-        // 2. Heuristic score (same signature!)
-        // --------------------------------------------------------------------------
-
-        private fun scoreExe(
-            file: FileData,
-            gameName: String,
-            hasExeFlag: Boolean,
-        ): Int {
-            var s = 0
-            val path = file.fileName.lowercase()
-
-            // 1️⃣ UE shipping or binaries folder bonus
-            if (UE_SHIPPING.matches(path)) s += 300
-            if (UE_BINARIES.containsMatchIn(path)) s += 250
-
-            // 2️⃣ root-folder exe bonus
-            if (!path.contains('/')) s += 200
-
-            // 3️⃣ filename contains the game / installDir
-            if (path.contains(gameName) || fuzzyMatch(path, gameName)) s += 100
-
-            // 4️⃣ obvious tool / crash-dumper penalty
-            if (NEGATIVE_KEYWORDS.any { it in path }) s -= 150
-            if (GENERIC_NAME.matches(file.fileName)) s -= 200 // ← new
-
-            // 5️⃣ Executable | CustomExecutable flag
-            if (hasExeFlag) s += 50
-
-            Timber.i("Score for $path: $s")
-
-            return s
-        }
-
-        fun FileData.isStub(): Boolean {
-            // stub detector (same short rules)
-            val generic = Regex("^[a-z]\\d{1,3}\\.exe$", RegexOption.IGNORE_CASE)
-            val bad = listOf("launcher", "steam", "crash", "handler", "setup", "unins", "eac")
-            val n = fileName.lowercase()
-            val stub = generic.matches(n) || bad.any { it in n } || totalSize < 1_000_000
-            if (stub) Timber.d("Stub filtered: $fileName  size=$totalSize")
-            return stub
-        }
-
-        /** select the primary binary */
-        fun choosePrimaryExe(
-            files: List<FileData>?,
-            gameName: String,
-        ): FileData? =
-            files?.maxWithOrNull { a, b ->
-                val sa = scoreExe(a, gameName, isExecutable(a.flags)) // <- fixed
-                val sb = scoreExe(b, gameName, isExecutable(b.flags))
-
-                when {
-                    sa != sb -> sa - sb
-
-                    // higher score wins
-                    else -> (a.totalSize - b.totalSize).toInt() // tie-break on size
-                }
-            }
-
-        /**
-         * Picks the real shipped EXE for a Steam app.
-         *
-         * ❶ try the dev-supplied launch entry (skip obvious stubs)
-         * ❷ else score all manifest-flagged EXEs and keep the best
-         * ❸ else fall back to the largest flagged EXE in the biggest depot
-         * If everything fails, return the game's install directory.
-         */
-        fun getInstalledExe(appId: Int): String {
-            val appInfo = getAppInfoOf(appId) ?: return ""
-
-            val installDir = appInfo.config.installDir.ifEmpty { appInfo.name }
-
-            val depots =
-                appInfo.depots.values.filter { d ->
-                    !d.sharedInstall && (
-                        d.osList.isEmpty() ||
-                            d.osList.any { it.name.equals("windows", true) || it.name.equals("none", true) }
-                    )
-                }
-            Timber.i("Depots considered: $depots")
-
-            // launch targets (lower-case)
-            val launchTargets =
-                appInfo.config.launch
-                    .mapNotNull { it.executable.lowercase() }
-                    .toSet() ?: emptySet()
-
-            Timber.i("Launch targets from appinfo: $launchTargets")
-
-            // ----------------------------------------------------------
-            val flagged = mutableListOf<Pair<FileData, Long>>() // (file, depotSize)
-            var largestDepotSize = 0L
-
-            // Use DepotDownloader to fetch manifests
-            val steamClient = instance?.steamClient
-            val licenses = runBlocking { getLicensesFromDb() }
-            if (steamClient == null || licenses.isEmpty()) {
-                Timber.w("Cannot fetch manifests: steamClient or licenses not available")
-                // Fallback to last resort
-                return (
-                    getAppInfoOf(appId)?.let { appInfo ->
-                        getWindowsLaunchInfos(appId).firstOrNull()
-                    }
-                )?.executable ?: ""
-            }
-
-            for (depot in depots) {
-                val mi = depot.manifests["public"] ?: continue
-                if (mi.size > largestDepotSize) largestDepotSize = mi.size
-
-                // Check cache first
-                val man = DepotManifest.loadFromFile("${getAppDirPath(appId)}/.DepotDownloader/${depot.depotId}_${mi.gid}.manifest")
-
-                Timber.d("Using manifest for depot ${depot.depotId}  size=${mi.size}")
-
-                // 1️⃣ exact launch entry that isn't a stub
-                man
-                    ?.files
-                    ?.firstOrNull { f ->
-                        f.fileName.lowercase() in launchTargets && !f.isStub()
-                    }?.let {
-                        Timber.i("Picked via launch entry: ${it.fileName}")
-                        return it.fileName.replace('\\', '/').toString()
-                    }
-
-                // collect for later
-                man
-                    ?.files
-                    ?.filter { isExecutable(it.flags) || it.fileName.endsWith(".exe", true) }
-                    ?.forEach { flagged += it to mi.size }
-            }
-
-            Timber.i("Flagged executable candidates: ${flagged.map { it.first.fileName }}")
-
-            // 2️⃣ scorer (unchanged)
-            choosePrimaryExe(
-                flagged
-                    .map { it.first }
-                    .let { pool ->
-                        val noStubs = pool.filterNot { it.isStub() }
-                        if (noStubs.isNotEmpty()) noStubs else pool
-                    },
-                installDir.lowercase(),
-            )?.let {
-                Timber.i("Picked via scorer: ${it.fileName}")
-                return it.fileName.replace('\\', '/')
-            }
-
-            // 3️⃣ fallback: biggest exe from the biggest depot
-            flagged
-                .filter { it.second == largestDepotSize }
-                .maxByOrNull { it.first.totalSize }
-                ?.let {
-                    Timber.i("Picked via largest-depot fallback: ${it.first.fileName}")
-                    return it.first.fileName
-                        .replace('\\', '/')
-                        .toString()
-                }
-
-            // 4️⃣ last resort
-            Timber.w("No executable found; falling back to install dir")
-            return (
-                getAppInfoOf(appId)?.let { appInfo ->
-                    getWindowsLaunchInfos(appId).firstOrNull()
-                }
-            )?.executable ?: ""
-        }
+        /** Resolves the executable for an installed Steam app from its appinfo `config.launch` entries — depot manifests store filenames AES-encrypted and are never decrypted, so scanning them is useless. */
+        // Invoked by name via reflection from SteamBridge — keep in the companion; do not move to an extension file.
+        fun getInstalledExe(appId: Int): String =
+            getWindowsLaunchInfos(appId).firstOrNull()?.executable ?: ""
 
         fun getLaunchExecutable(
             appId: String,
             container: Container,
         ): String {
-            if (container.isLaunchRealSteam) return "steam"
             val gameId = ContainerUtils.extractGameIdFromContainerId(appId)
             return container.executablePath.ifEmpty { getInstalledExe(gameId) }
         }
@@ -1875,7 +1509,6 @@ class SteamService :
                     removeDownloadJob(appId)
                 }
 
-                // Remove any download-complete marker
                 MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
                 MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
                 clearPersistedProgressSnapshot(appDirPath)
@@ -1890,7 +1523,6 @@ class SteamService :
                         fileChangeListsDao.deleteByAppId(appId)
                         downloadingAppInfoDao.deleteApp(appId)
 
-                        // Clear installDir in steam_app table
                         appDao.findApp(appId)?.let { steamApp ->
                             if (steamApp.installDir.isNotEmpty()) {
                                 appDao.update(steamApp.copy(installDir = ""))
@@ -1928,7 +1560,6 @@ class SteamService :
                     normalizeInstallPath(File(customInstallPath, safeFolderName).absolutePath)
                 }
 
-            // Update SteamApp in DB
             runBlocking(Dispatchers.IO) {
                 instance?.appDao?.findApp(appId)?.let { steamApp ->
                     instance?.appDao?.update(steamApp.copy(installDir = finalPath))
@@ -1940,17 +1571,7 @@ class SteamService :
 
         fun downloadApp(appId: Int): DownloadInfo? = downloadApp(appId, dlcAppIdsHint = null)
 
-        /**
-         * Resume / start entry point that accepts an authoritative DLC selection [dlcAppIdsHint]
-         * — typically supplied by the cross-store [DownloadCoordinator] from its persisted
-         * [DownloadRecord.selectedDlcs] field. When provided, this list takes precedence over
-         * the legacy fallback chain (DownloadingAppInfo → snapshot inference → installed DLCs)
-         * because the coordinator's record is the only source guaranteed to remember the user's
-         * original selection across pause/resume and across app restarts.
-         *
-         * Pass `null` (or call the no-arg overload) for legacy callers; we'll then look the
-         * record up ourselves so coordinator-aware behavior still applies.
-         */
+        /** Resume/start entry point; [dlcAppIdsHint] (the coordinator's persisted [DownloadRecord.selectedDlcs]) is authoritative and overrides the legacy fallback chain. Pass null for legacy callers — the record is then looked up here. */
         fun downloadApp(appId: Int, dlcAppIdsHint: List<Int>?): DownloadInfo? {
             val currentDownloadInfo = downloadJobs[appId]
             if (currentDownloadInfo != null) {
@@ -1961,10 +1582,7 @@ class SteamService :
                 }
             }
 
-            // If the caller didn't supply an authoritative DLC list, try to recover one from
-            // the DownloadCoordinator's persisted record. That record is store-agnostic but
-            // currently only populated for coordinator-managed downloads; if it's missing we
-            // fall through to the older DownloadingAppInfo-based recovery further down.
+            // No authoritative DLC list from the caller → recover from the coordinator's persisted record; if missing, fall through to the DownloadingAppInfo-based recovery below.
             val recordDlcIds: List<Int>? = dlcAppIdsHint
                 ?: runCatching {
                     runBlocking(Dispatchers.IO) {
@@ -1990,16 +1608,7 @@ class SteamService :
                     hasPartialFiles
                 }
             if (hasResumablePayload) {
-                // Strict trust order (per agreed fix plan with Codex):
-                //   1. Coordinator record (authoritative, store-agnostic, durable across
-                //      app restarts and DB migrations) — ALSO authoritative for an empty list
-                //      (= "user wants base game only").
-                //   2. DownloadingAppInfo DAO row (Steam-specific, written at first download).
-                //   3. inferResumeDlcAppIds (snapshot of which depots have bytes — may be a
-                //      subset, used only when no authoritative source exists).
-                //   4. resolveInstalledDlcIdsForUpdateOrVerify (DLCs already installed —
-                //      last-ditch legacy recovery).
-                // Do NOT union: an empty list from an authoritative source means "no DLCs".
+                // Trust order (do NOT union — an empty authoritative list means "no DLCs"): 1) coordinator record (authoritative, durable; empty = base game only), 2) DownloadingAppInfo row, 3) inferResumeDlcAppIds (depots with bytes), 4) resolveInstalledDlcIdsForUpdateOrVerify (installed DLCs).
                 val resumeDlcAppIds: List<Int> =
                     recordDlcIds
                         ?: downloadingAppInfo?.dlcAppIds
@@ -2041,13 +1650,18 @@ class SteamService :
             )
         }
 
-        fun downloadAppForUpdate(appId: Int): DownloadInfo? =
+        fun downloadAppForUpdate(
+            appId: Int,
+            targetDepotIds: Collection<Int> = emptyList(),
+        ): DownloadInfo? =
             downloadApp(
                 appId,
                 resolveInstalledDlcIdsForUpdateOrVerify(appId),
                 includeInstalledDepots = true,
                 enableVerify = false,
                 allowPersistedProgress = false,
+                downloadTaskType = DownloadRecord.TASK_UPDATE,
+                targetDepotIds = targetDepotIds.toSet().takeIf { it.isNotEmpty() },
             )
 
         fun downloadAppForVerify(appId: Int): DownloadInfo? =
@@ -2057,20 +1671,8 @@ class SteamService :
                 includeInstalledDepots = true,
                 enableVerify = true,
                 allowPersistedProgress = false,
+                downloadTaskType = DownloadRecord.TASK_VERIFY,
             )
-
-        private fun resolveInstalledDlcIdsForUpdateOrVerify(appId: Int): List<Int> {
-            val dlcAppIds = getInstalledDlcDepotsOf(appId).orEmpty().toMutableList()
-
-            getDownloadableDlcAppsOf(appId)?.forEach { dlcApp ->
-                val installedDlcApp = getInstalledApp(dlcApp.id)
-                if (installedDlcApp != null) {
-                    dlcAppIds.add(installedDlcApp.id)
-                }
-            }
-
-            return dlcAppIds.distinct()
-        }
 
         fun downloadApp(
             appId: Int,
@@ -2078,8 +1680,7 @@ class SteamService :
             isUpdateOrVerify: Boolean,
             customInstallPath: String? = null,
         ): DownloadInfo? {
-            // Backward-compatible API:
-            // true => include already-downloaded depots (update scope), but do not force verify.
+            // Backward-compatible API: isUpdateOrVerify=true includes already-downloaded depots (update scope) but does not force verify.
             return downloadApp(
                 appId = appId,
                 dlcAppIds = dlcAppIds,
@@ -2090,62 +1691,7 @@ class SteamService :
             )
         }
 
-        private fun downloadApp(
-            appId: Int,
-            dlcAppIds: List<Int>,
-            includeInstalledDepots: Boolean,
-            enableVerify: Boolean,
-            allowPersistedProgress: Boolean = false,
-            hasPersistedResumeRow: Boolean = false,
-            customInstallPath: String? = null,
-        ): DownloadInfo? {
-            val appInfo = getAppInfoOf(appId)
-            if (appInfo == null) {
-                Timber.e("Download aborted: Could not find AppInfo for appId: $appId")
-                return null
-            }
-
-            val downloadableDepots = getDownloadableDepots(appId)
-            if (downloadableDepots.isEmpty()) {
-                Timber.w("Download aborted: No downloadable depots found for appId: $appId")
-                instance?.let { service ->
-                    service.scope.launch(Dispatchers.Main) {
-                        WinToast.show(service.applicationContext, "No downloadable content found for this game", Toast.LENGTH_LONG)
-                    }
-                }
-                return null
-            }
-
-            // Delegate to the full depot-level downloadApp overload
-            return downloadApp(
-                appId = appId,
-                downloadableDepots = downloadableDepots,
-                userSelectedDlcAppIds = dlcAppIds,
-                branch = "public",
-                includeInstalledDepots = includeInstalledDepots,
-                enableVerify = enableVerify,
-                allowPersistedProgress = allowPersistedProgress,
-                hasPersistedResumeRow = hasPersistedResumeRow,
-                customInstallPath = customInstallPath,
-            )
-        }
-
         fun isImageFsInstalled(context: Context): Boolean = ImageFs.find(context).isValid()
-
-        fun isImageFsInstallable(
-            context: Context,
-            variant: String,
-        ): Boolean {
-            if (variant.equals("BIONIC")) {
-                return File(context.filesDir, "imagefs_bionic.txz").exists() || context.assets
-                    .list("")
-                    ?.contains("imagefs_bionic.txz") == true
-            } else {
-                return File(context.filesDir, "imagefs_gamenative.txz").exists() || context.assets
-                    .list("")
-                    ?.contains("imagefs_gamenative.txz") == true
-            }
-        }
 
         fun isSteamInstallable(context: Context): Boolean = File(context.filesDir, "steam.tzst").exists()
 
@@ -2236,39 +1782,6 @@ class SteamService :
             }
         }
 
-        fun downloadImageFs(
-            onDownloadProgress: (Float) -> Unit,
-            parentScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
-            variant: String,
-            context: Context,
-        ) = parentScope.async {
-            Timber.i("imagefs will be downloaded")
-            if (variant == "BIONIC") {
-                val dest = File(context.filesDir, "imagefs_bionic.txz")
-                Timber.d("Downloading imagefs_bionic to " + dest.toString())
-                fetchFileWithFallback("imagefs_bionic.txz", dest, context, onDownloadProgress)
-            } else {
-                Timber.d("Downloading imagefs_gamenative to " + File(context.filesDir, "imagefs_gamenative.txz"))
-                fetchFileWithFallback(
-                    "imagefs_gamenative.txz",
-                    File(context.filesDir, "imagefs_gamenative.txz"),
-                    context,
-                    onDownloadProgress,
-                )
-            }
-        }
-
-        fun downloadImageFsPatches(
-            onDownloadProgress: (Float) -> Unit,
-            parentScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
-            context: Context,
-        ) = parentScope.async {
-            Timber.i("imagefs will be downloaded")
-            val dest = File(context.filesDir, "imagefs_patches_gamenative.tzst")
-            Timber.d("Downloading imagefs_patches_gamenative.tzst to " + dest.toString())
-            fetchFileWithFallback("imagefs_patches_gamenative.tzst", dest, context, onDownloadProgress)
-        }
-
         fun downloadFile(
             onDownloadProgress: (Float) -> Unit,
             parentScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
@@ -2279,173 +1792,6 @@ class SteamService :
             val dest = File(context.filesDir, fileName)
             Timber.d("Downloading $fileName to " + dest.toString())
             fetchFileWithFallback(fileName, dest, context, onDownloadProgress)
-        }
-
-        fun downloadSteam(
-            onDownloadProgress: (Float) -> Unit,
-            parentScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
-            context: Context,
-        ) = parentScope.async {
-            Timber.i("imagefs will be downloaded")
-            val dest = File(context.filesDir, "steam.tzst")
-            Timber.d("Downloading steam.tzst to " + dest.toString())
-            fetchFileWithFallback("steam.tzst", dest, context, onDownloadProgress)
-        }
-
-        private fun selectSteamControllerConfig(details: List<SteamControllerConfigDetail>): SteamControllerConfigDetail? {
-            if (details.isEmpty()) return null
-
-            val branchPriority = listOf("default", "public")
-            val controllerPriority =
-                listOf(
-                    "controller_xbox360",
-                    "controller_xboxone",
-                    "controller_steamcontroller_gordon",
-                    "controller_generic",
-                )
-
-            for (branch in branchPriority) {
-                for (controllerType in controllerPriority) {
-                    val match =
-                        details.firstOrNull { detail ->
-                            detail.controllerType.equals(controllerType, ignoreCase = true) &&
-                                detail.enabledBranches.any { it.equals(branch, ignoreCase = true) }
-                        }
-                    if (match != null) return match
-                }
-            }
-
-            return null
-        }
-
-        private fun resolveSteamInputManifestFile(
-            appId: Int,
-            appDirPath: String,
-        ): File? {
-            val manifestPath =
-                getAppInfoOf(appId)
-                    ?.config
-                    ?.steamInputManifestPath
-                    ?.trim()
-                    .orEmpty()
-            if (manifestPath.isEmpty()) return null
-
-            return resolvePathCaseInsensitive(appDirPath, manifestPath)
-        }
-
-        private fun loadConfigFromManifest(manifestFile: File): String? {
-            if (!manifestFile.exists()) return null
-            val manifestDirPath = manifestFile.parentFile?.path ?: return null
-
-            val manifestText = manifestFile.readText(Charsets.UTF_8)
-            val configText =
-                try {
-                    parseManifestForConfig(manifestDirPath, manifestText)
-                } catch (e: Exception) {
-                    Timber.e(e, "Failed to parse Steam Input manifest config at ${manifestFile.path}")
-                    return null
-                }
-            return configText ?: manifestText
-        }
-
-        private fun parseManifestForConfig(
-            manifestDirPath: String,
-            manifestText: String,
-        ): String? {
-            return try {
-                val kv = KeyValue.loadFromString(manifestText) ?: return null
-                val actionManifest =
-                    if (kv.name?.equals("Action Manifest", ignoreCase = true) == true) {
-                        kv
-                    } else {
-                        kv["Action Manifest"]
-                    }
-                if (actionManifest === KeyValue.INVALID) return null
-
-                val configs = actionManifest["configurations"]
-                if (configs === KeyValue.INVALID || configs.children.isEmpty()) {
-                    throw IllegalStateException("No configurations found in Action Manifest")
-                }
-
-                val preferredControllers =
-                    listOf(
-                        "controller_xboxone",
-                        "controller_steamcontroller_gordon",
-                        "controller_generic",
-                        "controller_xbox360",
-                    )
-
-                for (controllerType in preferredControllers) {
-                    val controllerBlock = configs[controllerType]
-                    if (controllerBlock === KeyValue.INVALID) continue
-
-                    for (entry in controllerBlock.children) {
-                        val pathNode = entry["path"]
-                        val configPath = pathNode.asString().orEmpty()
-                        if (pathNode === KeyValue.INVALID || configPath.isEmpty()) continue
-
-                        val configFile =
-                            resolvePathCaseInsensitive(manifestDirPath, configPath)
-                                ?: continue
-                        return configFile.readText(Charsets.UTF_8)
-                    }
-                }
-
-                throw IllegalStateException("No valid controller configuration found in Action Manifest")
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to parse Steam Input manifest config")
-                null
-            }
-        }
-
-        private fun resolvePathCaseInsensitive(
-            baseDirPath: String,
-            relativePath: String,
-        ): File? {
-            val normalizedPath = relativePath.replace('\\', '/')
-            val directFile = File(baseDirPath, normalizedPath)
-            if (directFile.exists()) return directFile
-
-            var currentDir = File(baseDirPath)
-            if (!currentDir.exists() || !currentDir.isDirectory) return null
-
-            val segments = normalizedPath.split('/').filter { it.isNotEmpty() }
-            for ((index, segment) in segments.withIndex()) {
-                if (segment == ".") continue
-                if (segment == "..") {
-                    currentDir = currentDir.parentFile ?: return null
-                    continue
-                }
-                val entries = currentDir.listFiles() ?: return null
-                val matched =
-                    entries.firstOrNull {
-                        it.name.equals(segment, ignoreCase = true)
-                    } ?: return null
-
-                if (index == segments.lastIndex) {
-                    return matched
-                }
-
-                if (!matched.isDirectory) return null
-                currentDir = matched
-            }
-
-            return null
-        }
-
-        private fun readBuiltInSteamInputTemplate(fileName: String): String? {
-            val assets = instance?.assets ?: return null
-            return runCatching {
-                assets.open("steaminput/$fileName").use { stream ->
-                    stream.readBytes().toString(Charsets.UTF_8)
-                }
-            }.getOrNull()
-        }
-
-        private fun readDownloadedSteamInputTemplate(appId: Int): String? {
-            val configFile = File(getAppDirPath(appId), STEAM_CONTROLLER_CONFIG_FILENAME)
-            if (!configFile.exists()) return null
-            return configFile.readText(Charsets.UTF_8)
         }
 
         fun resolveSteamControllerVdfText(appId: Int): String? {
@@ -2477,1505 +1823,6 @@ class SteamService :
                 else -> {
                     readBuiltInSteamInputTemplate("gamepad_joystick.vdf")
                 }
-            }
-        }
-
-        fun downloadApp(
-            appId: Int,
-            downloadableDepots: Map<Int, DepotInfo>,
-            userSelectedDlcAppIds: List<Int>,
-            branch: String,
-            includeInstalledDepots: Boolean,
-            enableVerify: Boolean,
-            allowPersistedProgress: Boolean = false,
-            hasPersistedResumeRow: Boolean = false,
-            customInstallPath: String? = null,
-        ): DownloadInfo? {
-            var appDirPath = getAppDirPath(appId)
-            Timber.i("downloadApp called for appId: $appId, customInstallPath: $customInstallPath")
-
-            if (customInstallPath != null) {
-                // Determine if customInstallPath is the game folder itself or the parent
-                val appInfo = getAppInfoOf(appId)
-                val folderName = getAppDirName(appInfo)
-                val safeFolderName = if (folderName.isNotEmpty()) folderName else appId.toString()
-
-                val customFile = File(customInstallPath)
-                val finalPath =
-                    if (customFile.name.equals(safeFolderName, ignoreCase = true)) {
-                        // User selected the game folder itself
-                        normalizeInstallPath(customFile.absolutePath)
-                    } else {
-                        // User selected parent folder, create/use subfolder
-                        normalizeInstallPath(File(customInstallPath, safeFolderName).absolutePath)
-                    }
-
-                appDirPath = finalPath
-                Timber.i("Final custom appDirPath: $appDirPath")
-
-                // Update SteamApp in DB
-                runBlocking {
-                    if (appInfo != null) {
-                        val updatedApp = appInfo.copy(installDir = finalPath)
-                        instance?.appDao?.update(updatedApp)
-                        Timber.i("Updated SteamApp installDir in DB to: $finalPath")
-                    }
-                }
-            }
-
-            // Ensure the download directory exists
-            try {
-                val dir = File(appDirPath)
-                if (!dir.exists()) {
-                    if (dir.mkdirs()) {
-                        Timber.i("Created download directory: $appDirPath")
-                    } else {
-                        Timber.e("Failed to create download directory (mkdirs returned false): $appDirPath")
-                        instance?.let { service ->
-                            service.scope.launch(Dispatchers.Main) {
-                                WinToast.show(
-                                    service.applicationContext,
-                                    "Failed to create download directory. Check permissions.",
-                                    Toast.LENGTH_LONG,
-                                )
-                            }
-                        }
-                        return null
-                    }
-                }
-
-                // Add in-progress marker
-                if (!MarkerUtils.addMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)) {
-                    Timber.e("Failed to add DOWNLOAD_IN_PROGRESS_MARKER at $appDirPath")
-                }
-
-                // If this is not an update/verify, remove the complete marker to reset state
-                if (!includeInstalledDepots) {
-                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
-                }
-            } catch (e: Exception) {
-                Timber.e(e, "Error preparing download directory or markers: $appDirPath")
-            }
-
-            // If a custom path is provided, we want to force a new download at that location
-            if (customInstallPath != null) {
-                Timber.i("Custom path provided, cancelling any existing job for appId: $appId")
-                downloadJobs[appId]?.cancel("Restarting download at custom path")
-                downloadJobs.remove(appId)
-            } else {
-                // Only return existing job if it's still active
-                val existingJob = downloadJobs[appId]
-                if (existingJob != null && existingJob.isActive()) {
-                    Timber.i("Returning existing active download job for appId: $appId")
-                    return existingJob
-                }
-            }
-
-            Timber.d("Checking depots for appId: $appId. downloadableDepots count: ${downloadableDepots.size}")
-            if (downloadableDepots.isEmpty()) {
-                Timber.w("Download aborted: downloadableDepots is empty for appId: $appId")
-                return null
-            }
-
-            val indirectDlcAppIds = getDownloadableDlcAppsOf(appId).orEmpty().map { it.id }
-            Timber.d("Indirect DLC app IDs for appId $appId: $indirectDlcAppIds")
-
-            // Depots from Main game
-            val mainDepots = getMainAppDepots(appId)
-            Timber.d("Main app depots count: ${mainDepots.size}")
-            val originalMainAppDepots =
-                mainDepots.filter { (_, depot) ->
-                    depot.dlcAppId == INVALID_APP_ID
-                } +
-                    mainDepots.filter { (_, depot) ->
-                        userSelectedDlcAppIds.contains(depot.dlcAppId) && depot.manifests.isNotEmpty()
-                    }
-            var mainAppDepots = originalMainAppDepots
-            Timber.d("Filtered main app depots count: ${mainAppDepots.size}")
-
-            // Depots from DLC App
-            val dlcAppDepots =
-                downloadableDepots.filter { (_, depot) ->
-                    !mainAppDepots.map { it.key }.contains(depot.depotId) &&
-                        userSelectedDlcAppIds.contains(depot.dlcAppId) && indirectDlcAppIds.contains(depot.dlcAppId) &&
-                        depot.manifests.isNotEmpty()
-                }
-            Timber.d("Filtered DLC app depots count: ${dlcAppDepots.size}")
-
-            // Remove depots that are already downloaded only when install metadata is trusted.
-            // But if a custom path is provided, we want to check/download everything at the new location
-            var installedApp = getInstalledApp(appId)
-            val hasCompleteMarker = MarkerUtils.hasMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
-            var hasTrustedInstalledState = installedApp?.isDownloaded == true && hasCompleteMarker
-            if (!includeInstalledDepots && installedApp != null && !hasTrustedInstalledState && customInstallPath == null) {
-                val hasStaleInstallMetadata =
-                    installedApp.isDownloaded ||
-                        installedApp.downloadedDepots.isNotEmpty() ||
-                        installedApp.dlcDepots.isNotEmpty()
-                if (hasStaleInstallMetadata) {
-                    Timber.w(
-                        "Clearing stale install metadata for appId=$appId " +
-                            "(isDownloaded=${installedApp.isDownloaded}, marker=$hasCompleteMarker)",
-                    )
-                    runBlocking(Dispatchers.IO) {
-                        instance?.appInfoDao?.deleteApp(appId)
-                    }
-                    installedApp = null
-                }
-                hasTrustedInstalledState = false
-            }
-            if (installedApp != null && !includeInstalledDepots && hasTrustedInstalledState && customInstallPath == null) {
-                val beforeCount = mainAppDepots.size
-                mainAppDepots = mainAppDepots.filter { it.key !in installedApp.downloadedDepots }
-                Timber.d("Removed already downloaded depots. Count before: $beforeCount, after: ${mainAppDepots.size}")
-            }
-
-            // CRITICAL: clear JavaSteam's DepotConfigStore (.DepotDownloader/depot.config)
-            // whenever this app does NOT have the COMPLETE marker. JavaSteam writes
-            // installedManifestIDs[depotId] = manifestId in processDepotManifestAndFiles
-            // BEFORE that depot's chunks have actually been downloaded. On the next resume
-            // it loads the config, sees the manifest ID matches, and SKIPS file checksum
-            // validation (DepotDownloader.kt:1298-1409) — trusting preallocated/sparse
-            // partial files as if they were fully downloaded. That's why pause→resume left
-            // depots looking "complete" while gigabytes of chunks were never written. Deleting
-            // depot.config forces JavaSteam to re-checksum every file on disk; correctly-present
-            // files are skipped (cheap), missing/partial files get re-downloaded.
-            if (!hasCompleteMarker) {
-                val depotConfigFile = File(File(appDirPath, ".DepotDownloader"), "depot.config")
-                if (depotConfigFile.exists()) {
-                    val deleted = depotConfigFile.delete()
-                    Timber.i(
-                        "Cleared JavaSteam DepotConfigStore at ${depotConfigFile.absolutePath} " +
-                            "(deleted=$deleted) — forces re-validation of all depot files for " +
-                            "appId=$appId because the COMPLETE marker is absent.",
-                    )
-                }
-            }
-
-            val allDepots = originalMainAppDepots + dlcAppDepots
-            // Use install (uncompressed) size for progress tracking
-            val depotSizeById =
-                allDepots.mapValues { (_, depot) ->
-                    val mInfo = depot.manifests[branch] ?: depot.encryptedManifests[branch]
-                    (mInfo?.size ?: 1L).coerceAtLeast(1L)
-                }
-
-            // Load persisted progress snapshot to skip fully downloaded depots.
-            // Mutable so the safety check below can drop suspicious entries before they
-            // poison di.depotCumulativeUncompressedBytes during resume init.
-            var persistedDepotBytes: Map<Int, Long> =
-                if (allowPersistedProgress) {
-                    DownloadInfo.loadPersistedDepotBytes(appDirPath)
-                } else {
-                    emptyMap()
-                }
-
-            // SAFETY CHECK (scope-mismatch detection): if the persisted snapshot remembers
-            // depots that aren't in the current resume scope, the userSelectedDlcAppIds we
-            // resolved is a SUBSET of what was originally downloading. Continuing would
-            // download only the subset and then incorrectly mark the game COMPLETE because
-            // selectedDepots would empty out before the missing DLCs ever get registered.
-            // Refuse to proceed — the user can cancel + redownload to recover.
-            if (allowPersistedProgress && persistedDepotBytes.isNotEmpty()) {
-                val depotsInScope = allDepots.keys
-                val orphanSnapshotDepots = persistedDepotBytes.keys - depotsInScope
-                if (orphanSnapshotDepots.isNotEmpty()) {
-                    Timber.e(
-                        "Resume scope mismatch for appId=$appId: snapshot has depot(s) " +
-                            "$orphanSnapshotDepots that are not in the current download scope " +
-                            "(scope depots: $depotsInScope). The DLC list used to resume is " +
-                            "incomplete; refusing to finalize to avoid a partial-COMPLETE.",
-                    )
-                    instance?.let { service ->
-                        service.scope.launch(Dispatchers.Main) {
-                            WinToast.show(
-                                service.applicationContext,
-                                "Resume failed: download scope changed. Please cancel and re-download.",
-                                Toast.LENGTH_LONG,
-                            )
-                        }
-                    }
-                    val info = DownloadInfo(1, appId, CopyOnWriteArrayList(listOf(appId)))
-                    info.updateStatus(DownloadPhase.FAILED, "Resume scope mismatch — cancel and re-download")
-                    info.setActive(false)
-                    downloadJobs[appId] = info
-                    notifyDownloadStarted(appId)
-                    runBlocking {
-                        DownloadCoordinator.notifyFinished(
-                            DownloadRecord.STORE_STEAM,
-                            appId.toString(),
-                            DownloadRecord.STATUS_FAILED,
-                            "Resume scope mismatch",
-                        )
-                    }
-                    return info
-                }
-            }
-
-            val fullyDownloadedDepotsFromSnapshot = mutableSetOf<Int>()
-            if (persistedDepotBytes.isNotEmpty()) {
-                for ((depotId, _) in allDepots) {
-                    val depotSize = depotSizeById[depotId] ?: 1L
-                    val downloadedBytes = persistedDepotBytes[depotId] ?: 0L
-                    Timber.d(
-                        "Resume snapshot for appId=$appId depot=$depotId: persisted=$downloadedBytes / size=$depotSize " +
-                            (if (downloadedBytes >= depotSize) "-> SKIP-CANDIDATE" else "-> include"),
-                    )
-                    if (downloadedBytes >= depotSize) {
-                        fullyDownloadedDepotsFromSnapshot.add(depotId)
-                    }
-                }
-                if (fullyDownloadedDepotsFromSnapshot.isNotEmpty()) {
-                    // CRITICAL safety: only TRUST the snapshot's "fully downloaded" claim
-                    // when the COMPLETE marker exists for the game. Without that marker the
-                    // game was a partial download — and we have a history of snapshot
-                    // corruption pushing depots to depotSize prematurely (e.g., race
-                    // attribution in older builds, or interrupted onDepotCompleted paths).
-                    // For partial downloads, let DepotDownloader's per-file checksum
-                    // validation handle resume: it'll skip files that already match on disk
-                    // (cheap), and re-download missing chunks.
-                    if (hasCompleteMarker) {
-                        Timber.i(
-                            "Skipping ${fullyDownloadedDepotsFromSnapshot.size} fully downloaded depots from snapshot " +
-                                "(COMPLETE marker present): $fullyDownloadedDepotsFromSnapshot",
-                        )
-                        mainAppDepots = mainAppDepots.filter { it.key !in fullyDownloadedDepotsFromSnapshot }
-                    } else {
-                        Timber.w(
-                            "REFUSING to skip ${fullyDownloadedDepotsFromSnapshot.size} depots claimed full by snapshot " +
-                                "for appId=$appId because COMPLETE marker is absent. Depots will be re-validated " +
-                                "by the downloader: $fullyDownloadedDepotsFromSnapshot",
-                        )
-                        // Drop the suspicious entries from persistedDepotBytes so they don't
-                        // get re-loaded into di.depotCumulativeUncompressedBytes (which would
-                        // re-persist them at depotSize on the next pause and re-trigger the
-                        // bug). The in-memory tracker for these depots will start at 0 and
-                        // grow with real download progress.
-                        persistedDepotBytes = persistedDepotBytes.filterKeys {
-                            it !in fullyDownloadedDepotsFromSnapshot
-                        }
-                        // Clear the on-disk snapshot file too. New persists will re-create
-                        // it with only the real, current per-depot bytes.
-                        clearPersistedProgressSnapshot(appDirPath)
-                        fullyDownloadedDepotsFromSnapshot.clear()
-                    }
-                }
-            }
-
-            // Combine main app and DLC depots
-            val filteredDlcAppDepots = dlcAppDepots.filter { it.key !in fullyDownloadedDepotsFromSnapshot }
-            val selectedDepots = mainAppDepots + filteredDlcAppDepots
-            Timber.i("Total selected depots for download: ${selectedDepots.size}")
-
-            if (selectedDepots.isEmpty()) {
-                // Check if it was empty even before snapshot filtering
-                var preSnapshotMainAppDepots = originalMainAppDepots
-                if (installedApp != null && !includeInstalledDepots && hasTrustedInstalledState) {
-                    preSnapshotMainAppDepots = preSnapshotMainAppDepots.filter { it.key !in installedApp.downloadedDepots }
-                }
-                val preSnapshotSelectedDepots = preSnapshotMainAppDepots + dlcAppDepots
-
-                if (preSnapshotSelectedDepots.isEmpty()) {
-                    Timber.i("selectedDepots is empty before snapshot filtering - App already installed.")
-
-                    // Instead of returning null, create a completed/verifying job so it shows in UI
-                    val info = DownloadInfo(1, appId, CopyOnWriteArrayList(listOf(appId)))
-                    info.updateStatus(DownloadPhase.COMPLETE)
-                    info.setProgress(1f)
-                    downloadJobs[appId] = info
-
-                    if (allowPersistedProgress) {
-                        Timber.i("Resume became a no-op; clearing stale persisted resume state")
-                        clearFailedResumeState(appId)
-                    }
-
-                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                    MarkerUtils.addMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
-
-                    // Show success message to user
-                    instance?.let { service ->
-                        service.scope.launch(Dispatchers.Main) {
-                            WinToast.show(service.applicationContext, "Download complete", Toast.LENGTH_SHORT)
-                        }
-                    }
-
-                    return info
-                }
-
-                // Snapshot says all depots are complete but marker is missing.
-                // Finalize metadata/markers directly instead of re-queuing depots.
-                val canFinalizeFromSnapshot =
-                    allowPersistedProgress &&
-                        fullyDownloadedDepotsFromSnapshot.isNotEmpty() &&
-                        (hasCompleteMarker || hasPersistedResumeRow)
-                if (canFinalizeFromSnapshot) {
-                    Timber.i("All resume depots appear complete from snapshot; finalizing without downloader")
-                    val info =
-                        finalizeSnapshotResumeAsComplete(
-                            appId = appId,
-                            appDirPath = appDirPath,
-                            mainAppDepots = preSnapshotMainAppDepots,
-                            dlcAppDepots = dlcAppDepots,
-                            userSelectedDlcAppIds = userSelectedDlcAppIds,
-                        )
-                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                    return info
-                } else {
-                    if (allowPersistedProgress) {
-                        if (fullyDownloadedDepotsFromSnapshot.isNotEmpty()) {
-                            Timber.w(
-                                "Snapshot indicates completion for appId=$appId but state is untrusted " +
-                                    "(marker=$hasCompleteMarker, resumeRow=$hasPersistedResumeRow); clearing resume metadata",
-                            )
-                        } else {
-                            Timber.i("selectedDepots resolved empty on resume; clearing stale resume metadata")
-                        }
-                        clearFailedResumeState(appId)
-                    } else {
-                        Timber.i("selectedDepots resolved empty after filtering; skipping download start")
-                    }
-                }
-                MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                return null
-            }
-
-            val downloadingAppIds = CopyOnWriteArrayList<Int>()
-            val calculatedDlcAppIds = CopyOnWriteArrayList<Int>()
-            val allDepotIdsByDlcAppId =
-                dlcAppDepots.values
-                    .groupBy(keySelector = { it.dlcAppId }, valueTransform = { it.depotId })
-                    .mapValues { (_, depotIds) -> depotIds.sorted() }
-            val selectedDepotIdsByDlcAppId =
-                selectedDepots.values
-                    .groupBy(keySelector = { it.dlcAppId }, valueTransform = { it.depotId })
-                    .mapValues { (_, depotIds) -> depotIds.sorted() }
-
-            userSelectedDlcAppIds.forEach { dlcAppId ->
-                if (allDepotIdsByDlcAppId[dlcAppId]?.isNotEmpty() == true) {
-                    downloadingAppIds.add(dlcAppId)
-                    calculatedDlcAppIds.add(dlcAppId)
-                }
-            }
-
-            // Add main app ID if there are main app depots
-            if (mainAppDepots.isNotEmpty()) {
-                downloadingAppIds.add(appId)
-            }
-
-            // There are some apps, the dlc depots does not have dlcAppId in the data, need to set it back
-            val mainAppDlcIds = getMainAppDlcIdsWithoutProperDepotDlcIds(appId)
-
-            // If there are no DLC depots, download the main app only
-            if (dlcAppDepots.isEmpty()) {
-                // Because all dlcIDs are coming from main depots, need to add the dlcID to main app in order to save it to db after finish download
-                mainAppDlcIds.addAll(mainAppDepots.filter { it.value.dlcAppId != INVALID_APP_ID }.map { it.value.dlcAppId }.distinct())
-
-                // Refresh id List, so only main app is downloaded
-                calculatedDlcAppIds.clear()
-                downloadingAppIds.clear()
-                downloadingAppIds.add(appId)
-            }
-
-            Timber.i("Starting download for $appId")
-            Timber.i("App contains ${mainAppDepots.size} depot(s): ${mainAppDepots.keys}")
-            Timber.i("DLC contains ${dlcAppDepots.size} depot(s): ${dlcAppDepots.keys}")
-            Timber.i("downloadingAppIds: $downloadingAppIds")
-
-            val service =
-                instance ?: run {
-                    Timber.e("SteamService instance is null, cannot start download job.")
-                    return null
-                }
-
-            // Save downloading app info
-            runBlocking {
-                service.downloadingAppInfoDao.insert(
-                    DownloadingAppInfo(
-                        appId,
-                        dlcAppIds = userSelectedDlcAppIds,
-                    ),
-                )
-                Unit
-            }
-
-            // Ask the global coordinator whether this download can start now or must be queued
-            // behind downloads from other stores too. The coordinator persists the decision in
-            // its DownloadRecord table so the request survives an app restart.
-            val coordDecision =
-                runBlocking {
-                    val title = getAppInfoOf(appId)?.name.orEmpty()
-                    DownloadCoordinator.requestSlot(
-                        store = DownloadRecord.STORE_STEAM,
-                        storeGameId = appId.toString(),
-                        title = title,
-                        installPath = appDirPath,
-                        selectedDlcs = userSelectedDlcAppIds.joinToString(","),
-                    )
-                }
-            if (coordDecision is DownloadCoordinator.Decision.Queue) {
-                Timber.i("Coordinator queued appId: $appId")
-                val info =
-                    DownloadInfo(selectedDepots.size, appId, downloadingAppIds).also { di ->
-                        di.setPersistencePath(appDirPath)
-                        di.updateStatus(DownloadPhase.QUEUED, "Queued...")
-                        di.setActive(false)
-                    }
-                downloadJobs[appId] = info
-                notifyDownloadStarted(appId)
-                return info
-            }
-
-            val info =
-                DownloadInfo(selectedDepots.size, appId, downloadingAppIds).also { di ->
-                    di.setPersistencePath(appDirPath)
-
-                    // Set weights for each depot based on manifest sizes
-                    val selectedDepotSizes =
-                        selectedDepots.mapValues { (depotId, _) ->
-                            depotSizeById[depotId] ?: 1L
-                        }
-                    selectedDepots.keys.forEachIndexed { index, depotId ->
-                        di.setWeight(index, selectedDepotSizes[depotId] ?: 1L)
-                    }
-
-                    // Track progress only for depots in this active run so excluded/complete depots
-                    // (including DLC already marked complete) cannot pre-fill progress at startup.
-                    val selectedTotalBytes = selectedDepotSizes.values.sum()
-                    val totalBytes = selectedTotalBytes.coerceAtLeast(1L)
-
-                    // Total expected size (used for ETA based on recent download speed)
-                    di.setTotalExpectedBytes(totalBytes)
-
-                    var resumedBytes = 0L
-
-                    if (allowPersistedProgress) {
-                        for ((depotId, bytes) in persistedDepotBytes) {
-                            // If the depot was excluded because it's fully downloaded, we still need to track its bytes
-                            // so that future snapshots retain this progress.
-                            val depotSize = depotSizeById[depotId] ?: continue
-                            val safeBytes = bytes.coerceIn(0L, depotSize)
-                            di.depotCumulativeUncompressedBytes[depotId] =
-                                java.util.concurrent.atomic
-                                    .AtomicLong(safeBytes)
-                            // Count resumed bytes only for depots actively downloading in this run.
-                            if (depotId in selectedDepots) {
-                                resumedBytes += safeBytes
-                            }
-                            Timber.i(
-                                "RESUME-INIT depot=$depotId loaded=$safeBytes (snapshot=$bytes, max=$depotSize, " +
-                                    "inSelected=${depotId in selectedDepots}, inSession=${depotId in selectedDepotSizes.keys})",
-                            )
-                        }
-                    } else {
-                        // SYNC clear so a stale snapshot from a previous (possibly buggy)
-                        // session can't poison this fresh download. Async clear has a race
-                        // window where new persists can read or even overwrite with stale
-                        // depot byte counts.
-                        di.clearPersistedBytesDownloaded(appDirPath, sync = true)
-                        Timber.i("RESUME-INIT cleared persisted snapshot (sync) for fresh download appId=$appId")
-                    }
-                    resumedBytes = resumedBytes.coerceIn(0L, totalBytes)
-
-                    if (resumedBytes > 0L) {
-                        di.initializeBytesDownloaded(resumedBytes)
-                        Timber.i("Resumed download: initialized with $resumedBytes bytes")
-                    }
-
-                    val downloadJob =
-                        service.scope.launch {
-                            var depotDownloader: DepotDownloader? = null
-                            try {
-                                // Retry loop for transient Steam API failures (AsyncJobFailedException) or missing client
-                                val maxRetries = 3
-                                var lastException: Exception? = null
-
-                                for (attempt in 1..maxRetries) {
-                                    lastException = null
-                                    try {
-                                        if (attempt > 1) {
-                                            Timber.i("Retry attempt $attempt/$maxRetries for appId: $appId")
-                                            di.updateStatusMessage("Retrying download (attempt $attempt/$maxRetries)...")
-                                            withContext(Dispatchers.Main) {
-                                                WinToast.show(
-                                                    instance?.applicationContext ?: return@withContext,
-                                                    "Retrying download (attempt $attempt/$maxRetries)...",
-                                                    Toast.LENGTH_SHORT,
-                                                )
-                                            }
-                                            kotlinx.coroutines.delay(3000L * attempt) // Exponential backoff
-                                        }
-
-                                        // Wait for steamClient to be connected and logged in
-                                        var client = instance?.steamClient
-                                        var waitAttempts = 0
-                                        // Increased wait limit and robustness
-                                        while ((client == null || !isConnected || !isLoggedIn) && waitAttempts < 60) {
-                                            val reason =
-                                                when {
-                                                    client == null -> "initializing"
-                                                    !isConnected -> "connecting"
-                                                    !isLoggedIn -> "logging in"
-                                                    else -> "waiting"
-                                                }
-                                            Timber.i("Waiting for Steam client ($reason, attempt $waitAttempts)...")
-                                            di.updateStatusMessage("Waiting for connection ($reason)...")
-                                            delay(1000L)
-                                            client = instance?.steamClient
-                                            waitAttempts++
-                                        }
-
-                                        if (client == null || !isConnected || !isLoggedIn) {
-                                            throw Exception(
-                                                "Steam client not connected or logged in. Please check your connection and login status.",
-                                            )
-                                        }
-
-                                        // Get licenses from database
-                                        Timber.i("Retrieving licenses from database for appId: $appId")
-                                        di.updateStatusMessage("Retrieving licenses...")
-                                        var licenses = getLicensesFromDb()
-                                        waitAttempts = 0
-                                        while (licenses.isEmpty() && waitAttempts < 10) {
-                                            Timber.i("Waiting for licenses to be available (attempt $waitAttempts)...")
-                                            di.updateStatusMessage("Waiting for licenses...")
-                                            delay(1000L)
-                                            licenses = getLicensesFromDb()
-                                            waitAttempts++
-                                        }
-
-                                        if (licenses.isEmpty()) {
-                                            throw Exception("No Steam licenses found. Please ensure you are logged in.")
-                                        }
-                                        Timber.i("Retrieved ${licenses.size} licenses from database")
-
-                                        // Optimized ratios for 8-core mobile devices
-                                        val cpuCores = Runtime.getRuntime().availableProcessors()
-                                        var downloadRatio = 1.0
-                                        var decompressRatio = 0.5 // Start with balanced default
-
-                                        when (PrefManager.downloadSpeed.toInt()) {
-                                            8 -> {
-                                                downloadRatio = 0.6
-                                                decompressRatio = 0.2
-                                            }
-
-                                            16 -> {
-                                                downloadRatio = 1.2
-                                                decompressRatio = 0.4
-                                            }
-
-                                            24 -> {
-                                                downloadRatio = 1.5
-                                                decompressRatio = 0.5
-                                            }
-
-                                            32 -> {
-                                                downloadRatio = 2.4
-                                                decompressRatio = 0.8
-                                            }
-
-                                            else -> {
-                                                // Auto/Default optimization for 8 cores
-                                                if (cpuCores >= 8) {
-                                                    downloadRatio = 1.5 // Aggressive downloading
-                                                    decompressRatio = 0.5 // Moderate decompression to prevent UI stutter
-                                                } else {
-                                                    downloadRatio = 1.0
-                                                    decompressRatio = 0.4
-                                                }
-                                            }
-                                        }
-
-                                        val maxDownloads = (cpuCores * downloadRatio).toInt().coerceAtLeast(2)
-                                        val maxDecompress = (cpuCores * decompressRatio).toInt().coerceAtLeast(1)
-
-                                        Timber.i(
-                                            "Download Config - Cores: $cpuCores, DL Ratio: $downloadRatio, Decomp Ratio: $decompressRatio",
-                                        )
-                                        Timber.i("Threads - Max Downloads: $maxDownloads, Max Decompress: $maxDecompress")
-
-                                        // Create DepotDownloader instance
-                                        Timber.i("Initializing DepotDownloader for appId: $appId (attempt $attempt)")
-                                        di.updateStatusMessage("Initializing downloader...")
-                                        depotDownloader =
-                                            DepotDownloader(
-                                                client,
-                                                licenses,
-                                                debug = false,
-                                                androidEmulation = true,
-                                                maxDownloads = maxDownloads,
-                                                maxDecompress = maxDecompress,
-                                                maxFileWrites = 1,
-                                                parentJob = coroutineContext[Job],
-                                            )
-
-                                        // Create listeners for DLC apps
-                                        val depotIdToIndex = selectedDepots.keys.mapIndexed { index, depotId -> depotId to index }.toMap()
-                                        val listener =
-                                            AppDownloadListener(
-                                                di,
-                                                depotIdToIndex,
-                                                selectedDepotSizes,
-                                            )
-                                        depotDownloader!!.addListener(listener)
-
-                                        if (mainAppDepots.isNotEmpty()) {
-                                            val mainAppDepotIds = mainAppDepots.keys.sorted()
-                                            val mainAppItem =
-                                                AppItem(
-                                                    appId,
-                                                    installDirectory = appDirPath,
-                                                    depot = mainAppDepotIds,
-                                                    verify = enableVerify,
-                                                )
-                                            depotDownloader!!.add(mainAppItem)
-                                        }
-
-                                        calculatedDlcAppIds.forEach { dlcAppId ->
-                                            val dlcDepotIds = selectedDepotIdsByDlcAppId[dlcAppId].orEmpty()
-                                            if (dlcDepotIds.isEmpty()) return@forEach
-
-                                            val dlcAppItem =
-                                                AppItem(
-                                                    dlcAppId,
-                                                    installDirectory = appDirPath,
-                                                    depot = dlcDepotIds,
-                                                    verify = enableVerify,
-                                                )
-                                            depotDownloader!!.add(dlcAppItem)
-                                        }
-
-                                        // Steam Controller Config download
-                                        val appConfig = getAppInfoOf(appId)?.config
-                                        if (appConfig?.steamControllerTemplateIndex == 1) {
-                                            val controllerConfig =
-                                                appConfig.steamControllerConfigDetails
-                                                    .let { selectSteamControllerConfig(it) }
-
-                                            if (controllerConfig != null) {
-                                                val publishedFileId = controllerConfig.publishedFileId
-                                                runCatching {
-                                                    val requestBody =
-                                                        FormBody
-                                                            .Builder()
-                                                            .add(
-                                                                "itemcount",
-                                                                "1",
-                                                            ).add("publishedfileids[0]", publishedFileId.toString())
-                                                            .build()
-                                                    val request =
-                                                        Request
-                                                            .Builder()
-                                                            .url(
-                                                                "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1",
-                                                            ).post(requestBody)
-                                                            .build()
-                                                    Net.http.newCall(request).execute().use { response ->
-                                                        if (response.isSuccessful) {
-                                                            val responseBody = response.body?.string()
-                                                            if (!responseBody.isNullOrEmpty()) {
-                                                                val responseJson = JSONObject(responseBody)
-                                                                val responseData = responseJson.optJSONObject("response")
-                                                                val fileUrl =
-                                                                    responseData
-                                                                        ?.optJSONArray(
-                                                                            "publishedfiledetails",
-                                                                        )?.optJSONObject(0)
-                                                                        ?.optString("file_url", "")
-                                                                        ?.trim()
-                                                                if (!fileUrl.isNullOrEmpty()) {
-                                                                    val configFile = File(appDirPath, STEAM_CONTROLLER_CONFIG_FILENAME)
-                                                                    val downloadRequest =
-                                                                        Request
-                                                                            .Builder()
-                                                                            .url(fileUrl)
-                                                                            .get()
-                                                                            .build()
-                                                                    Net.http.newCall(downloadRequest).execute().use { downloadResponse ->
-                                                                        if (downloadResponse.isSuccessful) {
-                                                                            downloadResponse.body?.byteStream()?.use { input ->
-                                                                                configFile.outputStream().use { output ->
-                                                                                    input.copyTo(output)
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        // Signal that no more items will be added
-                                        depotDownloader!!.finishAdding()
-
-                                        Timber.i("Downloading game to $appDirPath (attempt $attempt)")
-
-                                        // Wait for completion. Use the kotlinx-coroutines `await()`
-                                        // extension on CompletableFuture so cancellation propagates
-                                        // (the previous .join() was uninterruptible and made the
-                                        // coroutine wait until JavaSteam's finishDepotDownload fired
-                                        // even after the user had paused — leading to the COMPLETE
-                                        // marker being set on partial installs when JavaSteam's
-                                        // pendingChunks loop drained on cancel).
-                                        try {
-                                            val completion = depotDownloader?.getCompletion()
-                                            if (completion is kotlinx.coroutines.Deferred<*>) {
-                                                Timber.i("Waiting for DepotDownloader Deferred completion...")
-                                                completion.await()
-                                            } else if (completion is java.util.concurrent.CompletableFuture<*>) {
-                                                Timber.i("Waiting for DepotDownloader CompletableFuture completion...")
-                                                @Suppress("UNCHECKED_CAST")
-                                                (completion as java.util.concurrent.CompletableFuture<Any?>).await()
-                                            } else if (completion != null) {
-                                                Timber.w(
-                                                    "Unknown completion type ${completion.javaClass.simpleName}; falling back to .toString()",
-                                                )
-                                            } else {
-                                                Timber.i("Downloader completion is null, assuming immediate success")
-                                            }
-                                        } catch (e: Exception) {
-                                            if (e is CancellationException) throw e
-                                            Timber.w(e, "DepotDownloader completion await encountered an error")
-                                        }
-
-                                        // Hard barrier: even if completion.await returned without
-                                        // throwing, re-check for cancellation. JavaSteam can complete
-                                        // its CompletableFuture as a side-effect of pending chunks
-                                        // being cancelled (pendingChunks drains to 0 → finishDepot
-                                        // Download fires) — in that race we must NOT proceed to
-                                        // completeAppDownload, which would set the COMPLETE marker
-                                        // for a paused/partial install.
-                                        coroutineContext.ensureActive()
-                                        if (!di.isActive() || di.isCancelling) {
-                                            Timber.i(
-                                                "DepotDownloader completion returned but DownloadInfo is no longer active " +
-                                                    "(isActive=${di.isActive()}, isCancelling=${di.isCancelling}). " +
-                                                    "Skipping completeAppDownload — the user paused or cancelled.",
-                                            )
-                                            throw CancellationException(
-                                                if (di.isCancelling) "Cancelled by user" else "Paused by user",
-                                            )
-                                        }
-
-                                        Timber.i("DepotDownloader finished for appId: $appId")
-
-                                        // If it was extremely fast (e.g. already downloaded), ensure some visibility in UI
-                                        if (di.getProgress() >= 1.0f) {
-                                            delay(1000)
-                                        }
-
-                                        // If we got here without exception, download succeeded
-                                        break
-                                    } catch (e: AsyncJobFailedException) {
-                                        lastException = e
-                                        Timber.w(e, "AsyncJobFailedException on attempt $attempt/$maxRetries for appId: $appId")
-                                        // Close the downloader from the failed attempt
-                                        runCatching { depotDownloader?.close() }.onFailure { closeError ->
-                                            Timber.w(closeError, "Failed to close downloader on retry for app $appId")
-                                        }
-                                        depotDownloader = null
-                                        if (attempt >= maxRetries) {
-                                            Timber.e("All $maxRetries retry attempts failed for appId: $appId")
-                                            throw e
-                                        }
-                                        di.setActive(true)
-                                        continue
-                                    }
-                                }
-
-                                // Complete app download - Wrap in try-catch to ensure we don't crash at the finish line
-                                try {
-                                    di.updateStatusMessage("Finalizing installation...")
-                                    Timber.i("Finalizing installation at path: $appDirPath")
-                                    if (originalMainAppDepots.isNotEmpty()) {
-                                        val mainAppDepotIds = originalMainAppDepots.keys.sorted()
-                                        completeAppDownload(di, appId, mainAppDepotIds, mainAppDlcIds, appDirPath)
-                                    }
-
-                                    calculatedDlcAppIds.forEach { dlcAppId ->
-                                        val dlcDepotIds = allDepotIdsByDlcAppId[dlcAppId].orEmpty()
-                                        completeAppDownload(di, dlcAppId, dlcDepotIds, emptyList(), appDirPath)
-                                    }
-                                    Timber.i("Installation finalized for appId: $appId")
-
-                                    // Show success message to user
-                                    instance?.let { service ->
-                                        service.scope.launch(Dispatchers.Main) {
-                                            WinToast.show(service.applicationContext, "Download complete", Toast.LENGTH_SHORT)
-                                            Unit
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    Timber.e(e, "Error during finalize/database update for appId: $appId")
-                                    throw e
-                                }
-
-                                // Remove the job here
-                                removeDownloadJob(appId)
-
-                                // Remove the downloading app info
-                                runBlocking {
-                                    instance?.downloadingAppInfoDao?.deleteApp(appId)
-                                    Unit
-                                }
-                                Unit
-                            } catch (e: DownloadFailedException) {
-                                Timber.d(e, "Download failed for app $appId via cancellation")
-                                clearFailedResumeState(appId)
-                                di.updateStatus(DownloadPhase.FAILED)
-                                di.setActive(false)
-                                // Clean up markers
-                                MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                                runBlocking {
-                                    DownloadCoordinator.notifyFinished(
-                                        DownloadRecord.STORE_STEAM,
-                                        appId.toString(),
-                                        DownloadRecord.STATUS_FAILED,
-                                        e.message,
-                                    )
-                                }
-                                removeDownloadJob(appId)
-                                return@launch
-                            } catch (e: CancellationException) {
-                                if (di.isDeleting) {
-                                    Timber.d("Download cancelled for deletion for app $appId")
-                                    return@launch
-                                }
-
-                                if (di.isCancelling) {
-                                    Timber.d("Download cancelled by user for app $appId")
-                                    di.persistProgressSnapshot(force = true)
-                                    di.updateStatus(DownloadPhase.CANCELLED)
-                                    di.setActive(false)
-                                    runBlocking {
-                                        DownloadCoordinator.notifyFinished(
-                                            DownloadRecord.STORE_STEAM,
-                                            appId.toString(),
-                                            DownloadRecord.STATUS_CANCELLED,
-                                        )
-                                    }
-                                    throw e
-                                }
-
-                                Timber.d(e, "Download paused for app $appId")
-                                // Keep downloadingAppInfo on cancellation so resume does not fall into verify mode.
-                                di.persistProgressSnapshot(force = true)
-                                di.updateStatus(DownloadPhase.PAUSED)
-                                di.setActive(false)
-                                runBlocking {
-                                    DownloadCoordinator.notifyFinished(
-                                        DownloadRecord.STORE_STEAM,
-                                        appId.toString(),
-                                        DownloadRecord.STATUS_PAUSED,
-                                    )
-                                }
-                                throw e
-                            } catch (e: Exception) {
-                                Timber.e(e, "Download failed for app $appId")
-                                clearFailedResumeState(appId)
-
-                                val errorMsg =
-                                    when (e) {
-                                        is ClassCastException -> "Casting error: ${e.message}"
-                                        is NullPointerException -> "Null reference: ${e.message}"
-                                        else -> e.localizedMessage ?: e.message ?: e.javaClass.simpleName
-                                    }
-
-                                di.updateStatus(DownloadPhase.FAILED, errorMsg)
-                                di.setActive(false)
-                                // Clean up markers and DB state
-                                MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                                runBlocking {
-                                    instance?.downloadingAppInfoDao?.deleteApp(appId)
-                                    Unit
-                                }
-                                runBlocking {
-                                    DownloadCoordinator.notifyFinished(
-                                        DownloadRecord.STORE_STEAM,
-                                        appId.toString(),
-                                        DownloadRecord.STATUS_FAILED,
-                                        errorMsg,
-                                    )
-                                }
-                                removeDownloadJob(appId)
-                                // Show error to user
-                                instance?.let { service ->
-                                    service.scope.launch(Dispatchers.Main) {
-                                        WinToast.show(service.applicationContext, "Download failed: $errorMsg", Toast.LENGTH_LONG)
-                                        Unit
-                                    }
-                                }
-                                PluviaApp.events.emit(AndroidEvent.DownloadStatusChanged(appId, false))
-                                Unit
-                            } finally {
-                                runCatching {
-                                    depotDownloader?.close()
-                                    Unit
-                                }.onFailure { closeError ->
-                                    Timber.w(closeError, "Failed to close downloader for app $appId")
-                                }
-                                Unit
-                            }
-                            Unit
-                        }
-                    downloadJob.invokeOnCompletion { throwable ->
-                        if (throwable is CancellationException && throwable !is DownloadFailedException) {
-                            if (di.isDeleting) {
-                                // Deletion handled externally
-                            } else if (di.isCancelling) {
-                                // Keep in downloadJobs for UI visibility, but still check queue
-                                checkQueue()
-                            } else {
-                                Timber.d(throwable, "Download paused for app $appId")
-                                removeDownloadJob(appId)
-                            }
-                        }
-                    }
-                    di.setDownloadJob(downloadJob)
-                }
-
-            downloadJobs[appId] = info
-            info.updateStatus(DownloadPhase.PREPARING)
-            notifyDownloadStarted(appId)
-            return info
-        }
-
-        private fun finalizeSnapshotResumeAsComplete(
-            appId: Int,
-            appDirPath: String,
-            mainAppDepots: Map<Int, DepotInfo>,
-            dlcAppDepots: Map<Int, DepotInfo>,
-            userSelectedDlcAppIds: List<Int>,
-        ): DownloadInfo {
-            val downloadingAppIds = CopyOnWriteArrayList<Int>()
-            val calculatedDlcAppIds = CopyOnWriteArrayList<Int>()
-            val allDepotIdsByDlcAppId =
-                dlcAppDepots.values
-                    .groupBy(keySelector = { it.dlcAppId }, valueTransform = { it.depotId })
-                    .mapValues { (_, depotIds) -> depotIds.sorted() }
-
-            userSelectedDlcAppIds.forEach { dlcAppId ->
-                if (allDepotIdsByDlcAppId[dlcAppId]?.isNotEmpty() == true) {
-                    downloadingAppIds.add(dlcAppId)
-                    calculatedDlcAppIds.add(dlcAppId)
-                }
-            }
-
-            // Add main app ID if there are main app depots
-            if (mainAppDepots.isNotEmpty() && !downloadingAppIds.contains(appId)) {
-                downloadingAppIds.add(appId)
-            }
-
-            val info = DownloadInfo(1, appId, downloadingAppIds)
-            info.setPersistencePath(appDirPath)
-            info.updateStatus(DownloadPhase.COMPLETE)
-            info.setProgress(1f)
-            downloadJobs[appId] = info
-            notifyDownloadStarted(appId)
-
-            val mainAppDlcIds = getMainAppDlcIdsWithoutProperDepotDlcIds(appId)
-            if (dlcAppDepots.isEmpty()) {
-                mainAppDlcIds.addAll(mainAppDepots.filter { it.value.dlcAppId != INVALID_APP_ID }.map { it.value.dlcAppId }.distinct())
-            }
-
-            runBlocking(Dispatchers.IO) {
-                if (mainAppDepots.isNotEmpty()) {
-                    completeAppDownload(
-                        downloadInfo = info,
-                        downloadingAppId = appId,
-                        entitledDepotIds = mainAppDepots.keys.sorted(),
-                        selectedDlcAppIds = mainAppDlcIds,
-                        appDirPath = appDirPath,
-                    )
-                }
-
-                calculatedDlcAppIds.forEach { dlcAppId ->
-                    val dlcDepotIds = allDepotIdsByDlcAppId[dlcAppId].orEmpty()
-                    completeAppDownload(
-                        downloadInfo = info,
-                        downloadingAppId = dlcAppId,
-                        entitledDepotIds = dlcDepotIds,
-                        selectedDlcAppIds = emptyList(),
-                        appDirPath = appDirPath,
-                    )
-                }
-
-                instance?.downloadingAppInfoDao?.deleteApp(appId)
-                Unit
-            }
-
-            // Show success message to user for no-op/resume completion
-            instance?.let { service ->
-                service.scope.launch(Dispatchers.Main) {
-                    WinToast.show(service.applicationContext, "Download complete", Toast.LENGTH_SHORT)
-                    Unit
-                }
-            }
-            return info
-        }
-
-        private suspend fun completeAppDownload(
-            downloadInfo: DownloadInfo,
-            downloadingAppId: Int,
-            entitledDepotIds: List<Int>,
-            selectedDlcAppIds: List<Int>,
-            appDirPath: String,
-        ) {
-            Timber.i("Item $downloadingAppId download completed, saving database")
-
-            // Update database
-            val appInfo = instance?.appInfoDao?.getInstalledApp(downloadingAppId)
-
-            // Update Saved AppInfo
-            if (appInfo != null) {
-                val updatedDownloadedDepots = (appInfo.downloadedDepots + entitledDepotIds).distinct()
-                val updatedDlcDepots = (appInfo.dlcDepots + selectedDlcAppIds).distinct()
-
-                instance?.appInfoDao?.update(
-                    AppInfo(
-                        downloadingAppId,
-                        isDownloaded = true,
-                        downloadedDepots = updatedDownloadedDepots.sorted(),
-                        dlcDepots = updatedDlcDepots.sorted(),
-                    ),
-                )
-            } else {
-                instance?.appInfoDao?.insert(
-                    AppInfo(
-                        downloadingAppId,
-                        isDownloaded = true,
-                        downloadedDepots = entitledDepotIds.sorted(),
-                        dlcDepots = selectedDlcAppIds.sorted(),
-                    ),
-                )
-            }
-
-            // Remove completed appId from downloadInfo.dlcAppIds and check if it was actually removed
-            val wasRemoved = downloadInfo.downloadingAppIds.remove(downloadingAppId)
-            if (!wasRemoved) {
-                Timber.d("Item $downloadingAppId was already removed from downloading list, skipping redundant completion.")
-                return
-            }
-
-            // All downloading appIds are removed
-            if (downloadInfo.downloadingAppIds.isEmpty()) {
-                Timber.i("All items for game ${downloadInfo.gameId} completed, running final completion logic.")
-                // Settle the remaining bytes once at the end so the visible progress doesn't
-                // sit slightly under 100% when the game is actually complete (e.g. dedup
-                // skipped chunks that never reported via onChunkCompleted).
-                val totalExpectedBytes = downloadInfo.getTotalExpectedBytes()
-                if (totalExpectedBytes > 0L) {
-                    val downloadedBytes = downloadInfo.getBytesDownloaded()
-                    val remainingBytes = (totalExpectedBytes - downloadedBytes).coerceAtLeast(0L)
-                    if (remainingBytes > 0L) {
-                        downloadInfo.updateBytesDownloaded(remainingBytes, System.currentTimeMillis())
-                        downloadInfo.emitProgressChange()
-                    }
-                }
-
-                // Handle completion: add markers
-                withContext(Dispatchers.IO) {
-                    MarkerUtils.addMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
-                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-                    MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DLL_REPLACED)
-                    MarkerUtils.removeMarker(appDirPath, Marker.STEAM_COLDCLIENT_USED)
-                    MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_PATCHED)
-                    MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_UNPACK_CHECKED)
-
-                    // Ensure the main app is marked as downloaded in the DB
-                    val mainAppId = downloadInfo.gameId
-                    val service = instance
-                    if (service != null) {
-                        val mainAppInfo = service.appInfoDao.getInstalledApp(mainAppId)
-                        if (mainAppInfo != null) {
-                            if (!mainAppInfo.isDownloaded) {
-                                service.appInfoDao.update(mainAppInfo.copy(isDownloaded = true))
-                                Timber.i("Marked main app $mainAppId as downloaded in DB")
-                            }
-                        } else {
-                            service.appInfoDao.insert(AppInfo(mainAppId, isDownloaded = true))
-                            Timber.i("Inserted main app $mainAppId as downloaded in DB")
-                        }
-                    }
-                    Unit
-                }
-
-                val service = instance
-                if (service != null) {
-                    createSteamShortcut(service, downloadInfo.gameId)
-                }
-
-                // Mark download inactive BEFORE updating status so checkQueue() correctly
-                // frees this slot for the next queued download. Without this, isActive() stays
-                // true and blocks the queue until the user manually clears the entry.
-                downloadInfo.setActive(false)
-                downloadInfo.updateStatus(DownloadPhase.COMPLETE)
-                PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(downloadInfo.gameId))
-
-                downloadInfo.clearPersistedBytesDownloaded(appDirPath, sync = true)
-                // Notify the global coordinator so it can advance the cross-store queue and
-                // persist COMPLETE in the records table.
-                runBlocking {
-                    DownloadCoordinator.notifyFinished(
-                        DownloadRecord.STORE_STEAM,
-                        downloadInfo.gameId.toString(),
-                        DownloadRecord.STATUS_COMPLETE,
-                    )
-                }
-                checkQueue()
-            }
-            Unit
-        }
-
-        // CRITICAL: onChunkCompleted reports PER-DEPOT cumulative bytes, NOT global. The
-        // previous code treated the value as a global counter, which mis-attributed bytes
-        // between depots when downloads ran in parallel or sequentially across multiple
-        // depots. Sequential downloads after a large depot caused the next depot's tracker
-        // to stay at 0 (its per-depot count was below the global high-water mark) until its
-        // per-depot count exceeded the prior depot's size — corrupting depot_bytes.json.
-        // On resume, that snapshot can mark a depot as fully downloaded when its files are
-        // actually partial; the depot is filtered out of selectedDepots and the game is
-        // marked COMPLETE with missing files.
-        //
-        // The fix is per-depot session high-water marks. JavaSteam's depotBytesUncompressed
-        // counts only bytes downloaded during THIS downloader run (validated existing bytes
-        // bump sizeDownloaded but not depotBytesUncompressed), so we cannot use the value
-        // as an absolute "set depot to N" — we must diff against the per-depot session
-        // counter and apply the delta on top of the persisted bytes restored from snapshot.
-        private class AppDownloadListener(
-            private val downloadInfo: DownloadInfo,
-            private val depotIdToIndex: Map<Int, Int>,
-            private val depotMaxBytesById: Map<Int, Long>,
-        ) : IDownloadListener {
-            private var lastByteProgressAtMs: Long = 0L
-
-            // Per-depot session high-water mark of the cumulative uncompressedBytes value
-            // reported by JavaSteam for that depot. Diff'd to obtain a positive per-depot
-            // delta on each chunk callback.
-            private val lastReportedByDepot =
-                java.util.concurrent.ConcurrentHashMap<Int, java.util.concurrent.atomic.AtomicLong>()
-
-            // Returns the positive delta (newly downloaded bytes) for the given depot,
-            // updating the per-depot session high-water mark. Resilient to out-of-order
-            // callbacks from concurrent decompression workers because each depot has its
-            // own atomic and we use CAS to only ever advance forward.
-            private fun consumePerDepotUncompressedDelta(depotId: Int, currentBytes: Long): Long {
-                if (currentBytes <= 0L) return 0L
-                val tracker =
-                    lastReportedByDepot.computeIfAbsent(depotId) {
-                        java.util.concurrent.atomic.AtomicLong(0L)
-                    }
-                while (true) {
-                    val previous = tracker.get()
-                    if (currentBytes <= previous) return 0L
-                    if (tracker.compareAndSet(previous, currentBytes)) {
-                        val delta = currentBytes - previous
-                        // Diagnostic: warn when a per-depot session report jumps by an
-                        // implausibly large amount (e.g., > 100 MB in one chunk callback).
-                        // This would indicate JavaSteam reporting stale/global counters.
-                        if (delta > 100L * 1024L * 1024L) {
-                            Timber.w(
-                                "BIG-DELTA depot=$depotId prev=$previous current=$currentBytes delta=$delta maxBytes=${depotMaxBytesById[depotId]}",
-                            )
-                        }
-                        return delta
-                    }
-                }
-            }
-
-            // Diagnostic helper: log every change that would push a depot to >= depotSize
-            // along with the call stack, so we can pinpoint which path is corrupting the
-            // snapshot. Only emits at INFO level once per (depot,reason) to avoid spam.
-            private val depotMaxedReported = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-
-            private fun logDepotPushedToMax(reason: String, depotId: Int, prev: Long, next: Long) {
-                if (next < (depotMaxBytesById[depotId] ?: 0L)) return
-                val key = "$depotId:$reason"
-                if (depotMaxedReported.putIfAbsent(key, true) != null) return
-                Timber.w(
-                    Throwable("trace"),
-                    "DEPOT-MAXED reason=$reason depot=$depotId prev=$prev next=$next maxBytes=${depotMaxBytesById[depotId]}",
-                )
-            }
-
-            // Sets per depot cumulative value, returns delta
-            private fun updateDepotBytesAndGetDelta(
-                depotId: Int,
-                reportedBytes: Long,
-            ): Long {
-                if (!depotIdToIndex.containsKey(depotId)) {
-                    return 0L
-                }
-
-                var atomicBytes = downloadInfo.depotCumulativeUncompressedBytes[depotId]
-                if (atomicBytes == null) {
-                    atomicBytes =
-                        java.util.concurrent.atomic
-                            .AtomicLong(0L)
-                    val existing = downloadInfo.depotCumulativeUncompressedBytes.putIfAbsent(depotId, atomicBytes)
-                    if (existing != null) {
-                        atomicBytes = existing
-                    }
-                }
-
-                if (reportedBytes <= 0L) {
-                    return 0L
-                }
-
-                val maxBytes = depotMaxBytesById[depotId]?.coerceAtLeast(1L)
-                val clampedReportedBytes =
-                    if (maxBytes != null) {
-                        reportedBytes.coerceIn(0L, maxBytes)
-                    } else {
-                        reportedBytes
-                    }
-
-                var deltaBytes = 0L
-                while (true) {
-                    val prev = atomicBytes.get()
-                    val next = maxOf(prev, clampedReportedBytes)
-                    if (prev == next) {
-                        break
-                    }
-                    if (atomicBytes.compareAndSet(prev, next)) {
-                        deltaBytes = (next - prev).coerceAtLeast(0L)
-                        break
-                    }
-                }
-                return deltaBytes
-            }
-
-            // Adds delta to per depot cumulative bytes, clamped to depot max
-            private fun addDeltaToDepotBytes(
-                depotId: Int,
-                delta: Long,
-            ) {
-                if (delta <= 0L) return
-                if (!depotIdToIndex.containsKey(depotId)) return
-
-                var atomicBytes = downloadInfo.depotCumulativeUncompressedBytes[depotId]
-                if (atomicBytes == null) {
-                    atomicBytes =
-                        java.util.concurrent.atomic
-                            .AtomicLong(0L)
-                    val existing = downloadInfo.depotCumulativeUncompressedBytes.putIfAbsent(depotId, atomicBytes)
-                    if (existing != null) {
-                        atomicBytes = existing
-                    }
-                }
-
-                val maxBytes = depotMaxBytesById[depotId]?.coerceAtLeast(1L) ?: Long.MAX_VALUE
-                while (true) {
-                    val prev = atomicBytes.get()
-                    val next = (prev + delta).coerceIn(0L, maxBytes)
-                    if (prev == next) break
-                    if (atomicBytes.compareAndSet(prev, next)) {
-                        logDepotPushedToMax("addDelta(delta=$delta)", depotId, prev, next)
-                        break
-                    }
-                }
-            }
-
-            override fun onItemAdded(item: DownloadItem) {
-                Timber.d("Item ${item.appId} added to queue")
-                Unit
-            }
-
-            override fun onDownloadStarted(item: DownloadItem) {
-                Timber.i("Item ${item.appId} download started")
-                downloadInfo.updateStatus(DownloadPhase.DOWNLOADING)
-                Unit
-            }
-
-            override fun onDownloadCompleted(item: DownloadItem) {
-                Timber.i("Item ${item.appId} download completed")
-                Unit
-            }
-
-            override fun onFileCompleted(
-                depotId: Int,
-                fileName: String,
-                depotPercentComplete: Float,
-            ) {
-                Timber.d("File completed: $fileName (Depot $depotId: ${depotPercentComplete * 100}%)")
-
-                depotIdToIndex[depotId]?.let { index ->
-                    downloadInfo.setProgress(depotPercentComplete, index)
-                }
-
-                // If onChunkCompleted missed some updates or out-of-order, this ensures progress is emitted.
-                downloadInfo.emitProgressChange()
-                Unit
-            }
-
-            override fun onDownloadFailed(
-                item: DownloadItem,
-                error: Throwable,
-            ) {
-                if (error is CancellationException && error !is DownloadFailedException) {
-                    if (downloadInfo.isDeleting) {
-                        Timber.d("Item ${item.appId} download cancelled for deletion")
-                        return
-                    }
-                    if (downloadInfo.isCancelling) {
-                        Timber.d("Item ${item.appId} download cancelled by user")
-                        downloadInfo.persistProgressSnapshot(force = true)
-                        downloadInfo.updateStatus(DownloadPhase.CANCELLED)
-                        downloadInfo.setActive(false)
-                        return
-                    }
-                    // Treat cancellation as pause: preserve resume metadata/state.
-                    Timber.d(error, "Item ${item.appId} download paused")
-                    downloadInfo.persistProgressSnapshot(force = true)
-                    downloadInfo.updateStatus(DownloadPhase.PAUSED)
-                    downloadInfo.setActive(false)
-                    return
-                }
-
-                Timber.e(error, "Item ${item.appId} failed to download")
-                // Hard stop current session on item failure so we do not continue toward completion
-                // with missing/corrupt files. Resume metadata is preserved for retry.
-                downloadInfo.persistProgressSnapshot(force = true)
-                downloadInfo.updateStatus(DownloadPhase.FAILED)
-                downloadInfo.failedToDownload()
-
-                instance?.let { service ->
-                    service.scope.launch(Dispatchers.Main) {
-                        WinToast.show(
-                            service.applicationContext,
-                            "Download error for depot ${item.appId}: ${error.message}",
-                            Toast.LENGTH_LONG,
-                        )
-                    }
-                }
-                Unit
-            }
-
-            override fun onStatusUpdate(message: String) {
-                Timber.d("Download status: $message")
-
-                // Extract filename if present (usually "Downloading filename..." or "Verifying filename...")
-                if (message.startsWith("Downloading ", ignoreCase = true) ||
-                    message.startsWith("Verifying ", ignoreCase = true) ||
-                    message.startsWith("Patching ", ignoreCase = true)
-                ) {
-                    val parts = message.split(" ")
-                    if (parts.size > 1) {
-                        val fileName = parts[1].removeSuffix("...")
-                        downloadInfo.updateCurrentFileName(fileName)
-                    }
-                }
-
-                val mappedStatus = DownloadPhase.fromMessage(message)
-                if (mappedStatus != null) {
-                    if (
-                        mappedStatus == DownloadPhase.PREPARING ||
-                        mappedStatus == DownloadPhase.VERIFYING ||
-                        mappedStatus == DownloadPhase.PATCHING
-                    ) {
-                        val nowMs = System.currentTimeMillis()
-                        val recentlyMovedBytes = nowMs - lastByteProgressAtMs <= 5_000L
-                        if (recentlyMovedBytes && downloadInfo.getStatusFlow().value == DownloadPhase.DOWNLOADING) {
-                            return
-                        }
-                    }
-                    downloadInfo.updateStatus(mappedStatus, message)
-                } else {
-                    downloadInfo.updateStatusMessage(message)
-                }
-                Unit
-            }
-
-            override fun onChunkCompleted(
-                depotId: Int,
-                depotPercentComplete: Float,
-                compressedBytes: Long,
-                uncompressedBytes: Long,
-            ) {
-                // uncompressedBytes is per-depot cumulative for THIS depot (per the
-                // IDownloadListener contract). Diff against this depot's session high-water
-                // mark so we only count newly-downloaded bytes for THIS depot.
-                val deltaBytes = consumePerDepotUncompressedDelta(depotId, uncompressedBytes)
-
-                if (deltaBytes > 0L) {
-                    lastByteProgressAtMs = System.currentTimeMillis()
-
-                    addDeltaToDepotBytes(depotId, deltaBytes)
-                    downloadInfo.updateBytesDownloaded(deltaBytes, lastByteProgressAtMs)
-                    downloadInfo.markProgressSnapshotDirty()
-
-                    // If resume verification/prepare phases already ran and bytes are now moving again,
-                    // report active downloading.
-                    val currentPhase = downloadInfo.getStatusFlow().value
-                    if (
-                        currentPhase == DownloadPhase.UNKNOWN ||
-                        currentPhase == DownloadPhase.PREPARING ||
-                        currentPhase == DownloadPhase.VERIFYING ||
-                        currentPhase == DownloadPhase.PATCHING
-                    ) {
-                        downloadInfo.updateStatus(DownloadPhase.DOWNLOADING)
-                    }
-                }
-
-                depotIdToIndex[depotId]?.let { index ->
-                    downloadInfo.setProgress(depotPercentComplete, index)
-                }
-
-                // Emit progress change
-                downloadInfo.emitProgressChange()
-                Unit
-            }
-
-            override fun onDepotCompleted(
-                depotId: Int,
-                compressedBytes: Long,
-                uncompressedBytes: Long,
-            ) {
-                Timber.i("Depot $depotId completed (compressed: $compressedBytes, uncompressed: $uncompressedBytes)")
-
-                // Catch up any per-depot session bytes not yet credited via onChunkCompleted.
-                val sessionDelta = consumePerDepotUncompressedDelta(depotId, uncompressedBytes)
-                if (sessionDelta > 0L) {
-                    lastByteProgressAtMs = System.currentTimeMillis()
-                    addDeltaToDepotBytes(depotId, sessionDelta)
-                    downloadInfo.updateBytesDownloaded(sessionDelta, lastByteProgressAtMs)
-                    downloadInfo.markProgressSnapshotDirty()
-                }
-
-                // CRITICAL: do NOT credit the depot to manifest size here. JavaSteam fires
-                // onDepotCompleted at the END of processDepotManifestAndFiles, which runs
-                // even when many of the depot's chunks are still pending download. If
-                // Steam's validation pass marks some files as already-present (sizeDownloaded
-                // grows via file.totalSize) but other chunks are still queued, depotBytes
-                // Uncompressed can be 0 here while gigabytes of chunks haven't actually been
-                // downloaded. Topping up to manifestSize was the bug: it marked partially-
-                // downloaded depots as fully-on-disk in the snapshot, so future resumes
-                // skipped them and the game ended up flagged COMPLETE with most data missing.
-                //
-                // We now ONLY credit bytes that JavaSteam actually reported via session
-                // counters. Depots that finish naturally will still reach depotSize because
-                // every chunk callback reports cumulative per-depot bytes.
-
-                val currentPhase = downloadInfo.getStatusFlow().value
-                if (
-                    currentPhase == DownloadPhase.UNKNOWN ||
-                    currentPhase == DownloadPhase.PREPARING ||
-                    currentPhase == DownloadPhase.VERIFYING ||
-                    currentPhase == DownloadPhase.PATCHING
-                ) {
-                    downloadInfo.updateStatus(DownloadPhase.DOWNLOADING)
-                }
-
-                depotIdToIndex[depotId]?.let { index ->
-                    downloadInfo.setProgress(1f, index)
-                }
-
-                // Emit progress change
-                downloadInfo.emitProgressChange()
-                Unit
             }
         }
 
@@ -4014,7 +1861,7 @@ class SteamService :
                                                     } else {
                                                         pkgInfo.ownerAccountId.first()
                                                     },
-                                                // TODO: figure out what this is and un-hardcode
+                                                // Unknown Steam launch source; keep observed value.
                                                 launchSource = 100,
                                                 gameBuildId = branch.buildId.toInt(),
                                                 processIdList = gameProcess.processes,
@@ -4043,10 +1890,36 @@ class SteamService :
                             },
                         )
 
-                        steamInstance._steamApps?.notifyGamesPlayed(
-                            gamesPlayed = gamesPlayed,
-                            clientOsType = EOSType.AndroidUnknown,
-                        )
+                        // Report running games via the C++ WN-Steam-Client.
+                        val gamesJson = JSONArray()
+                        gamesPlayed.forEach { g ->
+                            val procs = JSONArray()
+                            g.processIdList.forEach { p ->
+                                procs.put(
+                                    JSONObject()
+                                        .put("pid", p.processId)
+                                        .put("ppid", p.processIdParent)
+                                        .put("isSteam", p.parentIsSteam),
+                                )
+                            }
+                            gamesJson.put(
+                                JSONObject()
+                                    .put("gameId", g.gameId)
+                                    .put("processId", g.processId)
+                                    .put("ownerId", g.ownerId)
+                                    .put("launchSource", g.launchSource)
+                                    .put("gameBuildId", g.gameBuildId)
+                                    .put("processes", procs),
+                            )
+                        }
+                        withWnSession { session ->
+                            withContext(Dispatchers.IO) {
+                                session.notifyGamesPlayed(
+                                    gamesJson.toString(),
+                                    EOSType.AndroidUnknown.code(),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -4082,17 +1955,15 @@ class SteamService :
                             val clientId = PrefManager.clientId
                             val steamInstance = instance
                             val appInfo = getAppInfoOf(appId)
-                            val steamCloud = steamInstance?._steamCloud
 
-                            if (steamInstance != null && appInfo != null && steamCloud != null) {
-                                progressWrapper("Checking Cloud Saves...", 0f)
+                            if (steamInstance != null && appInfo != null) {
+                                progressWrapper("Checking Cloud Saves", 0f)
                                 val postSyncInfo =
                                     SteamAutoCloud
                                         .syncUserFiles(
                                             appInfo = appInfo,
                                             clientId = clientId,
                                             steamInstance = steamInstance,
-                                            steamCloud = steamCloud,
                                             preferredSave = preferredSave,
                                             parentScope = parentScope,
                                             prefixToPath = prefixToPath,
@@ -4110,28 +1981,40 @@ class SteamService :
                                             EOSType.AndroidUnknown,
                                         )
 
+                                        // Signal app-launch intent; returns pending-remote-operation codes (empty = clear), null = transport/auth failure.
                                         val pendingRemoteOperations =
-                                            steamCloud
-                                                .signalAppLaunchIntent(
-                                                    appId = appId,
-                                                    clientId = clientId,
-                                                    machineName = SteamUtils.getMachineName(steamInstance),
-                                                    ignorePendingOperations = ignorePendingOperations,
-                                                    osType = EOSType.AndroidUnknown,
-                                                ).await()
+                                            withWnSession { session ->
+                                                withContext(Dispatchers.IO) {
+                                                    session.signalAppLaunchIntent(
+                                                        appId = appId,
+                                                        clientId = clientId,
+                                                        machineName = SteamUtils.getMachineName(steamInstance),
+                                                        ignorePending = ignorePendingOperations,
+                                                        osType = EOSType.AndroidUnknown.code(),
+                                                    )
+                                                }
+                                            }
 
-                                        if (pendingRemoteOperations.isNotEmpty() && !ignorePendingOperations) {
+                                        if (pendingRemoteOperations == null) {
+                                            // Failure — do NOT treat as clear-to-launch (this RPC is the cloud-save conflict guard).
+                                            Timber.w("signalAppLaunchIntent failed for app $appId — not proceeding")
+                                            syncResult = PostSyncInfo(syncResult = SyncResult.UnknownFail)
+                                        } else if (pendingRemoteOperations.isNotEmpty() && !ignorePendingOperations) {
                                             syncResult =
                                                 PostSyncInfo(
                                                     syncResult = SyncResult.PendingOperations,
                                                     pendingRemoteOperations = pendingRemoteOperations,
                                                 )
                                         } else if (ignorePendingOperations &&
-                                            pendingRemoteOperations.any {
-                                                it.operation == ECloudPendingRemoteOperation.k_ECloudPendingRemoteOperationAppSessionActive
-                                            }
+                                            // 1 == ECloudPendingRemoteOperation AppSessionActive
+                                            pendingRemoteOperations.any { it == 1 }
                                         ) {
-                                            steamInstance._steamUser!!.kickPlayingSession()
+                                            // Kick the other playing session.
+                                            withWnSession { session ->
+                                                withContext(Dispatchers.IO) {
+                                                    session.kickPlayingSession()
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -4142,7 +2025,7 @@ class SteamService :
                                 Timber.e(e, "Cloud sync failed after $maxAttempts attempts for app $appId")
                                 syncResult = PostSyncInfo(SyncResult.UnknownFail)
                             } else {
-                                Timber.w("Cloud sync attempt $attempt failed for app $appId, retrying...")
+                                Timber.w("Cloud sync attempt $attempt failed for app $appId, retrying")
                                 delay(1000L * attempt)
                             }
                         }
@@ -4155,21 +2038,18 @@ class SteamService :
                 }
             }
 
-        /**
-         * Lightweight probe: checks whether the cloud save change number for
-         * [appId] differs from the locally stored value.  No files are
-         * downloaded or uploaded – only a single metadata call is made.
-         *
-         * @return `true` if cloud differs, `false` if in sync, `null` if the
-         *         check could not be performed (service unavailable, etc.).
-         */
+        /** Lightweight probe: does [appId]'s cloud-save change number differ from the local value? Single metadata call, no file transfer. true = differs, false = in sync, null = couldn't check. */
         suspend fun cloudSavesDiffer(appId: Int): Boolean? {
             val steamInstance = instance ?: return null
-            val steamCloud = steamInstance._steamCloud ?: return null
             val localCN = steamInstance.changeNumbersDao.getByAppId(appId)?.changeNumber ?: return null
             return try {
-                val fileListChange = steamCloud.getAppFileListChange(appId, localCN).await()
-                fileListChange.currentChangeNumber != localCN
+                // Cloud.GetAppFileChangelist via the C++ WN-Steam-Client.
+                val json =
+                    withWnSession { session ->
+                        withContext(Dispatchers.IO) { session.getCloudFileList(appId) }
+                    } ?: return null
+                val currentCN = JSONObject(json).optLong("currentChangeNumber", 0L)
+                currentCN != localCN
             } catch (e: Exception) {
                 Timber.e(e, "Failed to probe Steam cloud change number for appId=$appId")
                 null
@@ -4179,6 +2059,108 @@ class SteamService :
         suspend fun getTrackedCloudSaveFiles(appId: Int): List<UserFileInfo>? =
             withContext(Dispatchers.IO) {
                 instance?.fileChangeListsDao?.getByAppId(appId)?.userFileInfo
+            }
+
+        // getCloudFileList returns the full snapshot, so the newest remote timestamp falls straight out of the conflict snapshot.
+        suspend fun getNewestRemoteCloudSaveTimestamp(appId: Int): Long? =
+            fetchCloudConflictSnapshot(appId)?.newestRemoteTimestamp
+
+        data class CloudConflictSnapshot(
+            val differs: Boolean,
+            val newestRemoteTimestamp: Long?,
+        )
+
+        /** Public wrapper around the cloud-file-list RPC (Cloud.GetAppFileChangelist); always returns the FULL listing — [changeNumber] is accepted but ignored. Null if not logged on. */
+        suspend fun fetchCloudFileList(
+            appId: Int,
+            @Suppress("UNUSED_PARAMETER") changeNumber: Long = 0L,
+        ): SteamAutoCloud.CloudFileChangeList? =
+            withContext(Dispatchers.IO) {
+                val json =
+                    withWnSession { session ->
+                        withContext(Dispatchers.IO) { session.getCloudFileList(appId) }
+                    } ?: return@withContext null
+                try {
+                    SteamAutoCloud.parseCloudFileChangeList(json)
+                } catch (e: Exception) {
+                    Timber.e(e, "fetchCloudFileList failed for appId=%d", appId)
+                    null
+                }
+            }
+
+        /** Download one cloud file's bytes by its prefixed path (pathPrefix/filename). Pure read — no local file, change-number DB, or tracked-files DB write; used by cloud-save pre-capture to back up the current save without mutating local state. Null if not logged on / on failure. */
+        suspend fun downloadCloudFileBytes(
+            appId: Int,
+            prefixedPath: String,
+        ): ByteArray? =
+            withContext(Dispatchers.IO) {
+                withWnSession { session ->
+                    withContext(Dispatchers.IO) { session.downloadCloudFile(appId, prefixedPath) }
+                }
+            }
+
+        /** Single-round-trip launch-time conflict probe: a real conflict needs BOTH a change-number mismatch AND per-file content divergence (CN-only produced spurious dialogs). Fast-paths on CN match; on mismatch content-checks via [SteamAutoCloud.cloudContentDiffersFromLocal]. Returns the conflict flag + newest remote timestamp. */
+        @JvmOverloads
+        suspend fun fetchCloudConflictSnapshot(
+            appId: Int,
+            context: android.content.Context? = null,
+        ): CloudConflictSnapshot? =
+            withContext(Dispatchers.IO) {
+                val localCN = instance?.changeNumbersDao?.getByAppId(appId)?.changeNumber
+
+                // Cloud.GetAppFileChangelist — full remote file list; the parser scales proto unix-second timestamps to the millis the rest of the code expects.
+                val deadlineMs = System.currentTimeMillis() + 5_000L
+                while (System.currentTimeMillis() < deadlineMs) {
+                    val s = withWnSession { it }
+                    if (s != null && _isLoggedInFlow.value) break
+                    kotlinx.coroutines.delay(250L)
+                }
+                val wnJson =
+                    withWnSession { session ->
+                        withContext(Dispatchers.IO) { session.getCloudFileList(appId) }
+                    } ?: return@withContext null
+                try {
+                    val response = SteamAutoCloud.parseCloudFileChangeList(wnJson)
+                    val cnMismatch = localCN == null || response.currentChangeNumber != localCN
+                    val newest =
+                        response.files
+                            .filter { it.isPersisted }
+                            .mapNotNull { it.timestamp.takeIf { ts -> ts > 0L } }
+                            .maxOrNull()
+
+                    // CN match → no divergence; skip the per-file hashing. Fast path.
+                    if (!cnMismatch) {
+                        return@withContext CloudConflictSnapshot(differs = false, newestRemoteTimestamp = newest)
+                    }
+
+                    // CN mismatch — real conflict only if file content diverges; conservative (differs=true) when no Context is available to resolve local paths.
+                    val ctx = context ?: PluviaApp.instance
+                    val contentDiffers =
+                        if (ctx != null) {
+                            val accountId =
+                                userSteamId?.accountID?.toLong()
+                                    ?: PrefManager.steamUserAccountId.takeIf { it != 0 }?.toLong()
+                                    ?: 0L
+                            val prefixToPath: (String) -> String = { prefix ->
+                                com.winlator.cmod.feature.stores.steam.enums.PathType
+                                    .from(prefix)
+                                    .toAbsPath(ctx, appId, accountId)
+                            }
+                            val appInfo = getAppInfoOf(appId)
+                            com.winlator.cmod.feature.steamcloudsync.SteamAutoCloud
+                                .cloudContentDiffersFromLocal(response, prefixToPath, appInfo)
+                        } else {
+                            true
+                        }
+                    Timber.i(
+                        "cloud conflict snapshot via wn-steam-client: app=$appId " +
+                            "cnMismatch=$cnMismatch contentDiffers=$contentDiffers files=${response.files.size}",
+                    )
+                    CloudConflictSnapshot(differs = contentDiffers, newestRemoteTimestamp = newest)
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to parse Steam cloud conflict snapshot for appId=$appId")
+                    null
+                }
             }
 
         suspend fun forceSyncUserFiles(
@@ -4203,16 +2185,14 @@ class SteamService :
                             val clientId = PrefManager.clientId
                             val steamInstance = instance
                             val appInfo = getAppInfoOf(appId)
-                            val steamCloud = steamInstance?._steamCloud
 
-                            if (steamInstance != null && appInfo != null && steamCloud != null) {
+                            if (steamInstance != null && appInfo != null) {
                                 val postSyncInfo =
                                     SteamAutoCloud
                                         .syncUserFiles(
                                             appInfo = appInfo,
                                             clientId = clientId,
                                             steamInstance = steamInstance,
-                                            steamCloud = steamCloud,
                                             preferredSave = preferredSave,
                                             parentScope = parentScope,
                                             prefixToPath = prefixToPath,
@@ -4229,7 +2209,7 @@ class SteamService :
                             if (attempt == maxAttempts) {
                                 Timber.e(e, "Force cloud sync failed after $maxAttempts attempts for app $appId")
                             } else {
-                                Timber.w("Force cloud sync attempt $attempt failed for app $appId, retrying...")
+                                Timber.w("Force cloud sync attempt $attempt failed for app $appId, retrying")
                                 delay(1000L * attempt)
                             }
                         }
@@ -4245,15 +2225,49 @@ class SteamService :
             appId: Int,
             configDirectory: String,
         ) = runCatching {
-            val steamUser = instance?._steamUser ?: return@runCatching
-            val userStats = instance?._steamUserStats?.getUserStats(appId, steamUser.steamID!!)?.await() ?: return@runCatching
-            val schemaArray = userStats.schema.toByteArray()
+            run {
+                val bs = com.winlator.cmod.feature.stores.steam.wnsteam
+                    .WnSteamBootstrap
+                if (bs.currentAppId() == appId && bs.numAchievements() > 0) {
+                    val list = bs.listAchievementsFull()
+                    if (list.isNotEmpty()) {
+                        cachedAchievements = list.map { a ->
+                            com.winlator.cmod.feature.stores.steam.statsgen.Achievement(
+                                name        = a.apiName,
+                                displayName = a.displayName?.let { mapOf("english" to it) },
+                                description = a.description?.let { mapOf("english" to it) },
+                                hidden      = if (a.hidden) 1 else 0,
+                                unlocked    = a.achieved,
+                                unlockTimestamp = a.unlockTimeRtime32.takeIf { it > 0 },
+                            )
+                        }
+                        cachedAchievementsAppId = appId
+                        Timber.i("user-stats schema via libsteamclient.so: ${list.size} achievements (app $appId)")
+                        return@runCatching
+                    }
+                }
+                Timber.d("libsteamclient.so achievements not ready for app $appId — falling through to wn-session CM fetch")
+            }
+
+            warmAchievementSchemaFromCache(appId)
+
+            val schemaArray: ByteArray = run {
+                val wn = withWnSession { session ->
+                    withContext(Dispatchers.IO) { session.getUserStatsSchema(appId) }
+                }
+                if (wn != null && wn.isNotEmpty()) {
+                    Timber.i("user-stats schema via wn-steam-client: ${wn.size} bytes (app $appId)")
+                    wn
+                } else {
+                    Timber.w("wn-steam-client user-stats schema unavailable for app $appId")
+                    return@runCatching
+                }
+            }
             val generator = StatsAchievementsGenerator()
             val result = generator.generateStatsAchievements(schemaArray, configDirectory)
-            cachedAchievements = result.achievements
-            cachedAchievementsAppId = appId
-
             val nameToBlockBit = result.nameToBlockBit
+            cachedAchievements = mergeAchievementUnlockState(appId, result.achievements, nameToBlockBit)
+            cachedAchievementsAppId = appId
             if (nameToBlockBit.isNotEmpty()) {
                 val mappingJson = JSONObject()
                 nameToBlockBit.forEach { (name, pair) ->
@@ -4261,9 +2275,540 @@ class SteamService :
                 }
                 File(configDirectory, "achievement_name_to_block.json").writeText(mappingJson.toString(), Charsets.UTF_8)
             }
+
+            pushAchievementSchemaToLibSteamClient(appId, result.achievements, result.stats,
+                                                   result.nameToBlockBit)
         }.onFailure { e ->
             Timber.w(e, "Failed to generate achievements for appId=$appId")
         }
+
+        fun pushAppInstalledDepotsToLibSteamClient(appId: Int) = runCatching {
+            if (appId <= 0) return@runCatching
+            val depots = resolvePreferredLaunchDepotIds(
+                appId = appId,
+                branch = resolveSelectedBetaName(appId).ifBlank { "public" },
+            )
+            if (depots.isEmpty()) {
+                Timber.w(
+                    "pushAppInstalledDepotsToLibSteamClient: no depots resolved for appId=$appId; " +
+                        "leaving previous bridge state intact",
+                )
+                return@runCatching
+            }
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setAppInstalledDepots(appId, depots)
+            Timber.i("Pushed ${depots.size} installed depot(s) to libsteamclient.so (app $appId)")
+        }.onFailure { e ->
+            Timber.w(e, "pushAppInstalledDepotsToLibSteamClient failed (appId=$appId)")
+        }
+
+        suspend fun pushAppDlcsToLibSteamClient(appId: Int) = runCatching {
+            if (appId <= 0) return@runCatching
+            val selectedBranch = resolveSelectedBetaName(appId).ifBlank { "public" }
+            val localBuildId = resolvePreferredLaunchBuildId(getAppInfoOf(appId), selectedBranch)
+            if (localBuildId > 0) {
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setAppBuildId(appId, localBuildId)
+                Timber.i("Pushed local buildId=$localBuildId to libsteamclient.so (app $appId)")
+            }
+            val snapshotJson = withWnSession { s ->
+                withContext(Dispatchers.IO) { s.getLibrarySnapshotJson() }
+            } ?: return@runCatching
+            val ownedApps = try {
+                JSONObject(snapshotJson).optJSONArray("owned_apps") ?: return@runCatching
+            } catch (_: Exception) { return@runCatching }
+
+            val dlcIds = mutableListOf<Int>()
+            val byId   = mutableMapOf<Int, String>()
+            var parentBuildId = 0
+            for (i in 0 until ownedApps.length()) {
+                val obj = ownedApps.optJSONObject(i) ?: continue
+                val id  = obj.optInt("id")
+                byId[id] = obj.optString("name", "")
+                if (id != appId) continue
+                parentBuildId = obj.optInt("build_id", 0)
+                val arr = obj.optJSONArray("dlc") ?: continue
+                for (k in 0 until arr.length()) dlcIds.add(arr.optInt(k))
+            }
+            if (parentBuildId > 0) {
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setAppBuildId(appId, parentBuildId)
+                Timber.i("Pushed buildId=$parentBuildId to libsteamclient.so (app $appId)")
+            }
+            if (dlcIds.isEmpty()) {
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setAppDlcs(appId, IntArray(0), emptyArray(), BooleanArray(0))
+                Timber.d("Pushed empty DLC list to libsteamclient.so (app $appId)")
+                return@runCatching
+            }
+            val ids   = IntArray(dlcIds.size)  { dlcIds[it] }
+            val names = Array(dlcIds.size) { byId[dlcIds[it]] ?: "" }
+            val avail = BooleanArray(dlcIds.size) { true }
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setAppDlcs(appId, ids, names, avail)
+            Timber.i("Pushed ${dlcIds.size} DLC entries to libsteamclient.so (app $appId)")
+        }.onFailure { e ->
+            Timber.w(e, "pushAppDlcsToLibSteamClient failed (appId=$appId)")
+        }
+
+        fun pushAppWorkshopItemsToLibSteamClient(appId: Int) = runCatching {
+            if (appId <= 0) return@runCatching
+            val ctx = instance?.applicationContext ?: return@runCatching
+            val ids = com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
+                .installedItemIds(ctx, appId)
+            if (ids.isEmpty()) {
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setAppWorkshopItems(appId, LongArray(0), emptyArray(), LongArray(0), LongArray(0))
+                return@runCatching
+            }
+            val sorted = ids.toLongArray().also { it.sort() }
+            val installDirs = Array(sorted.size) { i ->
+                com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
+                    .contentDir(ctx, appId, sorted[i]).absolutePath
+            }
+            val sizes = LongArray(sorted.size) { i ->
+                runCatching {
+                    val dir = com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
+                        .contentDir(ctx, appId, sorted[i])
+                    var total = 0L
+                    dir.walkTopDown().forEach { if (it.isFile) total += it.length() }
+                    total
+                }.getOrDefault(0L)
+            }
+            val timestamps = LongArray(sorted.size) { i ->
+                runCatching {
+                    com.winlator.cmod.feature.stores.steam.workshop.WorkshopModsGenerator
+                        .contentDir(ctx, appId, sorted[i]).lastModified() / 1000L
+                }.getOrDefault(0L)
+            }
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setAppWorkshopItems(appId, sorted, installDirs, sizes, timestamps)
+            Timber.i("Pushed ${sorted.size} workshop item(s) to libsteamclient.so (app $appId)")
+        }.onFailure { e ->
+            Timber.w(e, "pushAppWorkshopItemsToLibSteamClient failed (appId=$appId)")
+        }
+
+        suspend fun pushInventoryItemDefsToLibSteamClient(appId: Int) = runCatching {
+            if (appId <= 0) return@runCatching
+            val ctx = instance?.applicationContext ?: return@runCatching
+            val caPath = CaBundleExtractor.ensureBundle(ctx)
+            val archive = withWnSession { session ->
+                withContext(Dispatchers.IO) { session.getItemDefArchive(appId, caPath) }
+            } ?: return@runCatching
+            val trimmed = archive.trim()
+            if (trimmed.isEmpty() || trimmed == "null") return@runCatching
+            val arr = try {
+                org.json.JSONArray(trimmed)
+            } catch (_: org.json.JSONException) {
+                try { org.json.JSONArray("[$trimmed]") } catch (_: Exception) { return@runCatching }
+            }
+            val defIds = mutableListOf<Int>()
+            val counts = mutableListOf<Int>()
+            val keys = mutableListOf<String>()
+            val vals = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val defId = o.opt("itemdefid")?.toString()?.toIntOrNull() ?: continue
+                if (defId <= 0) continue
+                val names = o.keys()
+                var n = 0
+                while (names.hasNext()) {
+                    val k = names.next()
+                    if (k == "itemdefid") continue
+                    val v = o.opt(k)?.toString().orEmpty()
+                    keys.add(k)
+                    vals.add(v)
+                    n++
+                }
+                defIds.add(defId)
+                counts.add(n)
+            }
+            if (defIds.isEmpty()) {
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setInventoryItemDefs(appId, IntArray(0), IntArray(0), emptyArray(), emptyArray())
+                return@runCatching
+            }
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient.setInventoryItemDefs(
+                appId,
+                defIds.toIntArray(),
+                counts.toIntArray(),
+                keys.toTypedArray(),
+                vals.toTypedArray(),
+            )
+            Timber.i("Pushed ${defIds.size} inventory item defs to libsteamclient.so (app $appId)")
+        }.onFailure { e ->
+            Timber.w(e, "pushInventoryItemDefsToLibSteamClient failed (appId=$appId)")
+        }
+
+        suspend fun pushCloudStateToLibSteamClient(appId: Int) = runCatching {
+            if (appId <= 0) return@runCatching
+            val response = fetchCloudFileList(appId) ?: run {
+                Timber.d("pushCloudStateToLibSteamClient: no cloud list (app $appId, not logged on?)")
+                return@runCatching
+            }
+            val live = response.files.filter { it.isPersisted }
+            val names      = Array(live.size) { i -> live[i].filename }
+            val sizes      = IntArray(live.size) { i -> live[i].rawFileSize.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() }
+            val timestamps = LongArray(live.size) { i -> live[i].timestamp / 1000L }
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setAppId(appId)
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setCloudFiles(names, sizes, timestamps)
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setCloudEnabledForApp(true)
+            Timber.i("Pushed ${live.size} cloud file(s) to libsteamclient.so (app $appId, " +
+                "changeNumber=${response.currentChangeNumber})")
+
+            val quota = withWnSession { s ->
+                withContext(Dispatchers.IO) { s.getCloudUserQuota() }
+            }
+            if (quota != null && quota.size == 2 && quota[0] >= 0 && quota[1] >= 0) {
+                val total = quota[0]
+                val used  = quota[1]
+                val avail = (total - used).coerceAtLeast(0L)
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setCloudQuota(total, avail)
+                Timber.i("Pushed cloud quota to libsteamclient.so: total=$total used=$used avail=$avail")
+            } else {
+                Timber.d("Cloud quota fetch returned nothing (not logged on or transport error)")
+            }
+        }.onFailure { e ->
+            Timber.w(e, "pushCloudStateToLibSteamClient failed (appId=$appId)")
+        }
+
+        @JvmStatic
+        fun prepareLibSteamClientForLaunchBlocking(appId: Int) {
+            runBlocking { prepareLibSteamClientForLaunch(appId) }
+        }
+        suspend fun prepareLibSteamClientForLaunch(appId: Int) {
+            if (appId <= 0) return
+            startOverlayPollLoop()
+            val selectedBranch = resolveSelectedBetaName(appId)
+            val baseStatePrimed =
+                runCatching { primeLibSteamClientLaunchState(appId, selectedBranch) }
+                    .getOrElse { e ->
+                        Timber.w(e, "prepareLibSteamClientForLaunch: base-state prime failed for app $appId")
+                        false
+                    }
+            Timber.i(
+                "prepareLibSteamClientForLaunch: app=$appId beta='${selectedBranch.ifEmpty { "public" }}' " +
+                    "baseStatePrimed=$baseStatePrimed",
+            )
+            val deadlineMs = System.currentTimeMillis() + 15_000L
+            while (System.currentTimeMillis() < deadlineMs) {
+                val session = withWnSession { it }
+                if (session != null && _isLoggedInFlow.value) break
+                kotlinx.coroutines.delay(500L)
+            }
+            kotlinx.coroutines.coroutineScope {
+                val ticketJob = async {
+                    runCatching { refreshEncryptedAppTicketForLibSteamClient(appId) }
+                        .getOrElse { e ->
+                            Timber.w(e, "prepareLibSteamClientForLaunch: encrypted-app-ticket failed for app $appId")
+                            false
+                        }
+                }
+                val ownerJob = async {
+                    runCatching { prefetchOwnershipTicketForLibSteamClient(appId) }
+                        .getOrElse { e ->
+                            Timber.w(e, "prepareLibSteamClientForLaunch: ownership-ticket failed for app $appId")
+                            false
+                        }
+                }
+                val cloudJob = async {
+                    runCatching { pushCloudStateToLibSteamClient(appId); true }
+                        .getOrElse { e ->
+                            Timber.w(e, "prepareLibSteamClientForLaunch: cloud state push failed for app $appId")
+                            false
+                        }
+                }
+                val dlcJob = async {
+                    runCatching { pushAppDlcsToLibSteamClient(appId); true }
+                        .getOrElse { e ->
+                            Timber.w(e, "prepareLibSteamClientForLaunch: DLC push failed for app $appId")
+                            false
+                        }
+                }
+                val depotsJob = async {
+                    runCatching { pushAppInstalledDepotsToLibSteamClient(appId); true }
+                        .getOrElse { e ->
+                            Timber.w(e, "prepareLibSteamClientForLaunch: depots push failed for app $appId")
+                            false
+                        }
+                }
+                val workshopJob = async {
+                    runCatching { pushAppWorkshopItemsToLibSteamClient(appId); true }
+                        .getOrElse { e ->
+                            Timber.w(e, "prepareLibSteamClientForLaunch: workshop push failed for app $appId")
+                            false
+                        }
+                }
+                val inventoryJob = async {
+                    runCatching { pushInventoryItemDefsToLibSteamClient(appId); true }
+                        .getOrElse { e ->
+                            Timber.w(e, "prepareLibSteamClientForLaunch: inventory push failed for app $appId")
+                            false
+                        }
+                }
+                val ticketOk = ticketJob.await()
+                val ownerOk = ownerJob.await()
+                val cloudOk = cloudJob.await()
+                val dlcOk = dlcJob.await()
+                val depotsOk = depotsJob.await()
+                val workshopOk = workshopJob.await()
+                val inventoryOk = inventoryJob.await()
+                Timber.i(
+                    "prepareLibSteamClientForLaunch: app=$appId " +
+                        "baseStatePrimed=$baseStatePrimed " +
+                        "encrypted-app-ticket=$ticketOk ownership-ticket=$ownerOk " +
+                        "cloud=$cloudOk dlc=$dlcOk depots=$depotsOk " +
+                        "workshop=$workshopOk inventory=$inventoryOk",
+                )
+            }
+        }
+
+        @JvmStatic
+        fun resolveSelectedBetaName(appId: Int): String {
+            if (appId <= 0) return ""
+            val svc = instance ?: return ""
+            return runCatching {
+                for (sc in ContainerManager(svc).loadShortcuts()) {
+                    val scAppId = sc.getExtra("app_id").toIntOrNull() ?: continue
+                    if (scAppId != appId) continue
+                    val branch = sc.getExtra("selectedBranch").trim()
+                    if (branch.isNotEmpty()) return@runCatching branch
+                }
+                ""
+            }.getOrElse { "" }
+        }
+
+        suspend fun refreshEncryptedAppTicketForLibSteamClient(appId: Int): Boolean {
+            if (appId <= 0) return false
+            val instance = SteamService.instance ?: return false
+            val bytes = runCatching { instance.getEncryptedAppTicket(appId) }
+                .getOrElse { e ->
+                    Timber.w(e, "encrypted-app-ticket: getEncryptedAppTicket threw for app $appId")
+                    null
+                }
+            if (bytes == null || bytes.isEmpty()) {
+                Timber.d("encrypted-app-ticket: unavailable for app $appId (cache miss + " +
+                    "wn-session returned null/empty)")
+                return false
+            }
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setEncryptedAppTicket(appId, bytes, eresult = 1)
+            Timber.i("Pushed encrypted app ticket to libsteamclient.so: app=$appId bytes=${bytes.size}")
+            return true
+        }
+
+        suspend fun prefetchOwnershipTicketForLibSteamClient(appId: Int): Boolean {
+            if (appId <= 0) return false
+            val dlcAppIds = getInstalledDlcDepotsOf(appId).orEmpty().toIntArray()
+            val ok = withContext(Dispatchers.IO) {
+                val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                val s = withWnSession { it } ?: run {
+                    deferred.complete(false); null
+                }
+                if (s != null) {
+                    s.prepareApp(appId, dlcAppIds,
+                        com.winlator.cmod.feature.stores.steam.wnsteam.WnPrepareAppCallback { result, err ->
+                            if (!result) {
+                                Timber.d("prepareApp(app=$appId) → not ok: ${err ?: "no error"}")
+                            }
+                            deferred.complete(result)
+                        })
+                }
+                deferred.await()
+            }
+            if (ok) {
+                Timber.i("Prefetched ownership ticket for app=$appId " +
+                    "(+${dlcAppIds.size} DLC) — libsteamclient.so cache primed")
+            }
+            return ok
+        }
+
+        suspend fun refreshCloudQuotaForLibSteamClient() = runCatching {
+            val quota = withWnSession { s ->
+                withContext(Dispatchers.IO) { s.getCloudUserQuota() }
+            } ?: return@runCatching
+            if (quota.size != 2 || quota[0] < 0 || quota[1] < 0) return@runCatching
+            val total = quota[0]
+            val used  = quota[1]
+            val avail = (total - used).coerceAtLeast(0L)
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setCloudQuota(total, avail)
+            Timber.i("Refreshed cloud quota: total=$total used=$used avail=$avail")
+        }.onFailure { e ->
+            Timber.w(e, "refreshCloudQuotaForLibSteamClient failed")
+        }
+
+        internal fun warmAchievementSchemaFromCache(appId: Int): Boolean {
+            if (appId <= 0) return false
+            val ctx = instance?.applicationContext ?: return false
+            val file = File(ctx.filesDir, "wn_lsteam_schemas/$appId.json")
+            if (!file.exists()) return false
+            val root = try { JSONObject(file.readText(Charsets.UTF_8)) }
+                       catch (_: Exception) { return false }
+            if (root.optInt("v") != 1) return false
+            val achievements = mutableListOf<com.winlator.cmod.feature.stores.steam.statsgen.Achievement>()
+            val achArr = root.optJSONArray("achievements") ?: JSONArray()
+            for (i in 0 until achArr.length()) {
+                val o = achArr.optJSONObject(i) ?: continue
+                val name = o.optString("name", "")
+                if (name.isEmpty()) continue
+                val displayName = o.optJSONObject("displayName")?.let { mo ->
+                    val m = mutableMapOf<String, String>()
+                    mo.keys().forEach { k -> m[k] = mo.optString(k, "") }
+                    m.toMap()
+                }
+                val description = o.optJSONObject("description")?.let { mo ->
+                    val m = mutableMapOf<String, String>()
+                    mo.keys().forEach { k -> m[k] = mo.optString(k, "") }
+                    m.toMap()
+                }
+                achievements.add(
+                    com.winlator.cmod.feature.stores.steam.statsgen.Achievement(
+                        name = name,
+                        displayName = displayName,
+                        description = description,
+                        hidden = o.optInt("hidden", 0),
+                        icon = o.optString("icon", "").takeIf { it.isNotEmpty() },
+                        unlocked = if (o.has("unlocked")) o.optBoolean("unlocked") else null,
+                        unlockTimestamp = if (o.has("unlockTimestamp")) o.optInt("unlockTimestamp") else null,
+                    ),
+                )
+            }
+            val stats = mutableListOf<com.winlator.cmod.feature.stores.steam.statsgen.Stat>()
+            val statArr = root.optJSONArray("stats") ?: JSONArray()
+            for (i in 0 until statArr.length()) {
+                val o = statArr.optJSONObject(i) ?: continue
+                stats.add(
+                    com.winlator.cmod.feature.stores.steam.statsgen.Stat(
+                        id      = o.optString("id", ""),
+                        name    = o.optString("name", ""),
+                        type    = o.optString("type", "1"),
+                        default = o.optString("default", "0"),
+                    ),
+                )
+            }
+            if (achievements.isEmpty() && stats.isEmpty()) return false
+            val nameToBlockBit = mutableMapOf<String, Pair<Int, Int>>()
+            val bitsArr = root.optJSONArray("nameToBlockBit")
+            if (bitsArr != null) {
+                for (i in 0 until bitsArr.length()) {
+                    val o = bitsArr.optJSONObject(i) ?: continue
+                    val name = o.optString("name", "")
+                    if (name.isEmpty()) continue
+                    nameToBlockBit[name] = Pair(
+                        o.optInt("block", -1),
+                        o.optInt("bit", 0),
+                    )
+                }
+            }
+            pushAchievementSchemaToLibSteamClient(appId, achievements, stats, nameToBlockBit)
+            Timber.i("Warmed schema cache for app $appId: ${achievements.size} ach, " +
+                "${stats.size} stats, ${nameToBlockBit.size} bit-mappings " +
+                "(cached ts=${root.optLong("ts")})")
+            return true
+        }
+
+        /** Fetch the app's Steam Inventory item definitions and write `steam_settings/items.json` + `default_items.json` into [configDirectory]. Best-effort — no-ops when there's no inventory, not logged on, or the fetch fails. */
+        suspend fun generateInventoryItems(
+            appId: Int,
+            configDirectory: String,
+        ) = runCatching {
+            // The GetItemDefArchive HTTPS GET needs the same PEM trust bundle CaBundleExtractor provides for the CM session.
+            val ctx = instance?.applicationContext ?: return@runCatching
+            val caPath = CaBundleExtractor.ensureBundle(ctx)
+            val archive =
+                withWnSession { session ->
+                    withContext(Dispatchers.IO) { session.getItemDefArchive(appId, caPath) }
+                }
+            if (archive == null) {
+                Timber.i("Inventory item-def archive unavailable for app $appId")
+                return@runCatching
+            }
+            val count = InventoryItemsGenerator.generate(archive, configDirectory)
+            Timber.i("Inventory items generated for app $appId: $count definition(s)")
+        }.onFailure { e ->
+            Timber.w(e, "Failed to generate inventory items for appId=$appId")
+        }
+
+        /** Fetch the account's subscribed Steam Workshop items for [appId] as a JSON array string; brings up a CM session if needed. null = not logged on / transport failure, "[]" = no subscriptions. */
+        suspend fun getSubscribedWorkshopItems(appId: Int): String? =
+            withWnSession { session ->
+                withContext(Dispatchers.IO) { session.getSubscribedWorkshopItems(appId) }
+            }
+
+        // Published-file-ids with an install in flight — guards two concurrent installs of the same item from wiping each other's content dir.
+        private val workshopInstallsInFlight =
+            java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+
+        /** Download and stage one subscribed Workshop item for [appId] into the staging area; the meta marker is written LAST so a partial download is never mistaken for installed. Returns true on success. BLOCKING — runs on Dispatchers.IO. */
+        suspend fun installWorkshopItem(
+            appId: Int,
+            publishedFileId: Long,
+            manifestId: Long,
+            title: String,
+            fileSizeBytes: Long,
+            timeUpdated: Long,
+            previewUrl: String,
+        ): Boolean =
+            withContext(Dispatchers.IO) {
+                if (manifestId == 0L) {
+                    Timber.w("Workshop item $publishedFileId has no content manifest — cannot install")
+                    return@withContext false
+                }
+                if (!workshopInstallsInFlight.add(publishedFileId)) {
+                    Timber.w("Workshop item $publishedFileId — install already in progress")
+                    return@withContext false
+                }
+                try {
+                    val ctx = instance?.applicationContext ?: return@withContext false
+                    val caPath = CaBundleExtractor.ensureBundle(ctx)
+                    val content = WorkshopModsGenerator.contentDir(ctx, appId, publishedFileId)
+                    val meta = WorkshopModsGenerator.metaFile(ctx, appId, publishedFileId)
+                    val preview = WorkshopModsGenerator.previewFile(ctx, appId, publishedFileId)
+                    // A (re)install starts clean: drop any stale marker / content / preview.
+                    meta.delete()
+                    preview.delete()
+                    content.deleteRecursively()
+                    content.mkdirs()
+
+                    val bytes =
+                        withWnSession { session ->
+                            session.downloadWorkshopItem(appId, manifestId, content.absolutePath, caPath)
+                        } ?: -1L
+                    if (bytes < 0L) {
+                        Timber.w("Workshop content download failed for item $publishedFileId (app $appId)")
+                        content.deleteRecursively()
+                        return@withContext false
+                    }
+                    // Drop the .DepotDownloader resume folder so it isn't exposed as mod content.
+                    File(content, ".DepotDownloader").deleteRecursively()
+
+                    // Preview image — best-effort; a missing preview must not fail the install.
+                    if (previewUrl.isNotBlank()) {
+                        runCatching { downloadWorkshopPreview(previewUrl, preview) }
+                            .onFailure { Timber.d(it, "Workshop preview download skipped for $publishedFileId") }
+                    }
+
+                    // Meta marker written LAST — its presence means "fully installed".
+                    meta.writeText(
+                        org.json.JSONObject()
+                            .put("title", title)
+                            .put("fileSize", fileSizeBytes)
+                            .put("timeUpdated", timeUpdated)
+                            .put("manifestId", manifestId)
+                            .toString(),
+                        Charsets.UTF_8,
+                    )
+                    Timber.i("Workshop item $publishedFileId installed for app $appId ($bytes bytes)")
+                    true
+                } finally {
+                    workshopInstallsInFlight.remove(publishedFileId)
+                }
+            }
 
         fun getGseSaveDirs(appId: Int): List<File> {
             val context = instance?.applicationContext ?: return emptyList()
@@ -4341,29 +2886,6 @@ class SteamService :
             }
         }
 
-        private fun findSteamSettingsDir(
-            context: Context,
-            appId: Int,
-        ): String? {
-            val appDirPath = getAppDirPath(appId)
-            val appDirSettings = File(appDirPath, "steam_settings")
-            if (appDirSettings.isDirectory) {
-                return appDirSettings.absolutePath
-            }
-
-            val container = ContainerUtils.getContainer(context, "STEAM_$appId") ?: return null
-            val coldclientSettings =
-                File(
-                    container.rootDir,
-                    ".wine/drive_c/Program Files (x86)/Steam/steam_settings",
-                )
-            if (coldclientSettings.isDirectory) {
-                return coldclientSettings.absolutePath
-            }
-
-            return null
-        }
-
         suspend fun storeAchievementUnlocks(
             appId: Int,
             configDirectory: String,
@@ -4371,11 +2893,20 @@ class SteamService :
             gseStatsDir: File,
         ): Result<Unit> =
             runCatching {
-                val steamUser = instance!!._steamUser!!
-                val userStats = instance?._steamUserStats!!.getUserStats(appId, steamUser.steamID!!).await()
-                if (userStats.result != EResult.OK) {
-                    throw IllegalStateException("getUserStats failed: ${userStats.result}")
+                val mySteamId = userSteamId
+                    ?: throw IllegalStateException("storeAchievementUnlocks: no SteamID")
+
+                // Fetch the app's user-stats (schema + crc + achievement blocks).
+                val statsJson = withWnSession { session -> session.getUserStatsFull(appId) }
+                    ?: throw IllegalStateException("getUserStats failed: no response")
+                val statsObj = JSONObject(statsJson)
+                val eresult = statsObj.optInt("eresult", 2)
+                if (eresult != EResult.OK.code()) {
+                    throw IllegalStateException("getUserStats failed: eresult=$eresult")
                 }
+                val crcStats = statsObj.optInt("crcStats")
+                val schemaBytes = hexToBytes(statsObj.optString("schema"))
+                val achievementBlocks = statsObj.optJSONArray("achievementBlocks")
 
                 val allStats = mutableMapOf<Int, Int>()
 
@@ -4394,13 +2925,14 @@ class SteamService :
                         }
                     }
 
-                    for (block in userStats.achievementBlocks ?: emptyList()) {
-                        val blockId = (block.achievementId as? Number)?.toInt() ?: continue
+                    for (i in 0 until (achievementBlocks?.length() ?: 0)) {
+                        val block = achievementBlocks!!.getJSONObject(i)
+                        val blockId = block.optInt("achievementId")
+                        val unlockTimes = block.optJSONArray("unlockTimes")
                         var bitmask = 0
-                        val unlockTimes = block.unlockTime ?: emptyList()
-                        for (i in unlockTimes.indices) {
-                            val t = unlockTimes[i]
-                            if ((t as? Number)?.toLong() != 0L) bitmask = bitmask or (1 shl i)
+                        for (j in 0 until (unlockTimes?.length() ?: 0)) {
+                            // unlock_time is a uint32 (can exceed Int range) — read as Long; non-zero means the bit is unlocked.
+                            if (unlockTimes!!.getLong(j) != 0L) bitmask = bitmask or (1 shl j)
                         }
                         allStats[blockId] = bitmask
                     }
@@ -4415,7 +2947,7 @@ class SteamService :
                 if (gseStatsDir.isDirectory) {
                     val statNameToId = mutableMapOf<String, Int>()
                     try {
-                        val parsedSchema = VdfParser().binaryLoads(userStats.schema.toByteArray())
+                        val parsedSchema = VdfParser().binaryLoads(schemaBytes)
                         for ((_, appData) in parsedSchema) {
                             if (appData !is Map<*, *>) continue
                             val statInfo = (appData as Map<String, Any>)["stats"] as? Map<String, Any> ?: continue
@@ -4452,45 +2984,9 @@ class SteamService :
                     return@runCatching
                 }
 
-                val statsToStore = allStats.map { (id, value) -> Stats(statId = id, statValue = value) }
-                val mySteamId = steamUser.steamID!!
-                Timber.d("storeUserStats: appId=$appId, crcStats=${userStats.crcStats}, stats=$statsToStore")
-                sendStoreUserStats(appId, statsToStore, mySteamId, userStats.crcStats)
+                Timber.d("storeUserStats: appId=$appId, crcStats=$crcStats, stats=$allStats")
+                sendStoreUserStats(appId, allStats, mySteamId.convertToUInt64(), crcStats)
             }
-
-        private fun sendStoreUserStats(
-            appId: Int,
-            stats: List<Stats>,
-            steamId: SteamID,
-            crcStats: Int,
-        ) {
-            val client = instance?.steamClient ?: return
-            runCatching {
-                val msg: ClientMsgProtobuf<SteammessagesClientserverUserstats.CMsgClientStoreUserStats2.Builder> =
-                    ClientMsgProtobuf(
-                        SteammessagesClientserverUserstats.CMsgClientStoreUserStats2::class.java,
-                        EMsg.ClientStoreUserStats2,
-                    )
-                msg.sourceJobID = client.getNextJobID()
-                msg.protoHeader.setRoutingAppid(appId)
-                msg.body.setGameId(appId.toLong())
-                msg.body.setSettorSteamId(steamId.convertToUInt64())
-                msg.body.setSetteeSteamId(steamId.convertToUInt64())
-                msg.body.setCrcStats(crcStats)
-                stats.forEach { stat ->
-                    msg.body.addStats(
-                        SteammessagesClientserverUserstats.CMsgClientStoreUserStats2.Stats
-                            .newBuilder()
-                            .setStatId(stat.statId)
-                            .setStatValue(stat.statValue)
-                            .build(),
-                    )
-                }
-                client.send(msg)
-            }.onFailure { e ->
-                Timber.e(e, "Failed to send storeUserStats for appId=$appId")
-            }
-        }
 
         data class CloudSyncOutcome(
             val success: Boolean,
@@ -4505,6 +3001,11 @@ class SteamService :
         ): CloudSyncOutcome =
             withContext(Dispatchers.IO) {
                 async {
+                    // In-Wine Steam owns cloud saves during a hand-off; syncing here too would race it as a second writer.
+                    if (isBionicHandoffActive()) {
+                        Timber.i("closeApp: Bionic hand-off active for app %d — deferring exit cloud sync to in-Wine Steam", appId)
+                        return@async CloudSyncOutcome(true, "Steam Launcher handles cloud saves directly.")
+                    }
                     if (isOffline || !isConnected) {
                         return@async CloudSyncOutcome(false, "Steam is offline.")
                     }
@@ -4532,44 +3033,64 @@ class SteamService :
                                 val clientId = PrefManager.clientId
                                 val steamInstance = instance
                                 val appInfo = getAppInfoOf(appId)
-                                val steamCloud = steamInstance?._steamCloud
 
-                                if (steamInstance != null && appInfo != null && steamCloud != null) {
-                                    progressWrapper("Checking Local Saves...", 0f)
+                                if (steamInstance != null && appInfo != null) {
+                                    progressWrapper("Checking Local Saves", 0f)
+                                    // SaveLocation.None: unchanged content never uploads, and both-sides-changed surfaces as a Conflict instead of overwriting the newer cloud copy.
                                     val postSyncInfo =
                                         SteamAutoCloud
                                             .syncUserFiles(
                                                 appInfo = appInfo,
                                                 clientId = clientId,
                                                 steamInstance = steamInstance,
-                                                steamCloud = steamCloud,
+                                                preferredSave = SaveLocation.None,
                                                 parentScope = this@async,
                                                 prefixToPath = prefixToPath,
                                                 onProgress = progressWrapper,
                                             ).await()
 
                                     val syncResult = postSyncInfo?.syncResult ?: SyncResult.UnknownFail
-                                    steamCloud.signalAppExitSyncDone(
-                                        appId = appId,
-                                        clientId = clientId,
-                                        uploadsCompleted = postSyncInfo?.uploadsCompleted == true,
-                                        uploadsRequired = postSyncInfo?.uploadsRequired == false,
-                                    )
+                                    // Signal exit-sync-done via the C++ WN-Steam-Client.
+                                    withWnSession { session ->
+                                        withContext(Dispatchers.IO) {
+                                            session.signalAppExitSyncDone(
+                                                appId = appId,
+                                                clientId = clientId,
+                                                uploadsCompleted = postSyncInfo?.uploadsCompleted == true,
+                                                uploadsRequired = postSyncInfo?.uploadsRequired == true,
+                                            )
+                                        }
+                                    }
 
                                     if (syncResult == SyncResult.Success || syncResult == SyncResult.UpToDate) {
                                         return@async CloudSyncOutcome(true)
                                     }
 
-                                    lastErrorMessage = "Steam cloud save sync failed."
+                                    // Discriminate the failure message by SyncResult so callers (SteamExitCloudSync.isRetryable, the UI retry loop) can tell terminal failures (Conflict) from transient ones (UpdateFail/DownloadFail).
+                                    lastErrorMessage =
+                                        when (syncResult) {
+                                            SyncResult.Conflict ->
+                                                "Steam cloud save sync conflict — relaunch the game to resolve."
+                                            SyncResult.PendingOperations ->
+                                                "Steam cloud sync pending — another device may still be uploading."
+                                            SyncResult.InProgress ->
+                                                "Steam cloud sync already in progress."
+                                            SyncResult.UpdateFail ->
+                                                "Steam cloud save upload failed."
+                                            SyncResult.DownloadFail ->
+                                                "Steam cloud save download failed."
+                                            else -> "Steam cloud save sync failed."
+                                        }
                                 } else {
                                     lastErrorMessage = "Steam cloud service is unavailable."
                                 }
                             } catch (e: AsyncJobFailedException) {
+                                // e.message is often an EResult enum name (e.g. "Pending", "RemoteFileConflict"); SteamExitCloudSync's retry classifier matches substrings like "conflict"/"pending", so those short-circuit the retry loop without a SyncResult plumb-through here.
                                 lastErrorMessage = e.message ?: "Steam cloud save sync failed."
                                 if (attempt == maxAttempts) {
                                     Timber.e(e, "Close app sync failed after $maxAttempts attempts for app $appId")
                                 } else {
-                                    Timber.w("Close app sync attempt $attempt failed for app $appId, retrying...")
+                                    Timber.w("Close app sync attempt $attempt failed for app $appId, retrying")
                                     delay(1000L * attempt)
                                 }
                             }
@@ -4610,6 +3131,7 @@ class SteamService :
                 var completionSent = false
                 val accountId =
                     userSteamId?.accountID?.toLong()
+                        ?: PrefManager.steamUserSteamId64.takeIf { it != 0L }?.let { it and 0xFFFFFFFFL }
                         ?: PrefManager.steamUserAccountId.takeIf { it != 0 }?.toLong()
                         ?: 0L
                 val prefixToPath: (String) -> String = { prefix ->
@@ -4639,11 +3161,7 @@ class SteamService :
                 }
             }
 
-        /**
-         * Sync cloud saves for backup/restore purposes without closing the app.
-         * @param preferredAction "download" or "upload"
-         * @return true if sync succeeded
-         */
+        /** Sync cloud saves for backup/restore without closing the app; [preferredAction] is "download" or "upload". Returns true on success. */
         suspend fun syncCloudSavesForBackup(
             context: android.content.Context,
             appId: Int,
@@ -4653,6 +3171,7 @@ class SteamService :
                 try {
                     val accountId =
                         userSteamId?.accountID?.toLong()
+                            ?: PrefManager.steamUserSteamId64.takeIf { it != 0L }?.let { it and 0xFFFFFFFFL }
                             ?: PrefManager.steamUserAccountId.takeIf { it != 0 }?.toLong()
                             ?: 0L
                     val prefixToPath: (String) -> String = { prefix ->
@@ -4662,10 +3181,9 @@ class SteamService :
                     }
                     val steamInst = instance
                     val appInfo = getAppInfoOf(appId)
-                    val steamCloud = steamInst?._steamCloud
                     val clientId = PrefManager.clientId
 
-                    if (steamInst == null || appInfo == null || steamCloud == null) {
+                    if (steamInst == null || appInfo == null) {
                         return@withContext false
                     }
 
@@ -4674,7 +3192,6 @@ class SteamService :
                             appInfo = appInfo,
                             clientId = clientId,
                             steamInstance = steamInst,
-                            steamCloud = steamCloud,
                             prefixToPath = prefixToPath,
                             onProgress = { _, _ -> },
                         ).await()
@@ -4693,9 +3210,18 @@ class SteamService :
             context: android.content.Context,
             appId: Int,
             callback: CloudSyncCallback,
+            containerHint: Container? = null,
         ) {
+            runCatching {
+                val target = containerHint
+                    ?: com.winlator.cmod.feature.stores.steam.utils.ContainerUtils
+                        .getUsableContainerOrNull(context, appId.toString())
+                target?.let { com.winlator.cmod.runtime.container.ContainerManager(context).activateContainer(it) }
+            }.onFailure { Timber.w(it, "syncCloudOnExit: container activation failed for app=%d", appId) }
+
             val accountId =
                 userSteamId?.accountID?.toLong()
+                    ?: PrefManager.steamUserSteamId64.takeIf { it != 0L }?.let { it and 0xFFFFFFFFL }
                     ?: PrefManager.steamUserAccountId.takeIf { it != 0 }?.toLong()
                     ?: 0L
             val prefixToPath: (String) -> String = { prefix ->
@@ -4724,21 +3250,7 @@ class SteamService :
             }
         }
 
-        data class FileChanges(
-            val filesDeleted: List<UserFileInfo>,
-            val filesModified: List<UserFileInfo>,
-            val filesCreated: List<UserFileInfo>,
-        )
-
-        /**
-         * loginusers.vdf writer for the OAuth-style refresh-token flow introduced in 2024.
-         *
-         * @param steamId64    64-bit SteamID of the logged-in user
-         * @param account      AccountName (same as you passed to logOn / poll result)
-         * @param refreshToken Long-lived token you get from AuthSession / QR / credentials
-         * @param accessToken  Optional – short-lived access token, Steam ignores it if absent
-         * @param personaName  What the client shows in the drop-down; defaults to AccountName
-         */
+        /** loginusers.vdf writer for the OAuth-style refresh-token flow. accessToken is optional (Steam ignores it if absent); personaName defaults to the AccountName. */
         internal fun getLoginUsersVdfOauth(
             steamId64: String,
             account: String,
@@ -4769,309 +3281,329 @@ class SteamService :
             return vdf
         }
 
-        private fun login(
-            username: String,
-            accessToken: String? = null,
-            refreshToken: String? = null,
-            password: String? = null,
-            rememberSession: Boolean = false,
-            twoFactorAuth: String? = null,
-            emailAuth: String? = null,
-            clientId: Long? = null,
-        ) {
-            isLoggingOut = false
-            val steamUser = instance!!._steamUser!!
-
-            // Sensitive info, only print in DEBUG build.
-//            if (BuildConfig.DEBUG) {
-//                Timber.d(
-//                    """
-//                    Login Information:
-//                     Username: $username
-//                     AccessToken: $accessToken
-//                     RefreshToken: $refreshToken
-//                     Password: $password
-//                     Remember Session: $rememberSession
-//                     TwoFactorAuth: $twoFactorAuth
-//                     EmailAuth: $emailAuth
-//                    """.trimIndent(),
-//                )
-//            }
-
-            PrefManager.username = username
-
-            if ((password != null && rememberSession) || refreshToken != null) {
-                if (accessToken != null) {
-                    PrefManager.accessToken = accessToken
-                }
-
-                if (refreshToken != null) {
-                    PrefManager.refreshToken = refreshToken
-                }
-
-                if (clientId != null) {
-                    PrefManager.clientId = clientId
-                }
-            }
-
-            val event = SteamEvent.LogonStarted(username)
-            PluviaApp.events.emit(event)
-
-            steamUser.logOn(
-                LogOnDetails(
-                    username = SteamUtils.removeSpecialChars(username).trim(),
-                    password = password?.let { SteamUtils.removeSpecialChars(it).trim() },
-                    shouldRememberPassword = rememberSession,
-                    twoFactorCode = twoFactorAuth,
-                    authCode = emailAuth,
-                    accessToken = refreshToken,
-                    loginID = SteamUtils.getUniqueDeviceId(instance!!),
-                    machineName = SteamUtils.getMachineName(instance!!),
-                    chatMode = ChatMode.NEW_STEAM_CHAT,
-                ),
-            )
-        }
-
         suspend fun startLoginWithCredentials(
             username: String,
             password: String,
             rememberSession: Boolean,
-            authenticator: IAuthenticator,
+            authenticator: WnAuthenticator,
         ) = withContext(Dispatchers.IO) {
+            val svc = instance ?: run {
+                PluviaApp.events.emit(
+                    SteamEvent.LogonEnded(username, LoginResult.Failed,
+                        "SteamService not initialized"),
+                )
+                return@withContext
+            }
+
+            Timber.i("Logging in via credentials (wn-steam-client).")
+            svc._loginResult = LoginResult.InProgress
+            PluviaApp.events.emit(SteamEvent.LogonStarted(username))
+
+            teardownPriorWnSession()
+
+            val session = bringUpWnSession(svc) ?: run {
+                PluviaApp.events.emit(
+                    SteamEvent.LogonEnded(username, LoginResult.Failed,
+                        "Failed to connect to Steam CM"),
+                )
+                return@withContext
+            }
+            wnAuthSession = session
+            var keepSessionAlive = false
             try {
-                Timber.i("Logging in via credentials.")
-                instance!!._loginResult = LoginResult.InProgress
-                Timber.i("Set login result to InProgress.")
-                instance!!.steamClient?.let { steamClient ->
-                    val authDetails =
-                        AuthSessionDetails().apply {
-                            this.username = username.trim()
-                            this.password = password.trim()
-                            this.persistentSession = rememberSession
-                            this.authenticator = authenticator
-                            this.deviceFriendlyName = SteamUtils.getMachineName(instance!!)
-                            this.clientOSType = EOSType.WinUnknown
-                        }
+                val result = suspendCancellableCoroutine<WnAuthResult> { cont ->
+                    session.startLoginWithCredentials(
+                        username = username.trim(),
+                        password = password.trim(),
+                        persistentSession = rememberSession,
+                        authenticator = authenticator,
+                        callback = WnAuthCallback { r ->
+                            if (cont.isActive) cont.resume(r)
+                        },
+                    )
+                    cont.invokeOnCancellation { session.cancelLogin() }
+                }
 
-                    val event = SteamEvent.LogonStarted(username)
-                    PluviaApp.events.emit(event)
-
-                    // Outer loop: retries the entire auth session when the connection
-                    // drops (e.g. TryAnotherCM) during 2FA polling.
-                    var loginComplete = false
-                    while (isActive && !loginComplete) {
-                        val currentClient = instance!!.steamClient ?: break
-                        val authSession = currentClient.authentication.beginAuthSessionViaCredentials(authDetails).await()
-
-                        Timber.d("Waiting for authentication result (handles 2FA). Interval: ${authSession.pollingInterval}s")
-
-                        // pollingWaitForResult handles the full 2FA flow:
-                        // - Checks allowedConfirmations for the required guard type
-                        // - Calls IAuthenticator callbacks (acceptDeviceConfirmation, getDeviceCode, getEmailCode)
-                        // - Submits the guard code to Steam via sendSteamGuardCode
-                        // - Polls until authentication completes
-                        var pollResult: AuthPollResult? = null
-                        var disconnected = false
-                        while (isActive && pollResult == null && !disconnected) {
-                            try {
-                                pollResult = authSession.pollingWaitForResult().await()
-                            } catch (e: AuthenticationException) {
-                                if (e.result == EResult.Expired || e.result == EResult.FileNotFound) {
-                                    Timber.w("Auth session expired during 2FA wait, retrying...")
-                                    delay(authSession.pollingInterval.toLong() * 1000L)
-                                    continue
-                                }
-                                throw e
-                            } catch (e: java.util.concurrent.CancellationException) {
-                                // Connection dropped (TryAnotherCM) — all pending futures
-                                // are cancelled. Wait for reconnection and restart the
-                                // auth session so the user doesn't see a spurious failure.
-                                if (!isActive) throw CancellationException("Coroutine cancelled")
-                                Timber.w("Auth poll cancelled (likely TryAnotherCM), waiting for reconnection...")
-                                disconnected = true
-                            }
-                        }
-
-                        if (disconnected) {
-                            // Wait for the service to reconnect to a new CM server
-                            Timber.i("Waiting for Steam reconnection before retrying credential auth...")
-                            try {
-                                withTimeout(30_000L) {
-                                    isConnectedFlow.first { it }
-                                }
-                            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                                throw Exception("Timed out waiting for Steam reconnection")
-                            }
-                            Timber.i("Reconnected, restarting credential auth session...")
-                            delay(500L) // brief settle time after reconnect
-                            continue
-                        }
-
-                        if (pollResult == null) {
-                            throw CancellationException("Credential auth polling cancelled")
-                        }
-
-                        Timber.i("Authentication successful for ${pollResult.accountName}")
-
-                        if (pollResult.accountName.isEmpty() && pollResult.refreshToken.isEmpty()) {
-                            throw Exception("No account name or refresh token received.")
-                        }
-
-                        login(
-                            clientId = authSession.clientID,
-                            username = pollResult.accountName,
-                            accessToken = pollResult.accessToken,
-                            refreshToken = pollResult.refreshToken,
-                            rememberSession = rememberSession,
+                if (!result.success || result.refreshToken.isEmpty()) {
+                    Timber.e("WnSteam auth failed: %s", result.errorMessage)
+                    com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                        .reportLogonFailure(
+                            eresult = result.errorCode.takeIf { it != 0 } ?: 2 /* Fail */,
+                            stillRetrying = false,
                         )
-                        loginComplete = true
-                    }
-                } ?: run {
-                    Timber.e("Could not logon: Failed to connect to Steam")
+                    recordLogonFailure(result.errorCode.takeIf { it != 0 } ?: 2)
+                    PluviaApp.events.emit(
+                        SteamEvent.LogonEnded(username, LoginResult.Failed,
+                            if (result.errorMessage.isNotEmpty()) result.errorMessage
+                            else "auth failed (eresult=${result.errorCode})"),
+                    )
+                    return@withContext
+                }
 
-                    val event = SteamEvent.LogonEnded(username, LoginResult.Failed, "No connection to Steam")
-                    PluviaApp.events.emit(event)
+                Timber.i("WnSteam auth OK for %s", result.accountName)
+
+                // Persist the acquired tokens so a later cold start auto-logons.
+                persistLoginTokens(
+                    username = result.accountName,
+                    accessToken = result.accessToken,
+                    refreshToken = result.refreshToken,
+                )
+
+                // Promote the auth session to the long-lived logon session. DO NOT insert a suspension point (withContext/delay/suspendCancellable) across the next four lines: cancellation mid-promotion leaves wnSession set while keepSessionAlive is false, so finally would close the live session (use-after-free).
+                installWnLogonObserver(session)
+                wnSession = session
+                wnAuthSession = null
+                keepSessionAlive = true
+
+                if (!session.logonWithRefreshToken(result.refreshToken, result.accountName, result.steamId)) {
+                    Timber.w("WnSteam logon_with_refresh_token returned false (channel not Connected?)")
+                }
+
+                // Watchdog: if the CM logon never reaches LoggedOn, surface a failure so the login UI doesn't hang on the spinner.
+                svc.scope.launch {
+                    var waited = 0
+                    while (waited < 35 && session.state() != 3) { delay(1000); waited++ }
+                    if (session.state() != 3 && wnSession === session) {
+                        Timber.w("WnSteam CM logon never reached LoggedOn")
+                        com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                            .reportLogonFailure(eresult = 6, stillRetrying = true)
+                        PluviaApp.events.emit(
+                            SteamEvent.LogonEnded(result.accountName, LoginResult.Failed,
+                                "Steam logon timed out"),
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 Timber.e(e, "Login failed")
-
-                val message =
-                    when (e) {
-                        is CancellationException -> "Unknown cancellation"
-                        is AuthenticationException -> e.result?.name ?: e.message
-                        else -> e.message ?: e.javaClass.name
-                    }
-
-                val event = SteamEvent.LogonEnded(username, LoginResult.Failed, message)
-                PluviaApp.events.emit(event)
+                val message = when (e) {
+                    is CancellationException -> "Unknown cancellation"
+                    else -> e.message ?: e.javaClass.name
+                }
+                PluviaApp.events.emit(SteamEvent.LogonEnded(username, LoginResult.Failed, message))
+            } finally {
+                if (!keepSessionAlive) {
+                    try { session.disconnect() } catch (_: Throwable) {}
+                    try { session.close() } catch (_: Throwable) {}
+                    if (wnAuthSession === session) wnAuthSession = null
+                }
             }
         }
 
-        suspend fun startLoginWithQr() =
-            withContext(Dispatchers.IO) {
-                try {
-                    Timber.i("Logging in via QR.")
-
-                    instance!!.steamClient?.let { steamClient ->
-                        isWaitingForQRAuth = true
-
-                        val authDetails =
-                            AuthSessionDetails().apply {
-                                this.deviceFriendlyName = SteamUtils.getMachineName(instance!!)
-                                this.clientOSType = EOSType.WinUnknown
-                                this.persistentSession = true
-                            }
-
-                        val authSession = steamClient.authentication.beginAuthSessionViaQR(authDetails).await()
-
-                        // Steam will periodically refresh the challenge url, this callback allows you to draw a new qr code.
-                        authSession.challengeUrlChanged = instance
-
-                        val qrEvent = SteamEvent.QrChallengeReceived(authSession.challengeUrl)
-                        PluviaApp.events.emit(qrEvent)
-
-                        Timber.d("PollingInterval: ${authSession.pollingInterval.toLong()}")
-
-                        var authPollResult: AuthPollResult? = null
-
-                        // FIX: Poll via raw protobuf RPC instead of JavaSteam's pollAuthSessionStatus()
-                        // so we can read hadRemoteInteraction — true when QR is scanned but not yet
-                        // approved. This lets the UI show the 2FA screen while the user confirms.
-                        val authService =
-                            steamClient
-                                .getHandler<SteamUnifiedMessages>()!!
-                                .createService<Authentication>()
-                        var qrScannedEmitted = false
-
-                        while (isWaitingForQRAuth && authPollResult == null) {
-                            try {
-                                val request =
-                                    CAuthentication_PollAuthSessionStatus_Request
-                                        .newBuilder()
-                                        .apply {
-                                            clientId = authSession.clientID
-                                            requestId =
-                                                com.google.protobuf.ByteString
-                                                    .copyFrom(authSession.requestID)
-                                        }.build()
-
-                                val result = authService.pollAuthSessionStatus(request).await()
-
-                                if (result.result != EResult.OK) {
-                                    throw AuthenticationException("Failed to poll status", result.result)
-                                }
-
-                                val response = result.body
-
-                                // Replicate handlePollAuthSessionStatusResponse behaviour
-                                if (response.newClientId != 0L) {
-                                    authSession.clientID = response.newClientId
-                                }
-                                if (response.newChallengeUrl.isNotEmpty()) {
-                                    val urlEvent = SteamEvent.QrChallengeReceived(response.newChallengeUrl)
-                                    PluviaApp.events.emit(urlEvent)
-                                }
-
-                                // Detect scan before approval
-                                if (!qrScannedEmitted && response.hadRemoteInteraction) {
-                                    qrScannedEmitted = true
-                                    PluviaApp.events.emit(SteamEvent.QrCodeScanned)
-                                }
-
-                                // Check for completion
-                                if (response.refreshToken.isNotEmpty()) {
-                                    authPollResult = AuthPollResult(response)
-                                } else {
-                                    delay(authSession.pollingInterval.toLong() * 1000L)
-                                }
-                            } catch (e: Exception) {
-                                Timber.e(e, "Poll auth session status error")
-                                throw e
-                            }
-                        }
-
-                        isWaitingForQRAuth = false
-
-                        val event = SteamEvent.QrAuthEnded(authPollResult != null)
-                        PluviaApp.events.emit(event)
-
-                        // there is a chance qr got cancelled and there is no authPollResult
-                        if (authPollResult == null) {
-                            Timber.e("Got no auth poll result")
-                            throw Exception("Got no auth poll result")
-                        }
-
-                        login(
-                            clientId = authSession.clientID,
-                            username = authPollResult.accountName,
-                            accessToken = authPollResult.accessToken,
-                            refreshToken = authPollResult.refreshToken,
-                        )
-                    } ?: run {
-                        Timber.e("Could not start QR logon: Failed to connect to Steam")
-
-                        val event = SteamEvent.QrAuthEnded(success = false, message = "No connection to Steam")
-                        PluviaApp.events.emit(event)
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "QR failed")
-
-                    val message =
-                        when (e) {
-                            is CancellationException -> "QR Session timed out"
-                            is AuthenticationException -> e.result?.name ?: e.message
-                            else -> e.message ?: e.javaClass.name
-                        }
-
-                    val event = SteamEvent.QrAuthEnded(success = false, message = message)
-                    PluviaApp.events.emit(event)
+        /** Creates a fresh [WnSteamSession], connects, and waits for the encrypted channel to reach Connected (state 2). Caller owns the returned session (disconnect/close); null on failure. */
+        /** Run [block] with a logged-on session: reuse the global [wnSession] if logged on (state 3), else bring up a temporary one, log on with the stored refresh token, run [block], and tear it down. Null if no logged-on session could be obtained. */
+        internal suspend fun <T> withWnSession(
+            block: suspend (WnSteamSession) -> T,
+        ): T? {
+            if (instance?.suspendedForBionic == true) {
+                Timber.i("withWnSession: suspended for Bionic hand-off — no CM session")
+                return null
+            }
+            wnSession?.takeIf { it.state() == 3 }?.let { return block(it) }
+            val gateUntil = logonGateUntilMs
+            if (gateUntil > 0L) {
+                val now = System.currentTimeMillis()
+                if (now < gateUntil) {
+                    Timber.w(
+                        "withWnSession: logon gated for ${(gateUntil - now) / 1000}s " +
+                            "more (last EResult=$lastLogonFailureEresult)",
+                    )
+                    return null
                 }
             }
+            return wnSessionBringUpMutex.withLock {
+                wnSession?.takeIf { it.state() == 3 }?.let { return@withLock block(it) }
+                val svc = instance ?: return@withLock null
+                val refreshTok = PrefManager.refreshToken
+                if (refreshTok.isBlank()) {
+                    Timber.w("withWnSession: no stored refresh token")
+                    return@withLock null
+                }
+                run {
+                    val gu = logonGateUntilMs
+                    if (gu > 0L && System.currentTimeMillis() < gu) {
+                        Timber.w(
+                            "withWnSession (post-lock): logon gated, EResult=$lastLogonFailureEresult",
+                        )
+                        return@withLock null
+                    }
+                }
+                val brought = bringUpWnSession(svc) ?: run {
+                    Timber.w("withWnSession: could not connect a session")
+                    return@withLock null
+                }
+                var promoted = false
+                try {
+                    if (!brought.logonWithRefreshToken(
+                            refreshTok,
+                            PrefManager.username,
+                            PrefManager.steamUserSteamId64,
+                        )
+                    ) {
+                        Timber.w("withWnSession: logon request failed")
+                        recordLogonFailure(2)
+                        return@withLock null
+                    }
+                    // 12s logon wait — enough for a slow CM round-trip but bounded so game-launch isn't blocked 30s on a session that won't recover.
+                    var wait = 0
+                    while (brought.state() != 3 && wait < 24) {
+                        delay(500L)
+                        wait++
+                    }
+                    if (brought.state() != 3) {
+                        Timber.w("withWnSession: session never reached LoggedOn after 12s")
+                        if (lastLogonFailureEresult == 0) recordLogonFailure(16)
+                        return@withLock null
+                    }
+                    installWnLogonObserver(brought)
+                    wnSession = brought
+                    promoted = true
+                    isConnected = true
+                    _isLoggedInFlow.value = true
+                    recordLogonSuccess()
+                    if (!wnLoggedOnHandled) {
+                        wnLoggedOnHandled = true
+                        instance?.onWnLoggedOn(brought)
+                    }
+                    block(brought)
+                } finally {
+                    if (!promoted) {
+                        runCatching { brought.disconnect() }
+                        runCatching { brought.close() }
+                    }
+                }
+            }
+        }
+
+        suspend fun startLoginWithQr() = withContext(Dispatchers.IO) {
+            val svc = instance ?: run {
+                PluviaApp.events.emit(
+                    SteamEvent.QrAuthEnded(success = false,
+                        message = "SteamService not initialized"),
+                )
+                return@withContext
+            }
+
+            Timber.i("Logging in via QR (wn-steam-client).")
+            isWaitingForQRAuth = true
+
+            teardownPriorWnSession()
+
+            val session = bringUpWnSession(svc) ?: run {
+                isWaitingForQRAuth = false
+                PluviaApp.events.emit(
+                    SteamEvent.QrAuthEnded(success = false,
+                        message = "Failed to connect to Steam"),
+                )
+                return@withContext
+            }
+            wnAuthSession = session
+            var keepSessionAlive = false
+            try {
+                var qrScannedEmitted = false
+                Log.i("WnSteamQr", "startLoginWithQr: session ready")
+                val result = suspendCancellableCoroutine<WnAuthResult> { cont ->
+                    session.startLoginWithQr(
+                        qrCallback = WnQrCallback { url ->
+                            Log.i("WnSteamQr", "qrCallback: challenge url len=${url.length}")
+                            PluviaApp.events.emit(SteamEvent.QrChallengeReceived(url))
+                        },
+                        resultCallback = WnAuthCallback { r ->
+                            Log.i(
+                                "WnSteamQr",
+                                "resultCallback: success=${r.success} errorCode=${r.errorCode} " +
+                                    "error='${r.errorMessage}' refreshLen=${r.refreshToken.length} " +
+                                    "account='${r.accountName}' remote=${r.hadRemoteInteraction} " +
+                                    "agreementLen=${r.agreementSessionUrl.length}",
+                            )
+                            if (!qrScannedEmitted && r.hadRemoteInteraction) {
+                                qrScannedEmitted = true
+                                Log.i("WnSteamQr", "resultCallback: emitting QrCodeScanned")
+                                PluviaApp.events.emit(SteamEvent.QrCodeScanned)
+                            }
+                            val isQrApprovalUpdate =
+                                !r.success &&
+                                    r.hadRemoteInteraction &&
+                                    r.refreshToken.isEmpty() &&
+                                    r.errorMessage.isEmpty()
+                            if (isQrApprovalUpdate) {
+                                Log.i("WnSteamQr", "resultCallback: intermediate approval update")
+                                return@WnAuthCallback
+                            }
+                            Log.i("WnSteamQr", "resultCallback: resuming QR coroutine")
+                            if (cont.isActive) cont.resume(r)
+                        },
+                    )
+                    cont.invokeOnCancellation { session.cancelLogin() }
+                }
+
+                isWaitingForQRAuth = false
+                Log.i(
+                    "WnSteamQr",
+                    "QR coroutine completed success=${result.success} refreshLen=${result.refreshToken.length} " +
+                        "account='${result.accountName}' steamId=${result.steamId}",
+                )
+                PluviaApp.events.emit(SteamEvent.QrAuthEnded(result.success))
+
+                if (!result.success || result.refreshToken.isEmpty()) {
+                    Timber.e("WnSteam QR auth failed: %s", result.errorMessage)
+                    return@withContext
+                }
+
+                // Persist the acquired tokens so a later cold start auto-logons.
+                persistLoginTokens(
+                    username = result.accountName,
+                    accessToken = result.accessToken,
+                    refreshToken = result.refreshToken,
+                )
+
+                // Promote the QR session to the long-lived logon session. DO NOT insert a suspension point across these four lines — see the note in startLoginWithCredentials.
+                installWnLogonObserver(session)
+                wnSession = session
+                wnAuthSession = null
+                keepSessionAlive = true
+
+                if (!session.logonWithRefreshToken(result.refreshToken, result.accountName, result.steamId)) {
+                    Timber.w("WnSteam QR logon_with_refresh_token returned false")
+                    Log.w("WnSteamQr", "logonWithRefreshToken returned false")
+                } else {
+                    Log.i("WnSteamQr", "logonWithRefreshToken queued")
+                }
+
+                // Watchdog: surface a failure if the CM logon hangs.
+                svc.scope.launch {
+                    var waited = 0
+                    while (waited < 35 && session.state() != 3) { delay(1000); waited++ }
+                    if (session.state() != 3 && wnSession === session) {
+                        Timber.w("WnSteam QR CM logon never reached LoggedOn")
+                        PluviaApp.events.emit(
+                            SteamEvent.LogonEnded(result.accountName, LoginResult.Failed,
+                                "Steam logon timed out"),
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "QR failed")
+                isWaitingForQRAuth = false
+                val message = when (e) {
+                    is CancellationException -> "QR Session timed out"
+                    else -> e.message ?: e.javaClass.name
+                }
+                PluviaApp.events.emit(SteamEvent.QrAuthEnded(success = false, message = message))
+            } finally {
+                if (!keepSessionAlive) {
+                    try { session.disconnect() } catch (_: Throwable) {}
+                    try { session.close() } catch (_: Throwable) {}
+                    if (wnAuthSession === session) wnAuthSession = null
+                }
+            }
+        }
 
         fun stopLoginWithQr() {
             Timber.i("Stopping QR polling")
-
             isWaitingForQRAuth = false
+            wnAuthSession?.let {
+                try { it.cancelLogin() } catch (_: Throwable) {}
+            }
         }
 
         fun start(context: Context) {
@@ -5083,6 +3615,28 @@ class SteamService :
             }
         }
 
+        /** App-lifecycle hooks from PluviaApp (last activity stops → onAppBackgrounded, first starts → onAppForegrounded) — let the Steam session sleep while the app is minimized and idle. See [handleAppBackgrounded]. */
+        fun onAppForegrounded() {
+            val service = instance
+            if (service == null) {
+                // Only activity creation starts the service, so without this a stopped session stays dead for the whole process.
+                if (PrefManager.refreshToken.isNotBlank()) {
+                    runCatching { PluviaApp.instance.applicationContext?.let { start(it) } }
+                }
+                return
+            }
+            service.handleAppForegrounded()
+        }
+
+        fun onAppBackgrounded() {
+            instance?.handleAppBackgrounded()
+        }
+
+        @JvmStatic
+        fun ensureHealthySession() {
+            instance?.ensureHealthySessionImpl()
+        }
+
         fun stop() {
             instance?.let { steamInstance ->
                 if (!isStopping) {
@@ -5092,6 +3646,7 @@ class SteamService :
                     }.onFailure { Timber.w(it, "Failed to remove SteamService foreground state during shutdown") }
                     runCatching {
                         steamInstance.notificationHelper.cancel()
+                        steamInstance.notificationHelper.cancelBackgroundRunning()
                     }.onFailure { Timber.w(it, "Failed to cancel SteamService notification during shutdown") }
                     steamInstance.stopSelf()
                 }
@@ -5109,26 +3664,63 @@ class SteamService :
             isLoggingOut = true
             _isLoggedInFlow.value = false
             PrefManager.clearAuthTokens()
+            instance?.let { svc ->
+                svc.scope.launch(Dispatchers.IO) {
+                    runCatching { svc.encryptedAppTicketDao.deleteAll() }
+                        .onFailure { Timber.w(it, "Failed to clear encrypted-app-ticket cache on logout") }
+                }
+            }
+            runCatching {
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setAppId(0)
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setLoggedOn(false)
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setSteamId(0L)
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setPersonaName("")
+            }
+
+            wnLibraryMirrorJob?.cancel()
+            wnLibraryMirrorJob = null
+            wnLibrary?.stopObserving()
+            wnLibrary = null
+
+            // Tear down the logon session after observers are quiesced so delayed library refreshes can't touch a closing native handle.
+            wnSession?.let { s ->
+                try { s.disconnect() } catch (_: Throwable) {}
+                try { s.close()      } catch (_: Throwable) {}
+            }
+            wnSession = null
+
+            try {
+                com.winlator.cmod.feature.stores.steam.wnsteam
+                    .WnSteamBootstrap.stop()
+            } catch (_: Throwable) {}
+            instance?.bionicHandoffReleaseImpl()
 
             // Cancel background jobs immediately
             instance?.picsGetProductInfoJob?.cancel()
             instance?.picsChangesCheckerJob?.cancel()
             instance?.friendCheckerJob?.cancel()
+            instance?.messagePollerJob?.cancel()
 
             // Emit event synchronously so the UI can react in the same frame
             PluviaApp.events.emit(SteamEvent.LoggedOut(username))
 
-            // Tell Steam we're leaving (best-effort, service will stop in onLoggedOff)
+            // Session already disconnected above; just clear the local database (best-effort).
             instance?.let { svc ->
                 svc.scope.launch(Dispatchers.Default) {
                     try {
                         clearDatabase()
-                        svc._steamUser?.logOff()
                     } catch (e: Exception) {
                         Timber.e(e, "Error during async logOff")
                     }
                 }
             }
+            stopOverlayPollLoop()
+            // No logged-off callback stops the service any more — do it here.
+            stop()
         }
 
         fun requestSync() {
@@ -5139,54 +3731,43 @@ class SteamService :
             }
         }
 
-        private fun clearUserData() {
-            PrefManager.clearAuthTokens()
+        @Volatile private var overlayPollJob: kotlinx.coroutines.Job? = null
 
-            clearDatabase()
+        fun startOverlayPollLoop() {
+            if (overlayPollJob?.isActive == true) return
+            val svc = instance ?: return
+            overlayPollJob = svc.scope.launch(Dispatchers.IO) {
+                while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                    runCatching {
+                        val req = com.winlator.cmod.feature.stores.steam.wnsteam
+                            .WnLibSteamClient.pollOverlayRequest() ?: return@runCatching
+                        dispatchOverlayRequest(req)
+                    }.onFailure { e ->
+                        Timber.w(e, "overlayPollJob: dispatch failed")
+                    }
+                    kotlinx.coroutines.delay(250)
+                }
+            }
+        }
+
+        fun stopOverlayPollLoop() {
+            overlayPollJob?.cancel()
+            overlayPollJob = null
         }
 
         fun clearDatabase() {
             with(instance!!) {
                 scope.launch {
                     db.withTransaction {
-                        // We NO LONGER delete apps, change numbers, or file lists here.
-                        // This preserves the installed games and shortcuts.
-                        // appDao.deleteAll()
-                        // We keep app metadata, but cloud sync caches are cleared separately.
+                        // Don't delete apps / change numbers / file lists here — preserve installed games + shortcuts; cloud-sync caches are cleared separately.
 
                         licenseDao.deleteAll()
                         encryptedAppTicketDao.deleteAll()
                         downloadingAppInfoDao.deleteAll()
+                        db.steamAppDao().deleteAll()
                     }
                 }
             }
-        }
-
-        private fun clearCloudSyncCaches() {
-            instance?.let { svc ->
-                svc.scope.launch {
-                    svc.db.withTransaction {
-                        svc.changeNumbersDao.deleteAll()
-                        svc.fileChangeListsDao.deleteAll()
-                    }
-                    Timber.i("Cleared cloud sync caches (change numbers + file lists)")
-                }
-            }
-        }
-
-        private fun performLogOffDuties() {
-            val username = PrefManager.username
-
-            clearUserData()
-            clearCloudSyncCaches()
-
-            val event = SteamEvent.LoggedOut(username)
-            PluviaApp.events.emit(event)
-
-            // Cancel previous continuous jobs or else they will continue to run even after logout
-            instance?.picsGetProductInfoJob?.cancel()
-            instance?.picsChangesCheckerJob?.cancel()
-            instance?.friendCheckerJob?.cancel()
         }
 
         suspend fun getOwnedGames(friendID: Long): List<OwnedGames> =
@@ -5194,7 +3775,7 @@ class SteamService :
                 instance?._unifiedFriends!!.getOwnedGames(friendID)
             }
 
-        // Add helper to detect if any downloads or cloud sync are in progress
+        // True if any download or cloud sync is in progress.
         fun hasActiveOperations(): Boolean {
             val anySyncInProgress = syncInProgressApps.values.any { it.get() }
             return anySyncInProgress || downloadJobs.values.any { it.getProgress() < 1f }
@@ -5206,113 +3787,133 @@ class SteamService :
         suspend fun isUpdatePending(
             appId: Int,
             branch: String = "public",
-        ): Boolean =
+        ): Boolean = checkForAppUpdate(appId, branch).hasUpdate
+
+        suspend fun checkForAppUpdate(
+            appId: Int,
+            branch: String = "public",
+        ): SteamUpdateInfo =
             withContext(Dispatchers.IO) {
-                // Don't try if there's no internet
-                if (!isConnected) return@withContext false
+                fun SteamUpdateInfo.logged(): SteamUpdateInfo {
+                    Timber.i(
+                        "Steam update check result: appId=$appId branch=$branch " +
+                            "hasUpdate=$hasUpdate downloadSize=$downloadSize depotIds=$depotIds message=$message",
+                    )
+                    return this
+                }
 
-                val steamApps = instance?._steamApps ?: return@withContext false
+                Timber.i("Steam update check started: appId=$appId branch=$branch")
+                if (!isConnected || !isLoggedIn) {
+                    return@withContext SteamUpdateInfo(message = "Steam is not connected").logged()
+                }
+                if (!isAppInstalled(appId)) {
+                    return@withContext SteamUpdateInfo(message = "Game is not installed").logged()
+                }
 
-                // ── 1. Fetch the latest app header from Steam (PICS).
-                val pics =
-                    steamApps
-                        .picsGetProductInfo(
-                            apps = listOf(PICSRequest(id = appId)),
-                            packages = emptyList(),
-                        ).await()
+                val remoteSteamApp = fetchLatestSteamAppInfo(appId)
+                    ?: return@withContext SteamUpdateInfo(message = "Could not fetch Steam metadata").logged()
+                persistLatestSteamAppInfo(appId, remoteSteamApp)
 
-                val remoteAppInfo =
-                    pics.results
-                        .firstOrNull()
-                        ?.apps
-                        ?.values
-                        ?.firstOrNull()
-                        ?: return@withContext false // nothing returned ⇒ treat as up-to-date
+                val appDirPath = getAppDirPath(appId)
+                val selectedDepots =
+                    getSelectedDownloadDepots(
+                        appId = appId,
+                        userSelectedDlcAppIds = resolveInstalledDlcIdsForUpdateOrVerify(appId),
+                        preferredLanguage = PrefManager.containerLanguage,
+                        branch = branch,
+                    )
+                if (selectedDepots.isEmpty()) {
+                    return@withContext SteamUpdateInfo(message = "No installed depots to update").logged()
+                }
 
-                val remoteSteamApp = remoteAppInfo.keyValues.generateSteamApp()
-                val localSteamApp = getAppInfoOf(appId) ?: return@withContext true // not cached yet
+                val installedManifestIds = readInstalledDepotManifestIds(appDirPath)
+                val cachedManifestFiles: Set<String> =
+                    File(appDirPath, ".DepotDownloader").list()?.toHashSet() ?: emptySet()
+                // Resolve manifests once per depot; the filter below picks which need updating and the size calc reuses these.
+                val depotManifests: Map<Int, Pair<DepotInfo, ManifestInfo>> =
+                    selectedDepots.mapNotNull { (depotId, depot) ->
+                        val manifest = resolveDepotManifestInfo(depot, branch) ?: return@mapNotNull null
+                        depotId to (depot to manifest)
+                    }.toMap()
+                val updateDepots =
+                    depotManifests.filter { (depotId, depotAndManifest) ->
+                        val manifest = depotAndManifest.second
+                        val installedManifestId = installedManifestIds[depotId]
+                        if (installedManifestId != null) {
+                            installedManifestId != manifest.gid
+                        } else {
+                            "${depotId}_${manifest.gid}.manifest" !in cachedManifestFiles
+                        }
+                    }
 
-                // ── 2. Compare manifest IDs of the depots we actually install.
-                getDownloadableDepots(appId).keys.any { depotId ->
-                    val remoteManifest = remoteSteamApp.depots[depotId]?.manifests?.get(branch)
-                    val localManifest = localSteamApp.depots[depotId]?.manifests?.get(branch)
-                    // If remote manifest is null, skip this depot (hack for Castle Crashers)
-                    if (remoteManifest == null) return@any false
-                    remoteManifest?.gid != localManifest?.gid
+                if (updateDepots.isEmpty()) {
+                    SteamUpdateInfo(hasUpdate = false).logged()
+                } else {
+                    SteamUpdateInfo(
+                        hasUpdate = true,
+                        downloadSize =
+                            updateDepots.values
+                                .sumOf { (_, manifest) -> manifestDownloadBytes(manifest) }
+                                .coerceAtLeast(0L),
+                        depotIds = updateDepots.keys.sorted(),
+                    ).logged()
                 }
             }
+
+        /** Transitional bridge: converts a [KeyValue] tree into the nested Map [WnKeyValue] consumes. */
+
+        internal val picsRefreshedAppsThisSession =
+            java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Int, Boolean>())
 
         suspend fun checkDlcOwnershipViaPICSBatch(dlcAppIds: Set<Int>): Set<Int> {
             if (dlcAppIds.isEmpty()) return emptySet()
 
-            val steamApps = instance?._steamApps ?: return emptySet()
-
             try {
-                // Step 1: Get access tokens for all DLC appIds at once
-                val tokens =
-                    steamApps
-                        .picsGetAccessTokens(
-                            appIds = dlcAppIds.toList(),
-                            packageIds = emptyList(),
-                        ).await()
+                // Step 1: PICS access tokens — a granted token ⇒ candidate ownership.
+                val tokJson =
+                    withWnSession { session ->
+                        withContext(Dispatchers.IO) {
+                            session.getPicsAccessTokens(dlcAppIds.toList(), emptyList())
+                        }
+                    } ?: return emptySet()
 
-                Timber.d("Access tokens response:")
-                Timber.d("  - Granted tokens: ${tokens.appTokens.keys}")
-                Timber.d("  - Denied tokens: ${tokens.appTokensDenied}")
-
-                // Step 2: Filter to only appIds that have tokens (we own them)
-                val ownedAppIds =
-                    tokens.appTokens.keys
-                        .filter { it in dlcAppIds }
-                        .toSet()
-
-                Timber.d("Owned appIds (from tokens): $ownedAppIds")
-
-                if (ownedAppIds.isEmpty()) {
+                val tokenMap = HashMap<Int, Long>()
+                JSONObject(tokJson).optJSONObject("appTokens")?.let { at ->
+                    for (k in at.keys()) {
+                        val id = k.toIntOrNull() ?: continue
+                        if (id in dlcAppIds) {
+                            tokenMap[id] = at.getString(k).toLongOrNull() ?: 0L
+                        }
+                    }
+                }
+                Timber.d("DLC ownership: ${tokenMap.size} candidate(s) from access tokens")
+                if (tokenMap.isEmpty()) {
                     Timber.w("No owned DLCs found via access tokens")
                     return emptySet()
                 }
 
-                // Step 3: Create PICSRequests for all owned appIds
-                val picsRequests =
-                    ownedAppIds
-                        .map { appId ->
-                            val token = tokens.appTokens[appId] ?: return@map null
-                            PICSRequest(id = appId, accessToken = token)
-                        }.filterNotNull()
-
-                Timber.d("Created ${picsRequests.size} PICS requests")
-
-                if (picsRequests.isEmpty()) return emptySet()
-
-                // Step 4: Query PICS for all apps at once (batch them)
-                // Note: Steam has limits, so you might need to chunk if > 100 apps
-                val chunkSize = 100
+                // Step 2: confirm via PICS product info — an app that returns a product-info entry is owned/accessible.
                 val allOwnedAppIds = mutableSetOf<Int>()
-
-                picsRequests.chunked(chunkSize).forEach { chunk ->
-                    Timber.d("Querying PICS chunk with ${chunk.size} apps")
-                    val callback =
-                        steamApps
-                            .picsGetProductInfo(
-                                apps = chunk,
-                                packages = emptyList(),
-                            ).await()
-
-                    // Collect all appIds that returned results
-                    callback.results.forEach { picsCallback ->
-                        val returnedAppIds = picsCallback.apps.keys
-                        Timber.d("  PICS result: ${returnedAppIds.size} apps returned")
-                        allOwnedAppIds.addAll(picsCallback.apps.keys)
+                tokenMap.keys.toList().chunked(100).forEach { chunk ->
+                    val infoJson =
+                        withWnSession { session ->
+                            withContext(Dispatchers.IO) {
+                                session.getPicsAppProductInfo(chunk, chunk.map { tokenMap[it] ?: 0L })
+                            }
+                        } ?: return@forEach
+                    val arr = JSONArray(infoJson)
+                    for (i in 0 until arr.length()) {
+                        allOwnedAppIds.add(arr.getJSONObject(i).optInt("appid"))
                     }
                 }
 
-                Timber.i("Final owned DLC appIds: $allOwnedAppIds")
-                Timber.i("Total owned: ${allOwnedAppIds.size} out of ${dlcAppIds.size} checked")
-
+                Timber.i(
+                    "Final owned DLC appIds (wn): $allOwnedAppIds " +
+                        "(${allOwnedAppIds.size} of ${dlcAppIds.size} checked)",
+                )
                 return allOwnedAppIds
             } catch (e: Exception) {
-                Timber.e(e, "Failed to check DLC ownership via PICS batch for ${dlcAppIds.size} appIds")
+                Timber.e(e, "checkDlcOwnershipViaPICSBatch (wn) failed for ${dlcAppIds.size} appIds")
                 return emptySet()
             }
         }
@@ -5321,24 +3922,68 @@ class SteamService :
     private val coordinatorDispatcher =
         object : DownloadCoordinator.Dispatcher {
             override fun startQueued(record: DownloadRecord) {
-                val appId = record.storeGameId.toIntOrNull() ?: return
-                // Drop any stale queued/paused DownloadInfo from the in-memory map BEFORE
-                // calling downloadApp(). Otherwise SteamService.downloadApp() finds the
-                // inactive entry, calls removeDownloadJob() (which fires the legacy
-                // checkQueue() and an extra notify event), and only then proceeds to build
-                // a fresh DownloadInfo. Removing here directly avoids that duplicate path.
+                val appId = record.storeGameId.toIntOrNull()
+                if (appId == null) {
+                    runBlocking {
+                        DownloadCoordinator.notifyFinished(
+                            DownloadRecord.STORE_STEAM,
+                            record.storeGameId,
+                            DownloadRecord.STATUS_FAILED,
+                            "Invalid Steam app id '${record.storeGameId}'",
+                        )
+                    }
+                    return
+                }
+                // No AppInfo yet (pre-login dispatch): requeue; the post-logon tick retries it.
+                if (getAppInfoOf(appId) == null) {
+                    Timber.w("startQueued: no AppInfo yet for appId=$appId — requeueing until Steam data is ready")
+                    runBlocking {
+                        DownloadCoordinator.requeue(DownloadRecord.STORE_STEAM, record.storeGameId)
+                    }
+                    return
+                }
+                // Drop any stale queued/paused DownloadInfo BEFORE downloadApp(), else it finds the inactive entry and calls removeDownloadJob() (firing the legacy checkQueue() + an extra notify) before building a fresh one.
                 downloadJobs.remove(appId)
-                // CRITICAL: pass record.selectedDlcs as the authoritative DLC list. The
-                // legacy no-arg downloadApp(appId) reconstructs DLCs from a fragile chain
-                // (DownloadingAppInfo -> snapshot inference -> installed). Snapshot inference
-                // only sees DLCs that already had bytes downloaded, so DLCs the user selected
-                // but never started would silently disappear and the game would be marked
-                // COMPLETE after only downloading a partial scope.
-                val dlcAppIdsHint =
+                // selectedDlcs carries authoritative DLC app IDs for installs; for updates it carries the changed depot IDs from checkForAppUpdate() so queued updates keep the narrowed scope.
+                val persistedIds =
                     record.selectedDlcs
                         .split(',')
                         .mapNotNull { it.trim().toIntOrNull() }
-                downloadApp(appId, dlcAppIdsHint)
+                val started =
+                    if (record.taskType == DownloadRecord.TASK_UPDATE) {
+                        downloadAppForUpdate(appId, persistedIds)
+                    } else if (record.taskType == DownloadRecord.TASK_VERIFY) {
+                        downloadAppForVerify(appId)
+                    } else {
+                        downloadApp(appId, persistedIds)
+                    }
+                if (started == null) {
+                    // Mark FAILED so the slot frees and Retry stays functional.
+                    Timber.e("startQueued: downloadApp returned null for appId=$appId (task=${record.taskType}) — marking record FAILED")
+                    runBlocking {
+                        DownloadCoordinator.notifyFinished(
+                            DownloadRecord.STORE_STEAM,
+                            record.storeGameId,
+                            DownloadRecord.STATUS_FAILED,
+                            "Could not start download — retry after Steam finishes loading",
+                        )
+                    }
+                } else if (started.getStatusFlow().value == DownloadPhase.COMPLETE) {
+                    // No downloader runs, so release the slot here; keyed on COMPLETE because a queued job is also inactive.
+                    Timber.i("startQueued: appId=$appId resolved as already complete — releasing coordinator slot")
+                    runBlocking {
+                        DownloadCoordinator.notifyFinished(
+                            DownloadRecord.STORE_STEAM,
+                            record.storeGameId,
+                            DownloadRecord.STATUS_COMPLETE,
+                        )
+                    }
+                }
+            }
+
+            override fun isTransferActive(record: DownloadRecord): Boolean {
+                val appId = record.storeGameId.toIntOrNull() ?: return false
+                return downloadJobs[appId]?.isActive() == true
             }
 
             override fun pauseRunning(record: DownloadRecord) {
@@ -5360,13 +4005,38 @@ class SteamService :
             override fun cancelRunning(record: DownloadRecord) {
                 val appId = record.storeGameId.toIntOrNull() ?: return
                 val info = downloadJobs[appId]
+                val statusAtCancel = info?.getStatusFlow()?.value
                 if (info != null) {
                     info.isCancelling = true
                     info.cancel("Cancelled by user")
                 }
                 kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                    info?.awaitCompletion(timeoutMs = 3000L)
+                    val isUpdateTask = record.taskType == DownloadRecord.TASK_UPDATE
+                    info?.awaitCompletion(timeoutMs = if (isUpdateTask) 10000L else 3000L)
                     val appDirPath = record.installPath.ifEmpty { getAppDirPath(appId) }
+                    if (isUpdateTask) {
+                        val updateNeverStarted =
+                            statusAtCancel == DownloadPhase.QUEUED ||
+                                (
+                                    statusAtCancel == DownloadPhase.PAUSED &&
+                                        MarkerUtils.hasMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER) &&
+                                        !MarkerUtils.hasMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                                )
+                        if (updateNeverStarted) {
+                            MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                            MarkerUtils.addMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                        } else {
+                            cleanupCancelledUpdate(appDirPath)
+                        }
+                        try {
+                            instance?.downloadingAppInfoDao?.deleteApp(appId)
+                        } catch (e: Exception) {
+                            Timber.w(e, "Failed to clear cancelled Steam update metadata for appId=$appId")
+                        }
+                        info?.updateStatus(DownloadPhase.CANCELLED)
+                        removeDownloadJob(appId, forceRemove = true)
+                        return@launch
+                    }
                     val dirFile = java.io.File(appDirPath)
                     if (dirFile.exists() && dirFile.isDirectory) {
                         val deleteCheck =
@@ -5393,32 +4063,82 @@ class SteamService :
         super.onCreate()
         instance = this
 
+        _chatServiceEnabledFlow.value = PrefManager.chatServiceEnabled
+
         notificationHelper = NotificationHelper(applicationContext)
         val notification = notificationHelper.createForegroundNotification("Steam Service is running")
         startForeground(1, notification)
 
-        _isConnectedFlow.value = steamClient?.isConnected ?: false
-        // Login flow is already pre-seeded by initLoginStatus() before start()
-        _isLoggedInFlow.value = steamClient?.steamID?.isValid ?: _isLoggedInFlow.value
+        com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+            .seedFromPrefManager(applicationContext)
 
-        // JavaSteam logger CME hot-fix
-        runCatching {
-            val clazz = Class.forName("in.dragonbra.javasteam.util.log.LogManager")
-            val field = clazz.getDeclaredField("LOGGERS").apply { isAccessible = true }
-            field.set(
-                // obj =
-                null,
-                java.util.concurrent.ConcurrentHashMap<Any, Any>(), // replaces the HashMap
-            )
+        scope.launch(Dispatchers.IO) {
+            try {
+                val ownedIds = appDao.getAllAppIds().toIntArray()
+                if (ownedIds.isNotEmpty()) {
+                    com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                        .setOwnedApps(ownedIds)
+                }
+                val installed = ownedIds.filter { isAppInstalled(it) }.toIntArray()
+                if (installed.isNotEmpty()) {
+                    com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                        .setInstalledApps(installed)
+                    installed.forEach { appId ->
+                        val dir = runCatching { getAppDirPath(appId) }.getOrNull()
+                        if (!dir.isNullOrEmpty()) {
+                            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                                .setAppInstallDir(appId, dir)
+                        }
+                        val acct = runCatching {
+                            com.winlator.cmod.feature.stores.steam.utils
+                                .SteamUtils.getSteam3AccountId().toLong()
+                        }.getOrNull() ?: 0L
+                        if (acct > 0L) {
+                            val remoteDir = runCatching {
+                                com.winlator.cmod.feature.stores.steam.enums
+                                    .PathType.SteamUserData.toAbsPath(
+                                        this@SteamService, appId, acct)
+                            }.getOrNull()
+                            if (!remoteDir.isNullOrEmpty()) {
+                                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                                    .setAppCloudRemoteDir(appId, remoteDir)
+                            }
+                        }
+                    }
+                }
+                val nameIds   = mutableListOf<Int>()
+                val nameStrs  = mutableListOf<String>()
+                for (id in ownedIds) {
+                    val nm = runCatching { appDao.findApp(id)?.name }.getOrNull().orEmpty()
+                    if (nm.isNotEmpty()) {
+                        nameIds.add(id)
+                        nameStrs.add(nm)
+                    }
+                }
+                if (nameIds.isNotEmpty()) {
+                    com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                        .setAppNames(nameIds.toIntArray(), nameStrs.toTypedArray())
+                }
+                Timber.i("WnLibSteamClient seed: owned=${ownedIds.size} installed=${installed.size} names=${nameIds.size}")
+            } catch (t: Throwable) {
+                Timber.w(t, "WnLibSteamClient seed failed")
+            }
         }
+
+        // Connection/login flows are driven by the session observer; isLoggedInFlow is pre-seeded by initLoginStatus().
+        _isConnectedFlow.value = false
 
         PluviaApp.events.on<AndroidEvent.EndProcess, Unit>(onEndProcess)
 
         DownloadCoordinator.init(db)
         DownloadCoordinator.registerDispatcher(DownloadRecord.STORE_STEAM, coordinatorDispatcher)
 
-        // To view log messages in android logcat properly
-        LogManager.addListener(logger)
+        // Re-arm the background idle timer on any download state change — one that kept the session awake can finish/pause, so re-evaluate (and suspend once idle) without waiting on the running timer. Grace delay still applies.
+        scope.launch {
+            DownloadCoordinator.changes.collect {
+                if (!appInForeground) scheduleBackgroundSuspendCheck()
+            }
+        }
     }
 
     override fun onStartCommand(
@@ -5430,90 +4150,26 @@ class SteamService :
         when (intent?.action) {
             NotificationHelper.ACTION_EXIT -> {
                 Timber.d("Exiting app via notification intent")
-                AppTerminationHelper.stopManagedServices(applicationContext, "notification_exit")
-
+                AppTerminationHelper.stopManagedServices(applicationContext, "notification_exit", forceStopChat = true)
+                runCatching {
+                    getSystemService(android.app.ActivityManager::class.java)
+                        ?.appTasks?.forEach { it.finishAndRemoveTask() }
+                }
+                android.os.Process.killProcess(android.os.Process.myPid())
                 return START_NOT_STICKY
             }
         }
 
         if (!isRunning) {
-            Timber.i("Using server list path: $serverListPath")
-
-            // Ensure parent directory exists
-            File(serverListPath).parentFile?.mkdirs()
-
-            val configuration =
-                SteamConfiguration.create {
-                    it.withProtocolTypes(PROTOCOL_TYPES)
-                    it.withCellID(PrefManager.cellId)
-                    it.withServerListProvider(FileServerListProvider(File(serverListPath)))
-                    it.withConnectionTimeout(60000L)
-                    it.withHttpClient(
-                        OkHttpClient
-                            .Builder()
-                            .connectTimeout(10, TimeUnit.SECONDS) // Time to establish connection
-                            .readTimeout(60, TimeUnit.SECONDS) // Max inactivity between reads
-                            .writeTimeout(30, TimeUnit.SECONDS) // Time for writes
-                            .build(),
-                    )
-                }
-
-            // create our steam client instance
-            steamClient =
-                SteamClient(configuration).apply {
-                    // remove callbacks we're not using.
-                    removeHandler(SteamGameServer::class.java)
-                    removeHandler(SteamMasterServer::class.java)
-                    removeHandler(SteamWorkshop::class.java)
-                    removeHandler(SteamScreenshots::class.java)
-                }
-
-            // create the callback manager which will route callbacks to function calls
-            callbackManager = CallbackManager(steamClient!!)
-
-            // get the different handlers to be used throughout the service
-            _steamUser = steamClient!!.getHandler(SteamUser::class.java)
-            _steamApps = steamClient!!.getHandler(SteamApps::class.java)
-            _steamFriends = steamClient!!.getHandler(SteamFriends::class.java)
-            _steamCloud = steamClient!!.getHandler(SteamCloud::class.java)
-            _steamUserStats = steamClient!!.getHandler(SteamUserStats::class.java)
-
-            _unifiedFriends = SteamUnifiedFriends(this)
-            _steamFamilyGroups = steamClient!!.getHandler<SteamUnifiedMessages>()!!.createService<FamilyGroups>()
-
-            // subscribe to the callbacks we are interested in
-            with(callbackSubscriptions) {
-                with(callbackManager!!) {
-                    add(subscribe(ConnectedCallback::class.java, ::onConnected))
-                    add(subscribe(DisconnectedCallback::class.java, ::onDisconnected))
-                    add(subscribe(LoggedOnCallback::class.java, ::onLoggedOn))
-                    add(subscribe(LoggedOffCallback::class.java, ::onLoggedOff))
-                    add(subscribe(PersonaStateCallback::class.java, ::onPersonaStateReceived))
-                    add(subscribe(LicenseListCallback::class.java, ::onLicenseList))
-                    add(subscribe(PlayingSessionStateCallback::class.java, ::onPlayingSessionState))
-                }
-            }
-
             isRunning = true
 
-            // we should use Dispatchers.IO here since we are running a sleeping/blocking function
-            // "The idea is that the IO dispatcher spends a lot of time waiting (IO blocked),
-            // while the Default dispatcher is intended for CPU intensive tasks, where there
-            // is little or no sleep."
-            // source: https://stackoverflow.com/a/59040920
-            scope.launch {
-                while (isRunning) {
-                    // logD("runWaitCallbacks")
+            _unifiedFriends = SteamUnifiedFriends(this)
+            // Family groups and friends go through the native Steam client.
 
-                    try {
-                        callbackManager!!.runWaitCallbacks(1000L)
-                    } catch (e: Exception) {
-                        Timber.e("runWaitCallbacks failed: $e")
-                    }
-                }
+            // Stored credentials bootstrap the native session and its observer drives the rest of the lifecycle; a fresh login (no token yet) arrives later via startLoginWith{Credentials,Qr}.
+            if (PrefManager.refreshToken.isNotBlank()) {
+                connectAndLogon()
             }
-
-            connectToSteam()
         }
 
         return START_STICKY
@@ -5527,14 +4183,14 @@ class SteamService :
 
         DownloadCoordinator.unregisterDispatcher(DownloadRecord.STORE_STEAM)
 
-        // Persist download progress for all active downloads
-        // This is a safety net for OS kills (unlikely but possible)
+        // Persist progress for all active downloads — safety net for OS kills.
         downloadJobs.values.forEach { downloadInfo ->
             downloadInfo.persistProgressSnapshot(force = true)
         }
 
         stopForeground(STOP_FOREGROUND_REMOVE)
         notificationHelper.cancel()
+        notificationHelper.cancelBackgroundRunning()
 
         if (!isStopping) {
             scope.launch { stop() }
@@ -5549,685 +4205,424 @@ class SteamService :
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun connectToSteam() {
-        scope.launch {
-            while (isRunning && !isConnected) {
-                Timber.d("connectToSteam: attempting connection...")
-                try {
-                    steamClient!!.connect()
-
-                    // Wait for connection for up to 10 seconds
-                    var waitAttempts = 0
-                    while (!isConnected && waitAttempts < 10) {
-                        delay(1000)
-                        waitAttempts++
-                    }
-
-                    if (!isConnected) {
-                        Timber.w("Failed to connect to Steam, marking endpoint bad and force disconnecting")
-                        try {
-                            steamClient!!.servers.tryMark(steamClient!!.currentEndpoint, PROTOCOL_TYPES, ServerQuality.BAD)
-                        } catch (e: Exception) {
-                        }
-
-                        try {
-                            steamClient!!.disconnect()
-                        } catch (e: Exception) {
-                        }
-
-                        // Wait before retrying
-                        delay(5000)
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "Error during connectToSteam")
-                    delay(5000)
-                }
+    /** Applies the master chat switch to a live session: enable → restart the message poller, go online (stored persona), refresh friends; disable → stop the poller and go offline. No-op until logged on (onWnLoggedOn handles cold start). */
+    private fun applyChatServiceState(enabled: Boolean) {
+        if (!isLoggedIn) return
+        if (enabled) {
+            messagePollerJob?.cancel()
+            messagePollerJob = continuousIncomingMessagePoller()
+            scope.launch {
+                val effectiveState =
+                    (EPersonaState.from(PrefManager.personaState) ?: EPersonaState.Online).code()
+                withWnSession { s -> s.setPersonaState(effectiveState) }
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setPersonaState(effectiveState)
+            }
+            scope.launch { runCatching { refreshFriends() } }
+        } else {
+            messagePollerJob?.cancel()
+            messagePollerJob = null
+            scope.launch {
+                val offline = EPersonaState.Offline.code()
+                withWnSession { s -> s.setPersonaState(offline) }
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                    .setPersonaState(offline)
             }
         }
     }
 
     private suspend fun stop() {
         Timber.i("Stopping Steam service")
-        if (steamClient != null && steamClient!!.isConnected) {
-            isStopping = true
-
-            steamClient!!.disconnect()
-
-            while (isStopping) {
-                delay(200L)
-            }
-
-            // the reason we don't clearValues() here is because the onDisconnect
-            // callback does it for us
-        } else {
-            clearValues()
+        isStopping = true
+        connectJob?.cancel()
+        reconnectJob?.cancel()
+        stableConnectionJob?.cancel()
+        refreshTokenWatchdogJob?.cancel()
+        wnLibraryMirrorJob?.cancel()
+        wnLibraryMirrorJob = null
+        wnLibrary?.stopObserving()
+        wnLibrary = null
+        wnSession?.let { s ->
+            runCatching { s.disconnect() }
+            runCatching { s.close() }
         }
+        wnSession = null
+        clearValues()
     }
 
-    private fun clearValues() {
-        if (instance === this) {
-            instance = null
+    // region [REGION] WN-Steam-Client lifecycle
+
+    fun onWnDisconnected() {
+        Timber.i("WN-Steam-Client channel disconnected")
+        if (isStopping || isLoggingOut) return
+        // A self-triggered disconnect to sleep the backgrounded app must NOT schedule a reconnect — that would defeat the suspend.
+        if (suspendedForBackground || suspendedForBionic) {
+            Timber.i("Channel disconnect was an intentional suspend " +
+                "(background=$suspendedForBackground bionic=$suspendedForBionic) — not reconnecting")
+            return
         }
-
-        _loginResult = LoginResult.Failed
-        isRunning = false
-        isConnected = false
-        isLoggingOut = false
-        isWaitingForQRAuth = false
-
-        steamClient = null
-        _steamUser = null
-        _steamApps = null
-        _steamFriends = null
-        _steamCloud = null
-
-        callbackSubscriptions.forEach { it.close() }
-        callbackSubscriptions.clear()
-        callbackManager = null
-
-        _unifiedFriends?.close()
-        _unifiedFriends = null
-
-        isStopping = false
-        retryAttempt = 0
-
-        PluviaApp.events.off<AndroidEvent.EndProcess, Unit>(onEndProcess)
-        PluviaApp.events.clearAllListenersOf<SteamEvent<Any>>()
-
-        LogManager.removeListener(logger)
-    }
-
-    private fun reconnect() {
-        notificationHelper.notify("Retrying...")
-
-        isConnected = false
-
-        val event = SteamEvent.Disconnected
-        PluviaApp.events.emit(event)
-
-        steamClient!!.disconnect()
-    }
-
-    // region [REGION] callbacks
-    @Suppress("UNUSED_PARAMETER", "unused")
-    private fun onConnected(callback: ConnectedCallback) {
-        Timber.i("Connected to Steam")
-
-        retryAttempt = 0
-        isConnected = true
-
-        var isAutoLoggingIn = false
-
-        if (PrefManager.username.isNotEmpty() && PrefManager.refreshToken.isNotEmpty()) {
-            isAutoLoggingIn = true
-
-            login(
-                username = PrefManager.username,
-                refreshToken = PrefManager.refreshToken,
-                rememberSession = true,
-            )
-        }
-
-        val event = SteamEvent.Connected(isAutoLoggingIn)
-        PluviaApp.events.emit(event)
-    }
-
-    private fun onDisconnected(callback: DisconnectedCallback) {
-        Timber.i("Disconnected from Steam. User initiated: ${callback.isUserInitiated}")
-
-        isConnected = false
-
-        if (!isStopping && retryAttempt < MAX_RETRY_ATTEMPTS) {
+        // This drop means the just-ended session was NOT stable — cancel the stable-connection timer so the retry budget keeps climbing and the backoff grows.
+        stableConnectionJob?.cancel()
+        refreshTokenWatchdogJob?.cancel()
+        stableConnectionJob = null
+        if (retryAttempt < MAX_RETRY_ATTEMPTS && PrefManager.refreshToken.isNotBlank()) {
             retryAttempt++
-
-            Timber.w("Attempting to reconnect (retry $retryAttempt)")
-
-            // isLoggingOut = false
-            val event = SteamEvent.RemotelyDisconnected
-            PluviaApp.events.emit(event)
-
-            connectToSteam()
+            val backoffMs = reconnectBackoffMs(retryAttempt)
+            Timber.w("Reconnect scheduled in ${backoffMs}ms (retry $retryAttempt/$MAX_RETRY_ATTEMPTS)")
+            notificationHelper.notify("Retrying")
+            PluviaApp.events.emit(SteamEvent.RemotelyDisconnected)
+            reconnectJob?.cancel()
+            reconnectJob =
+                scope.launch {
+                    delay(backoffMs)
+                    if (!isStopping && !isLoggingOut) connectAndLogon()
+                }
         } else {
-            val event = SteamEvent.Disconnected
-            PluviaApp.events.emit(event)
-
+            PluviaApp.events.emit(SteamEvent.Disconnected)
             clearValues()
-
             stopSelf()
         }
     }
 
+    /** Post-logon orchestration (onLoggedOn): runs once per logged-on [WnSteamSession] (guarded by wnLoggedOnHandled), fired from the [installWnLogonObserver] observer or the [withWnSession] promotion path. */
     @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
-    private fun onLoggedOn(callback: LoggedOnCallback) {
-        Timber.i("Logged onto Steam: ${callback.result}")
+    fun onWnLoggedOn(session: WnSteamSession) {
+        Timber.i("Logged onto Steam (WN-Steam-Client)")
 
-        if (callback.result == EResult.OK) {
-            isLoggingOut = false
-            _isLoggedInFlow.value = true
-        } else {
-            _isLoggedInFlow.value = false
-        }
+        // Do NOT reset retryAttempt here — a session that logs on then drops within STABLE_CONNECTION_MS isn't healthy; arm a timer that resets it only after the session stays up (onWnDisconnected cancels it).
+        stableConnectionJob?.cancel()
+        refreshTokenWatchdogJob?.cancel()
+        stableConnectionJob =
+            scope.launch {
+                delay(STABLE_CONNECTION_MS)
+                retryAttempt = 0
+                Timber.d("Connection stable — reconnect retry budget reset")
+            }
+        startRefreshTokenWatchdog()
+        isLoggingOut = false
+        _isLoggedInFlow.value = true
 
-        if (userSteamId?.isValid == true) {
-            if (PrefManager.steamUserAccountId != userSteamId!!.accountID.toInt()) {
-                PrefManager.steamUserAccountId = userSteamId!!.accountID.toInt()
-                Timber.d("Saving logged in Steam accountID ${userSteamId!!.accountID.toInt()}")
+        val steamId64 = session.steamId()
+        if (steamId64 != 0L) {
+            // SteamID.accountID == the low 32 bits of the SteamID64.
+            val accountId = (steamId64 and 0xFFFFFFFFL).toInt()
+            if (PrefManager.steamUserAccountId != accountId) {
+                PrefManager.steamUserAccountId = accountId
+                Timber.d("Saving logged in Steam accountID $accountId")
                 clearCloudSyncCaches()
             }
-            val steamId64 = userSteamId!!.convertToUInt64()
             if (PrefManager.steamUserSteamId64 != steamId64) {
                 PrefManager.steamUserSteamId64 = steamId64
                 Timber.d("Saving logged in Steam ID64 $steamId64")
             }
         }
 
-        when (callback.result) {
-            EResult.TryAnotherCM -> {
-                _loginResult = LoginResult.Failed
-                reconnect()
-            }
+        com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+            .setSteamId(steamId64)
+        com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+            .setLoggedOn(true)
+        com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+            .setCloudEnabledForAccount(true)
 
-            EResult.OK -> {
-                // Steam's GeoIP-based cellID is often wrong (e.g. returning Romania for US users).
-                // Only log it for debugging; keep cellId at 0 ("Automatic") unless the user
-                // manually picks a server in Settings > Stores > Download Server.
-                Timber.d("Steam suggested cellID: ${callback.cellID} (not auto-saving, using Automatic unless manually set)")
 
-                // retrieve persona data of logged in user
-                scope.launch { requestUserPersona() }
+        // Start downloads that were requeued while AppInfo wasn't loaded yet.
+        DownloadCoordinator.blockingTick()
 
-                // Request family share info if we have a familyGroupId.
-                if (callback.familyGroupId != 0L) {
-                    scope.launch {
-                        val request =
-                            SteammessagesFamilygroupsSteamclient.CFamilyGroups_GetFamilyGroup_Request
-                                .newBuilder()
-                                .apply {
-                                    familyGroupid = callback.familyGroupId
-                                }.build()
+        // retrieve persona data of logged in user
+        scope.launch { requestUserPersona() }
 
-                        _steamFamilyGroups!!.getFamilyGroup(request).await().let {
-                            if (it.result != EResult.OK) {
-                                Timber.w("An error occurred loading family group info.")
-                                return@launch
-                            }
+        // Populate the license tables from CMsgClientLicenseList.
+        scope.launch { processLicenseList() }
 
-                            val response = it.body
+        scope.launch { pushFriendsListToLibSteamClient() }
 
-                            Timber.i("Found family share: ${response.name}, with ${response.membersCount} members.")
+        scope.launch { refreshCloudQuotaForLibSteamClient() }
 
-                            response.membersList.forEach { member ->
-                                val accountID = SteamID(member.steamid).accountID.toInt()
-                                familyGroupMembers.add(accountID)
-                            }
-                        }
-                    }
+        // Request family share info if the logon response gave us a family id.
+        val familyGroupId = session.familyGroupId()
+        if (familyGroupId != 0L) {
+            scope.launch {
+                val json = withWnSession { s -> s.getFamilyGroup(familyGroupId) }
+                if (json == null) {
+                    Timber.w("An error occurred loading family group info.")
+                    return@launch
                 }
-
-                picsChangesCheckerJob = continuousPICSChangesChecker()
-                picsGetProductInfoJob = continuousPICSGetProductInfo()
-
-                // Tell steam we're online, this allows friends to update.
-                _steamFriends?.setPersonaState(EPersonaState.from(PrefManager.personaState) ?: EPersonaState.Online)
-
-                notificationHelper.notify("Connected")
-
-                _loginResult = LoginResult.Success
-            }
-
-            else -> {
-                clearUserData()
-
-                _loginResult = LoginResult.Failed
-
-                reconnect()
-            }
-        }
-
-        val event = SteamEvent.LogonEnded(PrefManager.username, _loginResult)
-        PluviaApp.events.emit(event)
-    }
-
-    private fun onLoggedOff(callback: LoggedOffCallback) {
-        Timber.i("Logged off of Steam: ${callback.result}")
-
-        _isLoggedInFlow.value = false
-
-        notificationHelper.notify("Disconnected...")
-
-        if (isLoggingOut || callback.result == EResult.LogonSessionReplaced) {
-            // logOut() already handled cleanup; just stop the service.
-            if (!isLoggingOut) performLogOffDuties()
-
-            scope.launch { stop() }
-        } else if (callback.result == EResult.LoggedInElsewhere) {
-            // received when a client runs an app and wants to forcibly close another
-            // client running an app
-            val event = SteamEvent.ForceCloseApp
-            PluviaApp.events.emit(event)
-
-            reconnect()
-        } else {
-            reconnect()
-        }
-    }
-
-    private fun onPlayingSessionState(callback: PlayingSessionStateCallback) {
-        Timber.d("onPlayingSessionState called with isPlayingBlocked = " + callback.isPlayingBlocked)
-        _isPlayingBlocked.value = callback.isPlayingBlocked
-    }
-
-    @OptIn(ExperimentalStdlibApi::class)
-    private fun onPersonaStateReceived(callback: PersonaStateCallback) {
-        // Ignore accounts that arent individuals
-        if (!callback.friendId.isIndividualAccount) {
-            return
-        }
-
-        // Ignore states where the name is blank.
-        if (callback.playerName.isEmpty()) {
-            return
-        }
-
-        // Timber.d("Persona state received: ${callback.name}")
-
-        // Capture steamClient before launching the coroutine to avoid a race condition where
-        // steamClient is nulled out (service stopped) by the time the coroutine runs inside
-        // db.withTransaction, which would cause a NullPointerException.
-        val localSteamClient = steamClient ?: return
-
-        scope.launch {
-            db.withTransaction {
-                // Send off an event if we change states.
-                if (callback.friendId == localSteamClient.steamID) {
-                    Timber.d("Local persona state received: ${callback.playerName}")
-
-                    val avatarHash = callback.avatarHash.toHexString()
-                    val playerName = callback.playerName
-
-                    // Update local state flow
-                    _localPersona.update {
-                        it.copy(
-                            avatarHash = avatarHash,
-                            name = playerName,
-                            state = callback.personaState ?: EPersonaState.Offline,
-                            gameAppID = callback.gamePlayedAppId,
-                            gameName = appDao.findApp(callback.gamePlayedAppId)?.name ?: callback.gameName,
-                        )
-                    }
-
-                    // Cache local persona
-                    PrefManager.steamUserAvatarHash = avatarHash
-                    PrefManager.steamUserName = playerName
-
-                    val event = SteamEvent.PersonaStateReceived(localPersona.value)
-                    PluviaApp.events.emit(event)
-                }
-            }
-        }
-    }
-
-    private fun onLicenseList(callback: LicenseListCallback) {
-        if (callback.result != EResult.OK) {
-            Timber.w("Failed to get License list")
-            return
-        }
-
-        Timber.i("Received License List ${callback.result}, size: ${callback.licenseList.size}")
-
-        scope.launch {
-            db.withTransaction {
-                // Note: I assume with every launch we do, in fact, update the licenses for app the apps if we join or get removed
-                //      from family sharing... We really can't test this as there is a 1-year cooldown.
-                //      Then 'findStaleLicences' will find these now invalid items to remove.
-
-                // Store raw licenses for DepotDownloader - each license in its own row
-                licenses = callback.licenseList
-                cachedLicenseDao.deleteAll()
-                val cachedLicenses =
-                    callback.licenseList.map { license ->
-                        CachedLicense(licenseJson = LicenseSerializer.serializeLicense(license))
-                    }
-                cachedLicenseDao.insertAll(cachedLicenses)
-
-                val licensesToAdd =
-                    callback.licenseList
-                        .groupBy { it.packageID }
-                        .map { licensesEntry ->
-                            val preferred =
-                                licensesEntry.value.firstOrNull {
-                                    it.ownerAccountID == userSteamId?.accountID?.toInt()
-                                } ?: licensesEntry.value.first()
-                            SteamLicense(
-                                packageId = licensesEntry.key,
-                                lastChangeNumber = preferred.lastChangeNumber,
-                                timeCreated = preferred.timeCreated,
-                                timeNextProcess = preferred.timeNextProcess,
-                                minuteLimit = preferred.minuteLimit,
-                                minutesUsed = preferred.minutesUsed,
-                                paymentMethod = preferred.paymentMethod,
-                                licenseFlags =
-                                    licensesEntry.value
-                                        .map { it.licenseFlags }
-                                        .reduceOrNull { first, second ->
-                                            val combined = EnumSet.copyOf(first)
-                                            combined.addAll(second)
-                                            combined
-                                        } ?: EnumSet.noneOf(ELicenseFlags::class.java),
-                                purchaseCode = preferred.purchaseCode,
-                                licenseType = preferred.licenseType,
-                                territoryCode = preferred.territoryCode,
-                                accessToken = preferred.accessToken,
-                                ownerAccountId = licensesEntry.value.map { it.ownerAccountID }, // Read note above
-                                masterPackageID = preferred.masterPackageID,
-                            )
-                        }
-
-                if (licensesToAdd.isNotEmpty()) {
-                    Timber.i("Adding ${licensesToAdd.size} licenses")
-                    licenseDao.insertAll(licensesToAdd)
-                }
-
-                val licensesToRemove =
-                    licenseDao.findStaleLicences(
-                        packageIds = callback.licenseList.map { it.packageID },
+                try {
+                    val obj = JSONObject(json)
+                    val members = obj.optJSONArray("members")
+                    Timber.i(
+                        "Found family share: ${obj.optString("name")}, " +
+                            "with ${members?.length() ?: 0} members.",
                     )
-                if (licensesToRemove.isNotEmpty()) {
-                    Timber.i("Removing ${licensesToRemove.size} (stale) licenses")
-                    val packageIds = licensesToRemove.map { it.packageId }
-                    licenseDao.deleteStaleLicenses(packageIds)
-                }
-
-                // Get PICS information with the current license database.
-                licenseDao
-                    .getAllLicenses()
-                    .map { PICSRequest(it.packageId, it.accessToken) }
-                    .chunked(MAX_PICS_BUFFER)
-                    .forEach { chunk ->
-                        Timber.d("onLicenseList: Queueing ${chunk.size} package(s) for PICS")
-                        packagePicsChannel.send(chunk)
+                    if (members != null) {
+                        for (i in 0 until members.length()) {
+                            val memberId64 = members.getLong(i)
+                            familyGroupMembers.add((memberId64 and 0xFFFFFFFFL).toInt())
+                        }
                     }
+                } catch (e: Exception) {
+                    Timber.w(e, "family group: parse failed")
+                }
             }
         }
-    }
 
-    override fun onChanged(qrAuthSession: QrAuthSession?) {
-        qrAuthSession?.let { qr ->
-            if (!BuildConfig.DEBUG) {
-                Timber.d("QR code changed -> ${qr.challengeUrl}")
+        picsChangesCheckerJob?.cancel()
+        picsChangesCheckerJob = continuousPICSChangesChecker()
+        picsGetProductInfoJob?.cancel()
+        picsGetProductInfoJob = continuousPICSGetProductInfo()
+        messagePollerJob?.cancel()
+        messagePollerJob = if (PrefManager.chatServiceEnabled) continuousIncomingMessagePoller() else null
+
+        // Repair legacy depots whose stored download>size was frozen by the change-number skip.
+        healCorruptManifestDownloadSizes()
+
+        // Tell steam our presence — online (stored persona) when chat is on, offline when the master switch is off — this lets friends update.
+        scope.launch {
+            val effectiveState =
+                if (!PrefManager.chatServiceEnabled) {
+                    EPersonaState.Offline.code()
+                } else {
+                    (EPersonaState.from(PrefManager.personaState) ?: EPersonaState.Online).code()
+                }
+            withWnSession { s -> s.setPersonaState(effectiveState) }
+            com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
+                .setPersonaState(effectiveState)
+        }
+
+        notificationHelper.notify("Connected")
+        _loginResult = LoginResult.Success
+        PluviaApp.events.emit(SteamEvent.LogonEnded(PrefManager.username, LoginResult.Success))
+
+        scope.launch {
+            try {
+                val installed = withContext(Dispatchers.IO) {
+                    appDao.getAllAppIds().filter { isAppInstalled(it) }
+                }
+                if (installed.isEmpty()) {
+                    Timber.d("post-logon ticket pre-fetch: no installed apps")
+                    return@launch
+                }
+                Timber.i("post-logon ticket pre-fetch: ${installed.size} installed app(s)")
+                val sem = kotlinx.coroutines.sync.Semaphore(8)
+                kotlinx.coroutines.coroutineScope {
+                    installed.forEach { appId: Int ->
+                        launch {
+                            sem.withPermit {
+                                prefetchOwnershipTicketForLibSteamClient(appId)
+                            }
+                        }
+                    }
+                }
+                Timber.i("post-logon ticket pre-fetch: complete")
+            } catch (t: Throwable) {
+                Timber.w(t, "post-logon ticket pre-fetch failed")
             }
+        }
 
-            val event = SteamEvent.QrChallengeReceived(qr.challengeUrl)
-            PluviaApp.events.emit(event)
-        } ?: run { Timber.w("QR challenge url was null") }
     }
     // endregion
 
-    /**
-     * Request changes for apps and packages since a given change number.
-     * Checks every [PICS_CHANGE_CHECK_DELAY] seconds.
-     * Results are returned in a [PICSChangesCallback]
-     */
-    private fun continuousPICSChangesChecker(): Job =
-        scope.launch {
-            while (isActive && isLoggedIn) {
-                // Initial delay before each check
-                delay(60.seconds)
+    // QR challenge-URL updates flow from WnSteamSession via WnQrCallback; see startLoginWithQr below.
+    // endregion
 
-                PICSChangesCheck()
+    suspend fun refreshFriends() {
+        val svc = instance ?: return
+        val ids = withWnSession { s -> s.getFriendsList() } ?: LongArray(0)
+        if (ids.isEmpty()) return
+        com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient.setFriendsList(ids)
+        val merged = LinkedHashMap<Long, SteamFriendEntry>()
+        for (id in ids) merged[id] = SteamFriendEntry(steamId = id, name = "", state = EPersonaState.Offline)
+        fun mergeJson(json: String?) {
+            val arr = try { JSONArray(json ?: "[]") } catch (_: Exception) { JSONArray() }
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val sid = o.optLong("sid", 0L)
+                if (sid == 0L) continue
+                merged[sid] = SteamFriendEntry(
+                    steamId = sid,
+                    name = o.optString("name", ""),
+                    state = EPersonaState.from(o.optInt("state", 0)) ?: EPersonaState.Offline,
+                    gameAppId = o.optInt("app", 0),
+                    gameName = o.optString("gameName", ""),
+                    avatarHash = o.optString("avatarHash", ""),
+                    connectString = o.optString("connect", ""),
+                )
             }
         }
-
-    private fun PICSChangesCheck() {
-        scope.launch {
-            ensureActive()
-
-            try {
-                val changesSince =
-                    _steamApps!!
-                        .picsGetChangesSince(
-                            lastChangeNumber = PrefManager.lastPICSChangeNumber,
-                            sendAppChangeList = true,
-                            sendPackageChangelist = true,
-                        ).await()
-
-                if (PrefManager.lastPICSChangeNumber == changesSince.currentChangeNumber) {
-                    Timber.w("Change number was the same as last change number, skipping")
-                    return@launch
-                }
-
-                // Set our last change number
-                PrefManager.lastPICSChangeNumber = changesSince.currentChangeNumber
-
-                Timber.d(
-                    "picsGetChangesSince:" +
-                        "\n\tlastChangeNumber: ${changesSince.lastChangeNumber}" +
-                        "\n\tcurrentChangeNumber: ${changesSince.currentChangeNumber}" +
-                        "\n\tisRequiresFullUpdate: ${changesSince.isRequiresFullUpdate}" +
-                        "\n\tisRequiresFullAppUpdate: ${changesSince.isRequiresFullAppUpdate}" +
-                        "\n\tisRequiresFullPackageUpdate: ${changesSince.isRequiresFullPackageUpdate}" +
-                        "\n\tappChangesCount: ${changesSince.appChanges.size}" +
-                        "\n\tpkgChangesCount: ${changesSince.packageChanges.size}",
-                )
-
-                // Process any app changes
-                launch {
-                    changesSince.appChanges.values
-                        .filter { changeData ->
-                            // only queue PICS requests for apps existing in the db that have changed
-                            val app = appDao.findApp(changeData.id) ?: return@filter false
-                            changeData.changeNumber != app.lastChangeNumber
-                        }.map { PICSRequest(id = it.id) }
-                        .chunked(MAX_PICS_BUFFER)
-                        .forEach { chunk ->
-                            ensureActive()
-                            Timber.d("onPicsChanges: Queueing ${chunk.size} app(s) for PICS")
-                            appPicsChannel.send(chunk)
-                        }
-                }
-
-                // Process any package changes
-                launch {
-                    val pkgsWithChanges =
-                        changesSince.packageChanges.values
-                            .filter { changeData ->
-                                // only queue PICS requests for pkgs existing in the db that have changed
-                                val pkg = licenseDao.findLicense(changeData.id) ?: return@filter false
-                                changeData.changeNumber != pkg.lastChangeNumber
-                            }
-
-                    if (pkgsWithChanges.isNotEmpty()) {
-                        val pkgsForAccessTokens = pkgsWithChanges.filter { it.isNeedsToken }.map { it.id }
-
-                        val accessTokens =
-                            _steamApps
-                                ?.picsGetAccessTokens(emptyList(), pkgsForAccessTokens)
-                                ?.await()
-                                ?.packageTokens ?: emptyMap()
-
-                        ensureActive()
-
-                        pkgsWithChanges
-                            .map { PICSRequest(it.id, accessTokens[it.id] ?: 0) }
-                            .chunked(MAX_PICS_BUFFER)
-                            .forEach { chunk ->
-                                Timber.d("onPicsChanges: Queueing ${chunk.size} package(s) for PICS")
-                                packagePicsChannel.send(chunk)
-                            }
-                    }
-                }
-            } catch (e: NullPointerException) {
-                Timber.w("No lastPICSChangeNumber, skipping")
-            } catch (e: AsyncJobFailedException) {
-                Timber.w("AsyncJobFailedException, skipping")
+        runCatching {
+            mergeJson(com.winlator.cmod.feature.stores.steam.utils.PrefManager.friendsSnapshotJson)
+        }
+        svc._friendsList.value = merged.values.toList()
+        withWnSession { s -> s.requestFriendPersonas(ids, personaStateRequested = 0xffff) }
+        var gotLive = false
+        for (attempt in 0 until 20) {
+            if (attempt > 0 && attempt % 5 == 0) {
+                withWnSession { s -> s.requestFriendPersonas(ids, personaStateRequested = 0xffff) }
             }
+            val json = withWnSession { s -> s.getFriendPersonas() }
+            if (!json.isNullOrBlank() && json != "[]") {
+                mergeJson(json)
+                gotLive = true
+                runCatching {
+                    com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient.pushFriendPersonasJson(json, persistSnapshot = true)
+                }
+            }
+            // Resolve game titles for in-game friends (Steam omits game_name for Steam apps).
+            for ((id, entry) in merged.toList()) {
+                if (entry.isOnline && entry.gameName.isBlank() && entry.gameAppId > 0) {
+                    val name = resolveGameName(entry.gameAppId)
+                    if (name.isNotBlank()) merged[id] = entry.copy(gameName = name)
+                }
+            }
+            svc._friendsList.value = merged.values.toList()
+            if (gotLive && merged.values.count { it.name.isNotBlank() } >= ids.size) break
+            kotlinx.coroutines.delay(1000L)
         }
     }
 
-    /**
-     * A buffered flow to parse so many PICS requests in a given moment.
-     */
-    private fun continuousPICSGetProductInfo(): Job =
-        scope.launch {
-            // Launch both coroutines within this parent job
-            launch {
-                appPicsChannel
-                    .receiveAsFlow()
-                    .filter { it.isNotEmpty() }
-                    .buffer(capacity = MAX_PICS_BUFFER, onBufferOverflow = BufferOverflow.SUSPEND)
-                    .collect { appRequests ->
-                        Timber.d("Processing ${appRequests.size} app PICS requests")
-
-                        ensureActive()
-                        if (!isLoggedIn) return@collect
-                        val steamApps = instance?._steamApps ?: return@collect
-
-                        val callback =
-                            steamApps
-                                .picsGetProductInfo(
-                                    apps = appRequests,
-                                    packages = emptyList(),
-                                ).await()
-
-                        callback.results.forEachIndexed { index, picsCallback ->
-                            Timber.d(
-                                "onPicsProduct: ${index + 1} of ${callback.results.size}" +
-                                    "\n\tReceived PICS result of ${picsCallback.apps.size} app(s)." +
-                                    "\n\tReceived PICS result of ${picsCallback.packages.size} package(s).",
-                            )
-
-                            ensureActive()
-                            val steamAppsMap =
-                                picsCallback.apps.values.mapNotNull { app ->
-                                    val appFromDb = appDao.findApp(app.id)
-                                    val packageId = appFromDb?.packageId ?: INVALID_PKG_ID
-                                    val packageFromDb = if (packageId != INVALID_PKG_ID) licenseDao.findLicense(packageId) else null
-                                    val ownerAccountId = packageFromDb?.ownerAccountId ?: emptyList()
-
-                                    // Apps with -1 for the ownerAccountId should be added.
-                                    //  This can help with friend game names.
-
-                                    // TODO maybe apps with -1 for the ownerAccountId can be stripped with necessities and name.
-
-                                    if (app.changeNumber != appFromDb?.lastChangeNumber) {
-                                        // Preserve custom install path if it exists (full absolute path)
-                                        val existingInstallDir = appFromDb?.installDir.orEmpty()
-                                        val preserveInstallDir =
-                                            existingInstallDir.isNotEmpty() &&
-                                                (existingInstallDir.startsWith("/") || existingInstallDir.contains(File.separator))
-
-                                        app.keyValues.generateSteamApp().copy(
-                                            packageId = packageId,
-                                            ownerAccountId = ownerAccountId,
-                                            receivedPICS = true,
-                                            lastChangeNumber = app.changeNumber,
-                                            licenseFlags = packageFromDb?.licenseFlags ?: EnumSet.noneOf(ELicenseFlags::class.java),
-                                            installDir =
-                                                if (preserveInstallDir) {
-                                                    existingInstallDir
-                                                } else {
-                                                    app.keyValues
-                                                        .generateSteamApp()
-                                                        .installDir
-                                                },
-                                        )
-                                    } else {
-                                        null
-                                    }
-                                }
-
-                            if (steamAppsMap.isNotEmpty()) {
-                                Timber.i("Inserting ${steamAppsMap.size} PICS apps to database")
-                                db.withTransaction {
-                                    appDao.insertAll(steamAppsMap)
-                                }
-                            }
-                        }
-                    }
-            }
-
-            launch {
-                packagePicsChannel
-                    .receiveAsFlow()
-                    .filter { it.isNotEmpty() }
-                    .buffer(capacity = MAX_PICS_BUFFER, onBufferOverflow = BufferOverflow.SUSPEND)
-                    .collect { packageRequests ->
-                        Timber.d("Processing ${packageRequests.size} package PICS requests")
-
-                        ensureActive()
-                        if (!isLoggedIn) return@collect
-                        val steamApps = instance?._steamApps ?: return@collect
-
-                        val callback =
-                            steamApps
-                                .picsGetProductInfo(
-                                    apps = emptyList(),
-                                    packages = packageRequests,
-                                ).await()
-
-                        callback.results.forEach { picsCallback ->
-                            // Don't race the queue.
-                            if (!isLoggedIn) return@collect
-                            val queue = Collections.synchronizedList(mutableListOf<Int>())
-
-                            db.withTransaction {
-                                picsCallback.packages.values.forEach { pkg ->
-                                    val appIds = pkg.keyValues["appids"].children.map { it.asInteger() }
-                                    licenseDao.updateApps(pkg.id, appIds)
-
-                                    val depotIds = pkg.keyValues["depotids"].children.map { it.asInteger() }
-                                    licenseDao.updateDepots(pkg.id, depotIds)
-
-                                    // Insert a stub row (or update) of SteamApps to the database.
-                                    appIds.forEach { appid ->
-                                        val steamApp = appDao.findApp(appid)?.copy(packageId = pkg.id)
-                                        if (steamApp != null) {
-                                            appDao.update(steamApp)
-                                        } else {
-                                            val stubSteamApp = SteamApp(id = appid, packageId = pkg.id)
-                                            appDao.insert(stubSteamApp)
-                                        }
-                                    }
-
-                                    queue.addAll(appIds)
-                                }
-                            }
-
-                            try {
-                                // TODO: This could be an issue. (Stalling)
-                                steamApps
-                                    .picsGetAccessTokens(
-                                        appIds = queue,
-                                        packageIds = emptyList(),
-                                    ).await()
-                                    .appTokens
-                                    .forEach { (key, value) ->
-                                        appTokens[key] = value
-                                    }
-
-                                // Get PICS information with the app ids.
-                                queue
-                                    .map { PICSRequest(id = it, accessToken = appTokens[it] ?: 0L) }
-                                    .chunked(MAX_PICS_BUFFER)
-                                    .forEach { chunk ->
-                                        Timber.d("bufferedPICSGetProductInfo: Queueing ${chunk.size} for PICS")
-                                        appPicsChannel.send(chunk)
-                                    }
-                            } catch (e: AsyncJobFailedException) {
-                                Timber.w("Could not get PICS product info $e")
-                            }
-                        }
-                    }
+    suspend fun syncFriendsPresence() {
+        val svc = instance ?: return
+        val current = svc._friendsList.value
+        if (current.isEmpty()) return
+        val json = withContext(Dispatchers.IO) { withWnSession { s -> s.getFriendPersonas() } } ?: return
+        val arr = try { JSONArray(json) } catch (_: Exception) { return }
+        if (arr.length() == 0) return
+        val byId = LinkedHashMap<Long, SteamFriendEntry>(current.size)
+        for (e in current) byId[e.steamId] = e
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val sid = o.optLong("sid", 0L)
+            if (sid == 0L || !byId.containsKey(sid)) continue
+            byId[sid] = SteamFriendEntry(
+                steamId = sid,
+                name = o.optString("name", ""),
+                state = EPersonaState.from(o.optInt("state", 0)) ?: EPersonaState.Offline,
+                gameAppId = o.optInt("app", 0),
+                gameName = o.optString("gameName", ""),
+                avatarHash = o.optString("avatarHash", ""),
+                connectString = o.optString("connect", ""),
+            )
+        }
+        for ((id, entry) in byId.toList()) {
+            if (entry.isOnline && entry.gameName.isBlank() && entry.gameAppId > 0) {
+                val name = resolveGameName(entry.gameAppId)
+                if (name.isNotBlank()) byId[id] = entry.copy(gameName = name)
             }
         }
+        svc._friendsList.value = byId.values.toList()
+    }
 
-    /**
-     * Get encrypted app ticket for an app, with 30-minute caching.
-     * Returns the serialized protobuf bytes, or null if unavailable.
-     */
+    private val gameNameCache = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
+    // appId -> display name: cached, local app DB first, then the public store API.
+    suspend fun resolveGameName(appId: Int): String {
+        if (appId <= 0) return ""
+        gameNameCache[appId]?.let { return it }
+        getAppInfoOf(appId)?.name?.takeIf { it.isNotBlank() }?.let {
+            gameNameCache[appId] = it
+            return it
+        }
+        val fetched = withContext(Dispatchers.IO) {
+            runCatching {
+                val conn = java.net.URL(
+                    "https://store.steampowered.com/api/appdetails?appids=$appId&filters=basic",
+                ).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                val o = JSONObject(text).optJSONObject(appId.toString())
+                if (o?.optBoolean("success") == true) o.optJSONObject("data")?.optString("name").orEmpty() else ""
+            }.getOrDefault("")
+        }
+        if (fetched.isNotBlank()) gameNameCache[appId] = fetched
+        return fetched
+    }
+
+    // Send a 1-to-1 text message to a friend. Returns true on success.
+    suspend fun sendChatMessage(steamId: Long, text: String): Boolean {
+        if (text.isBlank()) return false
+        val resp = withContext(Dispatchers.IO) { withWnSession { s -> s.sendFriendMessage(steamId, text) } }
+        return !resp.isNullOrBlank()
+    }
+
+    // Upload an image to Steam chat UGC and send it to a friend; returns the URL or null.
+    suspend fun sendChatImage(steamId: Long, bytes: ByteArray, fileName: String): String? {
+        if (bytes.isEmpty()) return null
+        val refreshToken = com.winlator.cmod.feature.stores.steam.utils.PrefManager.refreshToken
+        if (refreshToken.isBlank()) return null
+        return withContext(Dispatchers.IO) {
+            withWnSession { s -> s.sendChatImage(steamId, refreshToken, bytes, fileName) }
+        }
+    }
+
+    // Load conversation history with a friend, ordered oldest-first.
+    suspend fun loadChatHistory(steamId: Long, count: Int = 50): List<com.winlator.cmod.feature.stores.steam.data.SteamChatMessage> {
+        val json = withContext(Dispatchers.IO) { withWnSession { s -> s.getRecentMessages(steamId, count) } } ?: "[]"
+        val arr = try { JSONArray(json) } catch (_: Exception) { JSONArray() }
+        val out = ArrayList<com.winlator.cmod.feature.stores.steam.data.SteamChatMessage>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            out.add(
+                com.winlator.cmod.feature.stores.steam.data.SteamChatMessage(
+                    fromSelf = o.optBoolean("fromSelf", false),
+                    text = o.optString("message", ""),
+                    timestamp = o.optInt("timestamp", 0),
+                    ordinal = o.optInt("ordinal", 0),
+                )
+            )
+        }
+        out.sortWith(compareBy({ it.timestamp }, { it.ordinal }))
+        return out
+    }
+
+    // Drain queued incoming messages, grouped by friend steamId.
+    suspend fun drainIncomingMessages(): Map<Long, List<com.winlator.cmod.feature.stores.steam.data.SteamChatMessage>> {
+        val json = withWnSession { s -> s.drainFriendMessages() } ?: "[]"
+        val arr = try { JSONArray(json) } catch (_: Exception) { JSONArray() }
+        if (arr.length() == 0) return emptyMap()
+        val grouped = LinkedHashMap<Long, MutableList<com.winlator.cmod.feature.stores.steam.data.SteamChatMessage>>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val fid = o.optLong("friendId", 0L)
+            if (fid == 0L) continue
+            grouped.getOrPut(fid) { ArrayList() }.add(
+                com.winlator.cmod.feature.stores.steam.data.SteamChatMessage(
+                    fromSelf = o.optBoolean("fromSelf", false),
+                    text = o.optString("message", ""),
+                    timestamp = o.optInt("timestamp", 0),
+                    ordinal = o.optInt("ordinal", 0),
+                )
+            )
+        }
+        return grouped
+    }
+
+    fun setActiveConversation(steamId: Long) {
+        if (steamId == 0L) return
+        activeConversations.merge(steamId, 1) { a, b -> a + b }
+        touchRecentChat(steamId)
+        clearUnread(steamId)
+        runCatching { notificationHelper.cancelChatNotification(steamId) }
+    }
+
+    fun sendChatImageAsync(friendId: Long, bytes: ByteArray, fileName: String) {
+        if (friendId == 0L || bytes.isEmpty()) return
+        scope.launch { sendChatImage(friendId, bytes, fileName) }
+    }
+
+    fun clearActiveConversation(steamId: Long) {
+        if (steamId == 0L) return
+        activeConversations.compute(steamId) { _, v -> if (v == null || v <= 1) null else v - 1 }
+    }
+
+    fun clearUnread(steamId: Long) {
+        _unreadCounts.update { if (it.containsKey(steamId)) it - steamId else it }
+    }
+
+    /** Encrypted app ticket for an app (30-minute cache); serialized protobuf bytes, or null if unavailable. */
     suspend fun getEncryptedAppTicket(appId: Int): ByteArray? {
         return try {
-            // Check database for existing ticket less than 30 minutes old
             val cachedTicket = encryptedAppTicketDao.getByAppId(appId)
             val now = System.currentTimeMillis()
             val thirtyMinutes = 30 * 60 * 1000L
@@ -6237,52 +4632,46 @@ class SteamService :
                 return cachedTicket.encryptedTicket
             }
 
-            // Request new ticket from Steam
-            val steamApps = instance?._steamApps ?: null
-            val response =
-                try {
-                    withTimeout(5_000) {
-                        steamApps?.requestEncryptedAppTicket(appId)?.await()
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "Failed to request encrypted app ticket for app $appId")
-                    return null
+            // Cold Client needs this ticket for Capcom DRM titles; tolerate a slow wn-session cold-start by waiting up to 15s.
+            var wnTicket: ByteArray? = null
+            val ticketWaitDeadlineMs = System.currentTimeMillis() + 15_000L
+            while (wnTicket == null && System.currentTimeMillis() < ticketWaitDeadlineMs) {
+                wnTicket = withWnSession { session ->
+                    withContext(Dispatchers.IO) { session.requestEncryptedAppTicket(appId) }
                 }
-
-            if (response?.result != EResult.OK || response.encryptedAppTicket == null) {
-                Timber.w("Failed to get encrypted app ticket for app $appId: ${response?.result}")
-                return null
+                if (wnTicket != null) break
+                kotlinx.coroutines.delay(500L)
             }
-
-            // Extract all fields from the protobuf message
-            val ticketProto = response.encryptedAppTicket
-            val ticket =
-                EncryptedAppTicket(
-                    appId = appId,
-                    result = response.result.code(),
-                    ticketVersionNo = ticketProto!!.ticketVersionNo.toInt(),
-                    crcEncryptedTicket = ticketProto.crcEncryptedticket.toInt(),
-                    cbEncryptedUserData = ticketProto.cbEncrypteduserdata.toInt(),
-                    cbEncryptedAppOwnershipTicket = ticketProto.cbEncryptedAppownershipticket.toInt(),
-                    encryptedTicket = ticketProto.toByteArray(),
-                    timestamp = now,
-                )
-
-            // Store in database
-            encryptedAppTicketDao.insert(ticket)
-            Timber.d("Stored new encrypted app ticket protobuf for app $appId")
-
-            ticket.encryptedTicket
+            if (wnTicket == null) {
+                Timber.w("encrypted app ticket: 15s wait elapsed without success for app $appId")
+            }
+            if (wnTicket != null && wnTicket.isNotEmpty()) {
+                runCatching {
+                    encryptedAppTicketDao.insert(
+                        EncryptedAppTicket(
+                            appId = appId,
+                            result = EResult.OK.code(),
+                            ticketVersionNo = 0,
+                            crcEncryptedTicket = 0,
+                            cbEncryptedUserData = 0,
+                            cbEncryptedAppOwnershipTicket = 0,
+                            encryptedTicket = wnTicket,
+                            timestamp = now,
+                        ),
+                    )
+                }.onFailure { Timber.w(it, "encrypted app ticket cache insert failed") }
+                Timber.i("encrypted app ticket via wn-steam-client: ${wnTicket.size} bytes (app $appId)")
+                return wnTicket
+            }
+            Timber.w("wn-steam-client encrypted app ticket unavailable for app $appId")
+            null
         } catch (e: Exception) {
             Timber.e(e, "Error getting encrypted app ticket for app $appId")
             null
         }
     }
 
-    /**
-     * Get encrypted app ticket as base64 encoded string, with 30-minute caching.
-     * Returns the base64 encoded ticket, or null if unavailable.
-     */
+    /** Encrypted app ticket as a base64 string (30-minute cache); null if unavailable. */
     suspend fun getEncryptedAppTicketBase64(appId: Int): String? {
         val ticket = getEncryptedAppTicket(appId) ?: return null
         return Base64.encodeToString(ticket, Base64.NO_WRAP)

@@ -1,32 +1,31 @@
-/* Settings > Components screen — Jetpack Compose / Material3.
- * Uses a LazyColumn for the main content. */
 package com.winlator.cmod.feature.settings
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.MarqueeSpacing
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Delete
@@ -44,13 +44,18 @@ import androidx.compose.material.icons.outlined.DeveloperBoard
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Upload
+import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,6 +65,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -70,11 +76,15 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.winlator.cmod.R
 import com.winlator.cmod.runtime.content.ContentProfile
+import com.winlator.cmod.shared.ui.dialog.PopupDialog
+import com.winlator.cmod.shared.ui.focus.rememberSettingsContentNav
+import com.winlator.cmod.shared.ui.nav.DialogPaneNav
+import com.winlator.cmod.shared.ui.nav.LocalPaneNav
+import com.winlator.cmod.shared.ui.nav.PaneNavRegistry
+import com.winlator.cmod.shared.ui.nav.paneNavItem
 
-// ============================================================================
 // Palette (unified with Drivers / Stores / Other / Debug)
-// ============================================================================
-private val BgDark = Color(0xFF18181D)
+private val BgDark = Color(0xFF11111C)
 private val CardDark = Color(0xFF1C1C2A)
 private val CardDarker = Color(0xFF15151E)
 private val CardBorder = Color(0xFF2A2A3A)
@@ -83,26 +93,12 @@ private val SurfaceDark = Color(0xFF21212A)
 private val Accent = Color(0xFF1A9FFF)
 private val SuccessGreen = Color(0xFF5BD68F)
 private val DangerRed = Color(0xFFFF7A88)
+private val WarningAmber = Color(0xFFFFB454)
 private val TextPrimary = Color(0xFFD6DAE0)
 private val TextSecondary = Color(0xFF7A8FA8)
+private val NavHighlight = Color(0xFF4FC3F7)
 
-@Composable
-private fun Modifier.noRippleClickable(
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-): Modifier {
-    val interactionSource = remember { MutableInteractionSource() }
-    return clickable(
-        interactionSource = interactionSource,
-        indication = null,
-        enabled = enabled,
-        onClick = onClick,
-    )
-}
-
-// ============================================================================
 // State
-// ============================================================================
 
 data class ComponentItem(
     val key: String,
@@ -111,6 +107,7 @@ data class ComponentItem(
     val isInstalled: Boolean,
     val hasRemote: Boolean,
     val sizeBytes: Long? = null,
+    val isOfficial: Boolean = false,
 )
 
 data class ComponentsDownloadProgress(
@@ -120,26 +117,34 @@ data class ComponentsDownloadProgress(
     val indeterminate: Boolean = false,
 )
 
+data class ComponentsConflict(
+    val path: String,
+)
+
 data class ComponentsState(
     val currentType: ContentProfile.ContentType = ContentProfile.ContentType.CONTENT_TYPE_WINE,
     val installed: List<ComponentItem> = emptyList(),
     val available: List<ComponentItem> = emptyList(),
     val downloadProgress: ComponentsDownloadProgress? = null,
+    val conflict: ComponentsConflict? = null,
     val autoCreateContainer: Boolean = true,
+    val isRefreshing: Boolean = false,
+    val loadFailed: Boolean = false,
 )
 
-// ============================================================================
 // Root
-// ============================================================================
 
 @Composable
 fun ComponentsScreen(
+    bridge: SettingsNavBridge? = null,
     state: ComponentsState,
     onTypeSelected: (ContentProfile.ContentType) -> Unit,
     onInstallFromFile: () -> Unit,
     onDownloadItem: (ComponentItem) -> Unit,
     onRemoveItem: (ComponentItem) -> Unit,
+    onDismissConflict: () -> Unit,
     onToggleAutoCreateContainer: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
 ) {
     var itemPendingRemoval by remember { mutableStateOf<ComponentItem?>(null) }
     val layoutDirection = LocalLayoutDirection.current
@@ -147,106 +152,137 @@ fun ComponentsScreen(
     val navBarStartPadding = navBarPadding.calculateStartPadding(layoutDirection)
     val navBarEndPadding = navBarPadding.calculateEndPadding(layoutDirection)
     val navBarBottomPadding = navBarPadding.calculateBottomPadding()
+    val contentNav = rememberSettingsContentNav(bridge)
+
+    // L1/R1 cycle the component type (Wine -> Proton -> DXVK …) while navigating the list.
+    val sectionSignal = bridge?.contentSectionSignal ?: 0
+    var lastSectionSignal by remember { mutableStateOf(sectionSignal) }
+    LaunchedEffect(sectionSignal) {
+        if (sectionSignal != lastSectionSignal) {
+            lastSectionSignal = sectionSignal
+            val dir = bridge?.contentSectionDir ?: 0
+            if (dir != 0) {
+                val types = ContentProfile.ContentType.values()
+                val idx = types.indexOf(state.currentType).coerceAtLeast(0)
+                onTypeSelected(types[((idx + dir) % types.size + types.size) % types.size])
+            }
+        }
+    }
 
     itemPendingRemoval?.let { item ->
-        ConfirmDialog(
-            title = stringResource(R.string.settings_content_remove_title),
-            message = stringResource(R.string.settings_content_confirm_remove),
-            confirmLabel = stringResource(R.string.common_ui_remove),
-            confirmColor = DangerRed,
-            onDismiss = { itemPendingRemoval = null },
-            onConfirm = {
-                onRemoveItem(item)
-                itemPendingRemoval = null
-            },
-        )
+        val nav = remember { PaneNavRegistry() }
+        Dialog(onDismissRequest = { itemPendingRemoval = null }) {
+            DialogPaneNav(nav, onDismiss = { itemPendingRemoval = null })
+            CompositionLocalProvider(LocalPaneNav provides nav) {
+                PopupDialog(
+                    title = stringResource(R.string.settings_content_remove_title),
+                    message = stringResource(R.string.settings_content_confirm_remove),
+                    confirmLabel = stringResource(R.string.common_ui_remove),
+                    modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
+                    icon = Icons.Outlined.Delete,
+                    accentColor = DangerRed,
+                    onCancel = { itemPendingRemoval = null },
+                    onConfirm = {
+                        onRemoveItem(item)
+                        itemPendingRemoval = null
+                    },
+                )
+            }
+        }
     }
 
     state.downloadProgress?.let { progress ->
         DownloadProgressDialog(progress = progress)
     }
 
-    LazyColumn(
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .background(BgDark),
-        contentPadding =
-            PaddingValues(
-                start = 16.dp + navBarStartPadding,
-                end = 16.dp + navBarEndPadding,
-                top = 16.dp,
-                bottom = 4.dp + navBarBottomPadding,
-            ),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item(key = "hero_header") {
+    state.conflict?.let { conflict ->
+        val nav = remember { PaneNavRegistry() }
+        Dialog(onDismissRequest = onDismissConflict) {
+            DialogPaneNav(nav, onDismiss = onDismissConflict)
+            CompositionLocalProvider(LocalPaneNav provides nav) {
+                PopupDialog(
+                    title = stringResource(R.string.settings_content_already_installed_title),
+                    message = stringResource(R.string.settings_content_already_installed_message, conflict.path),
+                    confirmLabel = stringResource(R.string.common_ui_ok),
+                    modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
+                    icon = Icons.Outlined.Warning,
+                    accentColor = WarningAmber,
+                    onConfirm = onDismissConflict,
+                )
+            }
+        }
+    }
+
+    CompositionLocalProvider(LocalPaneNav provides contentNav) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .background(BgDark)
+                    .verticalScroll(rememberScrollState())
+                    .padding(
+                        start = 16.dp + navBarStartPadding,
+                        end = 16.dp + navBarEndPadding,
+                        top = 16.dp,
+                        bottom = 4.dp + navBarBottomPadding,
+                    ),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             HeroHeader(
                 installedCount = state.installed.size,
                 availableCount = state.available.size,
                 currentType = state.currentType,
                 autoCreateContainer = state.autoCreateContainer,
+                isRefreshing = state.isRefreshing,
+                loadFailed = state.loadFailed,
                 onTypeSelected = onTypeSelected,
                 onInstallFromFile = onInstallFromFile,
                 onToggleAutoCreateContainer = onToggleAutoCreateContainer,
+                onRefresh = onRefresh,
             )
-        }
 
-        if (state.installed.isEmpty() && state.available.isEmpty()) {
-            item(key = "empty_${state.currentType.name}") {
+            if (state.installed.isEmpty() && state.available.isEmpty() && !state.isRefreshing) {
                 EmptyState()
             }
-        }
 
-        if (state.installed.isNotEmpty()) {
-            item(key = "installed_section_${state.currentType.name}") {
+            if (state.installed.isNotEmpty()) {
                 SectionLabel(
                     text = stringResource(R.string.common_ui_installed),
                     modifier = Modifier.padding(top = 8.dp),
                 )
+                state.installed.forEach { item ->
+                    key("installed_${state.currentType.name}_${item.key}") {
+                        ComponentItemCard(
+                            item = item,
+                            onDownload = { onDownloadItem(item) },
+                            onRemove = { itemPendingRemoval = item },
+                        )
+                    }
+                }
             }
-            items(
-                items = state.installed,
-                key = { item -> "installed_${state.currentType.name}_${item.key}" },
-                contentType = { "installedComponentCard" },
-            ) { item ->
-                ComponentItemCard(
-                    item = item,
-                    onDownload = { onDownloadItem(item) },
-                    onRemove = { itemPendingRemoval = item },
-                )
-            }
-        }
 
-        if (state.available.isNotEmpty()) {
-            item(key = "available_section_${state.currentType.name}") {
+            if (state.available.isNotEmpty()) {
                 SectionLabel(
                     text = stringResource(R.string.common_ui_available),
                     modifier = Modifier.padding(top = 6.dp),
                 )
+                state.available.forEach { item ->
+                    key("available_${state.currentType.name}_${item.key}") {
+                        ComponentItemCard(
+                            item = item,
+                            onDownload = { onDownloadItem(item) },
+                            onRemove = { itemPendingRemoval = item },
+                        )
+                    }
+                }
             }
-            items(
-                items = state.available,
-                key = { item -> "available_${state.currentType.name}_${item.key}" },
-                contentType = { "availableComponentCard" },
-            ) { item ->
-                ComponentItemCard(
-                    item = item,
-                    onDownload = { onDownloadItem(item) },
-                    onRemove = { itemPendingRemoval = item },
-                )
-            }
-        }
 
-        item(key = "bottom_spacer") {
             Spacer(Modifier.height(24.dp))
         }
     }
 }
 
-// ============================================================================
 // Hero header
-// ============================================================================
 
 @Composable
 private fun HeroHeader(
@@ -254,9 +290,12 @@ private fun HeroHeader(
     availableCount: Int,
     currentType: ContentProfile.ContentType,
     autoCreateContainer: Boolean,
+    isRefreshing: Boolean,
+    loadFailed: Boolean,
     onTypeSelected: (ContentProfile.ContentType) -> Unit,
     onInstallFromFile: () -> Unit,
     onToggleAutoCreateContainer: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
 ) {
     Box(
         modifier =
@@ -286,6 +325,12 @@ private fun HeroHeader(
                     enabled = autoCreateContainer,
                     compact = true,
                     onToggle = { onToggleAutoCreateContainer(!autoCreateContainer) },
+                )
+                Spacer(Modifier.width(6.dp))
+                RefreshChip(
+                    isRefreshing = isRefreshing,
+                    loadFailed = loadFailed,
+                    onRefresh = onRefresh,
                 )
                 Spacer(Modifier.width(8.dp))
                 SmallPillButton(
@@ -326,7 +371,12 @@ private fun ToggleChip(
                 .clip(RoundedCornerShape(8.dp))
                 .background(background)
                 .border(1.dp, borderColor, RoundedCornerShape(8.dp))
-                .noRippleClickable(onClick = onToggle)
+                .paneNavItem(
+                    cornerRadius = 8.dp,
+                    onActivate = onToggle,
+                    highlightColor = NavHighlight,
+                    tapToSelect = true,
+                )
                 .padding(horizontal = horizontalPadding, vertical = verticalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -344,6 +394,52 @@ private fun ToggleChip(
             fontSize = fontSize,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+@Composable
+private fun RefreshChip(
+    isRefreshing: Boolean,
+    loadFailed: Boolean,
+    onRefresh: () -> Unit,
+) {
+    val tint = if (loadFailed) WarningAmber else Accent
+    Row(
+        modifier =
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(tint.copy(alpha = 0.14f))
+                .border(1.dp, tint.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                .paneNavItem(
+                    cornerRadius = 8.dp,
+                    onActivate = { if (!isRefreshing) onRefresh() },
+                    highlightColor = NavHighlight,
+                    tapToSelect = true,
+                )
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (isRefreshing) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(11.dp),
+                strokeWidth = 1.5.dp,
+                color = tint,
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Outlined.Refresh,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(11.dp),
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(
+                text = stringResource(R.string.settings_content_refresh),
+                color = tint,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 
@@ -379,9 +475,7 @@ private fun CountPill(
     }
 }
 
-// ============================================================================
 // Content type tabs
-// ============================================================================
 
 @Composable
 private fun TypeTabsContent(
@@ -438,6 +532,7 @@ private fun descriptionResFor(type: ContentProfile.ContentType): Int =
         ContentProfile.ContentType.CONTENT_TYPE_BOX64 -> R.string.settings_content_desc_box64
         ContentProfile.ContentType.CONTENT_TYPE_WOWBOX64 -> R.string.settings_content_desc_wowbox64
         ContentProfile.ContentType.CONTENT_TYPE_FEXCORE -> R.string.settings_content_desc_fexcore
+        ContentProfile.ContentType.CONTENT_TYPE_D7VK -> R.string.settings_content_desc_d7vk
     }
 
 @Composable
@@ -456,7 +551,12 @@ private fun TypeTabChip(
                 .clip(RoundedCornerShape(16.dp))
                 .background(background)
                 .border(1.dp, borderColor, RoundedCornerShape(16.dp))
-                .noRippleClickable(onClick = onClick)
+                .paneNavItem(
+                    cornerRadius = 16.dp,
+                    onActivate = onClick,
+                    highlightColor = NavHighlight,
+                    tapToSelect = true,
+                )
                 .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -469,9 +569,7 @@ private fun TypeTabChip(
     }
 }
 
-// ============================================================================
 // Section label
-// ============================================================================
 
 @Composable
 private fun SectionLabel(
@@ -488,10 +586,9 @@ private fun SectionLabel(
     )
 }
 
-// ============================================================================
 // Component item card
-// ============================================================================
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ComponentItemCard(
     item: ComponentItem,
@@ -537,6 +634,13 @@ private fun ComponentItemCard(
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.basicMarquee(
+                        iterations = Int.MAX_VALUE,
+                        initialDelayMillis = 5000,
+                        repeatDelayMillis = 5000,
+                        velocity = 25.dp,
+                        spacing = MarqueeSpacing(40.dp),
+                    ),
                 )
                 val sizeLabel = formatSizeLabel(item)
                 if (sizeLabel != null) {
@@ -550,35 +654,49 @@ private fun ComponentItemCard(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            if (item.isInstalled) {
-                IconTapButton(
-                    icon = Icons.Outlined.Delete,
-                    tint = DangerRed,
-                    onClick = onRemove,
-                )
-            } else if (item.hasRemote) {
-                SmallPillButton(
-                    label = stringResource(R.string.common_ui_download),
-                    icon = Icons.Outlined.Download,
-                    tint = Accent,
-                    onClick = onDownload,
-                )
-            } else {
-                // Locally extracted profile with no remote URL — non-interactive placeholder.
-                Icon(
-                    imageVector = Icons.Outlined.CloudDownload,
-                    contentDescription = null,
-                    tint = TextSecondary.copy(alpha = 0.5f),
-                    modifier = Modifier.size(18.dp),
-                )
+            // The trailing action (Download / Delete / placeholder) drives the
+            // height; the badges fillMaxHeight() so they always match it exactly.
+            Row(
+                modifier = Modifier.height(IntrinsicSize.Min),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (item.isOfficial) {
+                    OfficialBadge(Modifier.fillMaxHeight())
+                    Spacer(Modifier.width(8.dp))
+                }
+                if (isSteamCompatible(item)) {
+                    SteamCompatBadge(Modifier.fillMaxHeight())
+                    Spacer(Modifier.width(8.dp))
+                }
+                if (item.isInstalled) {
+                    IconTapButton(
+                        icon = Icons.Outlined.Delete,
+                        tint = DangerRed,
+                        onClick = onRemove,
+                    )
+                } else if (item.hasRemote) {
+                    SmallPillButton(
+                        label = stringResource(R.string.common_ui_download),
+                        icon = Icons.Outlined.Download,
+                        tint = Accent,
+                        compact = true,
+                        onClick = onDownload,
+                    )
+                } else {
+                    // Locally extracted profile with no remote URL — non-interactive placeholder.
+                    Icon(
+                        imageVector = Icons.Outlined.CloudDownload,
+                        contentDescription = null,
+                        tint = TextSecondary.copy(alpha = 0.5f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }
 }
 
-// ============================================================================
 // Generic small controls
-// ============================================================================
 
 @Composable
 private fun IconTapButton(
@@ -591,7 +709,14 @@ private fun IconTapButton(
             Modifier
                 .size(30.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .noRippleClickable(onClick = onClick),
+                .background(tint.copy(alpha = 0.14f))
+                .border(1.dp, tint.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
+                .paneNavItem(
+                    cornerRadius = 8.dp,
+                    onActivate = onClick,
+                    highlightColor = NavHighlight,
+                    tapToSelect = true,
+                ),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -599,6 +724,50 @@ private fun IconTapButton(
             contentDescription = null,
             tint = tint,
             modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+private fun isSteamCompatible(item: ComponentItem): Boolean =
+    item.verName.contains("steam", ignoreCase = true) ||
+        item.key.contains("steam", ignoreCase = true)
+
+// Badge marking first-party "WinNative" builds. A perfect square (width follows
+// the filled height) in WinNative blue, carrying only the WinNative logo for
+// "WN" branding. Pass Modifier.fillMaxHeight() to match the row's action height.
+@Composable
+private fun OfficialBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Accent.copy(alpha = 0.14f))
+            .border(1.dp, Accent.copy(alpha = 0.30f), RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.ic_winnative_badge),
+            contentDescription = "Official WinNative build",
+            modifier = Modifier.fillMaxSize(0.8f),
+        )
+    }
+}
+
+@Composable
+private fun SteamCompatBadge(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(SuccessGreen.copy(alpha = 0.14f))
+            .border(1.dp, SuccessGreen.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Steam",
+            color = SuccessGreen,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }
@@ -621,7 +790,12 @@ private fun SmallPillButton(
                 .clip(RoundedCornerShape(8.dp))
                 .background(tint.copy(alpha = 0.14f))
                 .border(1.dp, tint.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
-                .noRippleClickable(onClick = onClick)
+                .paneNavItem(
+                    cornerRadius = 8.dp,
+                    onActivate = onClick,
+                    highlightColor = NavHighlight,
+                    tapToSelect = true,
+                )
                 .padding(horizontal = horizontalPadding, vertical = verticalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -643,34 +817,7 @@ private fun SmallPillButton(
     }
 }
 
-@Composable
-private fun DialogActionButton(
-    label: String,
-    textColor: Color,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier =
-            Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(CardDarker)
-                .border(1.dp, textColor.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
-                .noRippleClickable(onClick = onClick)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = textColor,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-// ============================================================================
 // Empty state
-// ============================================================================
 
 @Composable
 private fun EmptyState() {
@@ -708,9 +855,7 @@ private fun EmptyState() {
     }
 }
 
-// ============================================================================
 // Confirm dialog
-// ============================================================================
 
 @Composable
 private fun DownloadProgressDialog(progress: ComponentsDownloadProgress) {
@@ -723,148 +868,30 @@ private fun DownloadProgressDialog(progress: ComponentsDownloadProgress) {
                 usePlatformDefaultWidth = false,
             ),
     ) {
-        Box(
-            modifier =
-                Modifier
-                    .widthIn(max = 360.dp)
-                    .fillMaxWidth(0.88f)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(CardDark)
-                    .border(1.dp, CardBorder, RoundedCornerShape(16.dp))
-                    .padding(horizontal = 18.dp, vertical = 16.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = progress.title.uppercase(),
-                    color = TextSecondary,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = progress.message,
-                    color = TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(14.dp))
-
-                val barHeight = 5.dp
-                val barShape = RoundedCornerShape(3.dp)
-                if (progress.indeterminate) {
-                    LinearProgressIndicator(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(barHeight)
-                                .clip(barShape),
-                        color = Accent,
-                        trackColor = CardDarker,
-                    )
-                } else {
-                    val smoothed by animateFloatAsState(
-                        targetValue = progress.progress.coerceIn(0f, 1f),
-                        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
-                        label = "dlProgress",
-                    )
-                    LinearProgressIndicator(
-                        progress = { smoothed },
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(barHeight)
-                                .clip(barShape),
-                        color = Accent,
-                        trackColor = CardDarker,
-                        drawStopIndicator = {},
-                        gapSize = 0.dp,
-                    )
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    val percentText =
-                        if (progress.indeterminate) {
-                            stringResource(R.string.common_ui_working)
-                        } else {
-                            "${(progress.progress * 100).toInt().coerceIn(0, 100)}%"
-                        }
-                    Text(
-                        text = percentText,
-                        color = TextSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
-            }
-        }
+        PopupDialog(
+            title = progress.title,
+            message = progress.message,
+            modifier = Modifier
+                .widthIn(max = 360.dp)
+                .fillMaxWidth(0.88f),
+            icon = Icons.Outlined.Download,
+            accentColor = Accent,
+            progress = if (progress.indeterminate) Float.NaN else progress.progress,
+        )
     }
 }
 
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    message: String,
-    confirmLabel: String,
-    confirmColor: Color,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(CardDark)
-                    .border(1.dp, CardBorder, RoundedCornerShape(18.dp))
-                    .padding(22.dp),
-        ) {
-            Column {
-                Text(
-                    text = title,
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = message,
-                    color = TextSecondary,
-                    fontSize = 13.sp,
-                )
-                Spacer(Modifier.height(22.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-                ) {
-                    DialogActionButton(label = stringResource(R.string.common_ui_cancel), textColor = TextSecondary, onClick = onDismiss)
-                    DialogActionButton(label = confirmLabel, textColor = confirmColor, onClick = onConfirm)
-                }
-            }
-        }
-    }
-}
-
-// ============================================================================
 // Helpers
-// ============================================================================
 
 @Composable
 private fun formatSizeLabel(item: ComponentItem): String? {
     if (item.isInstalled) {
-        val bytes = item.sizeBytes ?: return "${stringResource(R.string.common_ui_size)}: …"
+        val bytes = item.sizeBytes ?: return "${stringResource(R.string.common_ui_size)}: --"
         if (bytes <= 0L) return null
         return "${stringResource(R.string.common_ui_size)}: ${formatBytes(bytes)}"
     }
     if (!item.hasRemote) return null
-    val bytes = item.sizeBytes ?: return "${stringResource(R.string.common_ui_size)}: …"
+    val bytes = item.sizeBytes ?: return "${stringResource(R.string.common_ui_size)}: --"
     if (bytes <= 0L) return null
     return "${stringResource(R.string.common_ui_size)}: ${formatBytes(bytes)}"
 }
@@ -892,6 +919,7 @@ private fun iconFor(type: ContentProfile.ContentType): ImageVector =
 
         ContentProfile.ContentType.CONTENT_TYPE_DXVK,
         ContentProfile.ContentType.CONTENT_TYPE_VKD3D,
+        ContentProfile.ContentType.CONTENT_TYPE_D7VK,
         -> Icons.Outlined.DeveloperBoard
 
         ContentProfile.ContentType.CONTENT_TYPE_BOX64,
