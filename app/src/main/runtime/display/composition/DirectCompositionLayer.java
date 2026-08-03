@@ -2,236 +2,160 @@ package com.winlator.cmod.runtime.display.composition;
 
 import android.util.Log;
 import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 
 /**
- * Per-activity wrapper around a single {@code ASurfaceControl} child layer
- * that's bound to an {@link XServerView}'s underlying {@link SurfaceView}.
+ * Instance class wrapping a single {@code ASurfaceControl} child layer bound to
+ * the XServerSurfaceView's Surface. All public methods are {@code synchronized}
+ * so the UI-thread {@link #release()} and the render-thread {@link #pushBuffer}
+ * can't race the native pointer.
  *
  * <h3>Lifecycle</h3>
- * The layer is allocated when the host SurfaceView reports
- * {@link SurfaceHolder.Callback#surfaceCreated} (or in Phase 2.1's case, the
- * activity attaches once after {@code rootView.addView(xServerView)} as a
- * one-shot probe — see {@code XServerDisplayActivity.setupDirectComposition})
- * and freed in {@link SurfaceHolder.Callback#surfaceDestroyed}. Operating on a
- * released layer is a no-op (defensive: the native side guards against
- * {@code sc == 0}).
+ * <ol>
+ *   <li>{@link #attach(Surface)} — creates the ASurfaceControl, hides it,
+ *       sets z=1. Called from the UI thread when the SurfaceView's surface
+ *       is created.</li>
+ *   <li>{@link #pushBuffer(long, int, int, int, int, int)} — per-frame hot
+ *       path. Hands an AHardwareBuffer to the SC layer. Called from the render
+ *       thread. Returns false on any failure; the caller self-detaches after
+ *       {@code DC_FAIL_LIMIT} consecutive failures.</li>
+ *   <li>{@link #hide()} — hides the SC layer (visibility=HIDE) when the current
+ *       frame doesn't qualify for direct scanout. Idempotent.</li>
+ *   <li>{@link #release()} — reparents to null, waits for in-flight
+ *       transactions, releases the SC. Called from the UI thread on
+ *       surfaceDestroyed / activity destroy.</li>
+ * </ol>
  *
- * <h3>Phase 2.1 capabilities</h3>
- * Lifecycle only — attach, set a solid color (proof-of-life), hide, release.
- * No buffer push, no fence handling, no game-frame routing yet. The toggle is
- * still consumed by {@code XServerDisplayActivity} only for logging.
- *
- * <h3>Threading</h3>
- * All public methods serialise on {@code this} so concurrent calls from the
- * UI thread (lifecycle) and the renderer thread (future buffer pushes) can't
- * race the native pointer. The native pointer is read inside the lock and
- * passed to JNI, where libandroid.so's own synchronisation takes over.
+ * <h3>Soft-boot hardening (vs original PR #380)</h3>
+ * <ul>
+ *   <li><b>Smoke-test buffer removed.</b> The original allocated a 256x256
+ *       magenta AHB with CPU_WRITE_RARELY | COMPOSER_OVERLAY on every
+ *       surfaceCreated and pushed it as a proof-of-life. That combo crashes
+ *       gralloc on Adreno 6xx / MediaTek → soft boot. Removed entirely; real
+ *       game frames prove the path works.</li>
+ *   <li><b>Wait-for-in-flight on release.</b> The native side tracks in-flight
+ *       ASurfaceTransaction_apply calls and waits for them to complete before
+ *       ASurfaceControl_release. Prevents the Xiaomi/HyperOS SF crash.</li>
+ *   <li><b>No nativeAllocateTestBuffer / nativeReleaseBuffer.</b> Removed.</li>
+ * </ul>
  */
 public final class DirectCompositionLayer {
 
-    static {
-        // Same pattern as SurfaceCompositor / GPUImage / etc. Idempotent.
-        System.loadLibrary("winlator");
-    }
-
     private static final String TAG = "DirectCompositionLayer";
 
-    /** Native {@code ASurfaceControl*} reinterpreted as a {@code jlong}. 0 == released. */
-    private long nativeSc;
-
-    private DirectCompositionLayer(long nativeSc) {
-        this.nativeSc = nativeSc;
-    }
+    /** Native ASurfaceControl* pointer. 0 = not attached / released. */
+    private long nativeSc = 0;
+    private boolean attached = false;
 
     /**
-     * Attach a hidden child SurfaceControl above the given SurfaceView's primary
-     * buffer queue. Caller must invoke {@link #release()} when the host surface
-     * is destroyed.
+     * Create the ASurfaceControl child layer bound to the given Surface.
+     * The layer is hidden initially; it becomes visible on the first
+     * successful {@link #pushBuffer}.
      *
-     * @return a layer handle, or {@code null} if the underlying NDK call failed
-     *         (caller should fall back to the GLRenderer composition path).
+     * @param surface The SurfaceView's Surface (from SurfaceHolder.getSurface()).
+     * @return true on success, false if native creation failed (caller should
+     *         not call pushBuffer; the VulkanRenderer composition path will
+     *         be used instead).
      */
-    public static DirectCompositionLayer attach(SurfaceView host) {
-        if (host == null) return null;
-        if (!SurfaceCompositor.isAvailable()) {
-            // Shouldn't normally happen — the activity is supposed to call
-            // SurfaceCompositor.isAvailable() before instantiating this class —
-            // but be defensive.
-            Log.w(TAG, "attach() called but SurfaceCompositor is unavailable");
-            return null;
+    public synchronized boolean attach(Surface surface) {
+        if (attached) {
+            Log.w(TAG, "attach: already attached, ignoring");
+            return true;
         }
-        SurfaceHolder holder = host.getHolder();
-        if (holder == null) {
-            Log.w(TAG, "attach() — SurfaceView has no holder");
-            return null;
-        }
-        Surface surface = holder.getSurface();
         if (surface == null || !surface.isValid()) {
-            Log.w(TAG, "attach() — SurfaceView's Surface is not valid yet (surfaceCreated not fired)");
-            return null;
-        }
-        long sc;
-        try {
-            sc = nativeAttachToSurface(surface);
-        } catch (UnsatisfiedLinkError | RuntimeException e) {
-            Log.w(TAG, "nativeAttachToSurface threw", e);
-            return null;
-        }
-        if (sc == 0L) {
-            return null;
-        }
-        Log.i(TAG, "Direct Composition layer attached (sc=" + Long.toHexString(sc) + ")");
-        return new DirectCompositionLayer(sc);
-    }
-
-    /**
-     * Phase 2.1 proof-of-life: paint a solid color and unhide. Used by the
-     * {@code DirectCompositionTestPattern} smoke test in Phase 2.2 only —
-     * production code paths never call this.
-     */
-    public synchronized void setColor(float r, float g, float b, float a) {
-        if (nativeSc == 0L) return;
-        try {
-            nativeSetColor(nativeSc, r, g, b, a);
-        } catch (UnsatisfiedLinkError | RuntimeException e) {
-            Log.w(TAG, "nativeSetColor threw", e);
-        }
-    }
-
-    /**
-     * Phase 2.2: hand an AHardwareBuffer to the layer in one transaction.
-     *
-     * @param ahbPtr      raw {@code AHardwareBuffer*} (typically obtained from
-     *                    {@code GPUImage.getHardwareBufferPtr()} in Phase 2.3
-     *                    or from {@link #allocateTestBuffer} in Phase 2.2's
-     *                    smoke test).
-     * @param dstX/dstY   layer position in the SurfaceView's coordinate space.
-     * @param dstW/dstH   destination size; if it differs from the buffer's
-     *                    native extents the layer is scaled (modern API path)
-     *                    or stretched (deprecated setGeometry fallback).
-     * @param fenceFd     POSIX sync_file FD that signals when GPU writes are
-     *                    complete; pass -1 if no fence is needed (the framework
-     *                    will read the buffer immediately). The framework
-     *                    <em>takes ownership</em> of this FD per
-     *                    surface_control.h:343-348 — the caller MUST NOT close
-     *                    it after this call. Phase 2.2 always passes -1; real
-     *                    fence threading lives in Phase 2.4.
-     * @param opaque      Whether the buffer's pixels are fully opaque
-     *                    (alpha=1.0 throughout). Game swap-chain frames are
-     *                    by convention; pass {@code true} to let HWC mark the
-     *                    layer OPAQUE and skip per-pixel alpha blending,
-     *                    which on Snapdragon DPUs avoids the SDR-on-HDR
-     *                    panel routing that boosts layer brightness vs the
-     *                    legacy GL composition path. Pass {@code false} when
-     *                    the buffer may contain translucency (overlays, UI).
-     * @return true if the transaction was queued; false on any failure (in
-     *         which case the caller should fall back to the GL composition
-     *         path for this frame).
-     */
-    public synchronized boolean pushBuffer(long ahbPtr,
-                                           int dstX, int dstY, int dstW, int dstH,
-                                           int fenceFd,
-                                           boolean opaque) {
-        // Always enter JNI so the native side has a single, consistent place
-        // to consume / close the fence FD. The native code's first action is
-        // to validate sc / ahb / extents and close the fence on any error
-        // path before returning JNI_FALSE — so callers never have to worry
-        // about FD leaks regardless of which check trips. Phase 2.2 always
-        // passes -1, so this is a no-op today, but the invariant matters
-        // for Phase 2.4 when real fences arrive.
-        try {
-            return nativePushBuffer(nativeSc, ahbPtr, dstX, dstY, dstW, dstH, fenceFd, opaque);
-        } catch (UnsatisfiedLinkError | RuntimeException e) {
-            Log.w(TAG, "nativePushBuffer threw", e);
-            // FD ownership on a thrown JNI call is undefined — best-effort:
-            // leak rather than risk a double-close. Phase 2.4 callers should
-            // wrap pushBuffer in a try/finally that owns the FD lifecycle
-            // explicitly when this matters.
+            Log.w(TAG, "attach: surface is null or invalid");
             return false;
         }
+        nativeSc = nativeCreateFromWindow(surface, "winnative-direct-composition");
+        if (nativeSc == 0) {
+            Log.e(TAG, "attach: nativeCreateFromWindow returned 0");
+            return false;
+        }
+        attached = true;
+        Log.i(TAG, "Direct Composition layer attached: sc=" + nativeSc);
+        return true;
     }
 
     /**
-     * Phase 2.2 smoke-test helper: allocate an AHardwareBuffer and CPU-fill it
-     * with a single ARGB color. Returns a raw {@code AHardwareBuffer*} (held
-     * by the JVM as a {@code long}) — caller is responsible for eventually
-     * calling {@link #releaseBuffer}.
+     * Push an AHardwareBuffer to the SC layer. The layer is shown atomically
+     * with the buffer set (avoids the blank-frame race).
      *
-     * @param argb 0xAARRGGBB packed colour.
-     * @return native pointer, or 0 on failure.
+     * @param ahbPtr          The raw AHardwareBuffer* pointer (from
+     *                        GPUImage.getHardwareBufferPtr()). Must be non-zero.
+     * @param dstX            Destination X in SurfaceView coordinate space.
+     *                        Must be >= 0 (negative values crash SF on some
+     *                        OEM ROMs).
+     * @param dstY            Destination Y. Must be >= 0.
+     * @param dstW            Destination width. Must be > 0.
+     * @param dstH            Destination height. Must be > 0.
+     * @param acquireFenceFd  Producer-side acquire fence (-1 = no fence, buffer
+     *                        is ready immediately). The framework takes
+     *                        ownership and closes the fd on success; on
+     *                        failure this method closes it.
+     * @param opaque          true if the buffer is fully opaque (alpha=1.0
+     *                        throughout). Lets HWC skip alpha blending and
+     *                        bypass the Snapdragon DPU SDR-on-HDR brightness
+     *                        boost. false for translucent content.
+     * @return true on success, false on any failure (caller should count
+     *         consecutive failures and self-detach after DC_FAIL_LIMIT).
      */
-    public static long allocateTestBuffer(int width, int height, int argb) {
-        if (width <= 0 || height <= 0) return 0L;
-        if (!SurfaceCompositor.isAvailable()) return 0L;
-        try {
-            return nativeAllocateTestBuffer(width, height, argb);
-        } catch (UnsatisfiedLinkError | RuntimeException e) {
-            Log.w(TAG, "nativeAllocateTestBuffer threw", e);
-            return 0L;
+    public synchronized boolean pushBuffer(long ahbPtr, int dstX, int dstY,
+                                            int dstW, int dstH,
+                                            int acquireFenceFd, boolean opaque, boolean pace) {
+        if (!attached || nativeSc == 0) {
+            if (acquireFenceFd >= 0) {
+                try { android.os.ParcelFileDescriptor.adoptFd(acquireFenceFd).close(); }
+                catch (java.io.IOException ignored) {}
+            }
+            return false;
         }
-    }
-
-    /** Drop our refcount on a test AHardwareBuffer allocated with {@link #allocateTestBuffer}. */
-    public static void releaseBuffer(long ahbPtr) {
-        if (ahbPtr == 0L) return;
-        try {
-            nativeReleaseBuffer(ahbPtr);
-        } catch (UnsatisfiedLinkError | RuntimeException e) {
-            Log.w(TAG, "nativeReleaseBuffer threw", e);
-        }
+        return nativePushBuffer(nativeSc, ahbPtr, dstX, dstY, dstW, dstH,
+                                acquireFenceFd, opaque, pace);
     }
 
     /**
-     * Hide the layer — used when the current frame doesn't qualify for the
-     * direct-scanout fast path and the GLRenderer is going to composite
-     * normally. Idempotent.
+     * Hide the SC layer (visibility=HIDE). Idempotent — safe to call when
+     * already hidden. Used when the current frame doesn't qualify for direct
+     * scanout (windowed app, multi-drawable, cursor visible over non-fullscreen
+     * scene, magnifier overlay active, etc.).
      */
     public synchronized void hide() {
-        if (nativeSc == 0L) return;
-        try {
-            nativeHide(nativeSc);
-        } catch (UnsatisfiedLinkError | RuntimeException e) {
-            Log.w(TAG, "nativeHide threw", e);
-        }
+        if (!attached || nativeSc == 0) return;
+        nativeHide(nativeSc);
     }
 
     /**
-     * Reparent the layer to null and release the underlying ASurfaceControl.
-     * Safe to call multiple times. After this returns, every other method on
-     * the layer is a no-op.
+     * Release the SC layer. Reparents to null (removes from display), waits
+     * for all in-flight transactions to complete, then releases the native
+     * ASurfaceControl. Safe to call from the UI thread while the render thread
+     * might be in pushBuffer — the synchronized keyword serializes the two.
+     *
+     * After release, this instance is unusable; create a new one to re-attach.
      */
     public synchronized void release() {
-        if (nativeSc == 0L) return;
-        long sc = nativeSc;
-        nativeSc = 0L;
-        try {
-            nativeDetachAndRelease(sc);
-        } catch (UnsatisfiedLinkError | RuntimeException e) {
-            Log.w(TAG, "nativeDetachAndRelease threw", e);
-        }
-        Log.i(TAG, "Direct Composition layer released (sc=" + Long.toHexString(sc) + ")");
+        if (!attached) return;
+        nativeDetachAndRelease(nativeSc);
+        nativeSc = 0;
+        attached = false;
+        Log.i(TAG, "Direct Composition layer released");
     }
 
-    /** True if this handle still references a live native ASurfaceControl. */
     public synchronized boolean isAttached() {
-        return nativeSc != 0L;
+        return attached;
     }
 
-    private static native long nativeAttachToSurface(Surface surface);
+    // --- Native methods ---
 
-    private static native void nativeDetachAndRelease(long sc);
+    private native long nativeCreateFromWindow(Surface surface, String debugName);
 
-    private static native void nativeSetColor(long sc, float r, float g, float b, float a);
+    private native void nativeDetachAndRelease(long scPtr);
 
-    private static native void nativeHide(long sc);
+    private native void nativeHide(long scPtr);
 
-    private static native boolean nativePushBuffer(long sc, long ahbPtr,
-                                                   int dstX, int dstY, int dstW, int dstH,
-                                                   int fenceFd, boolean opaque);
+    private native boolean nativePushBuffer(long scPtr, long ahbPtr,
+                                             int dstX, int dstY,
+                                             int dstW, int dstH,
+                                             int acquireFenceFd, boolean opaque, boolean pace);
 
-    private static native long nativeAllocateTestBuffer(int width, int height, int argb);
-
-    private static native void nativeReleaseBuffer(long ahbPtr);
+    // Blocks until SF finishes the previous frame (hardware signal, no CPU polling).
+    public native boolean nativeWaitForPreviousFrame(long timeoutMs);
 }

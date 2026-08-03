@@ -569,6 +569,9 @@ class GameSettingsStateHolder {
     val selectedStartupSelection = mutableIntStateOf(0)
     val execArgs = mutableStateOf("")
     val fullscreenStretched = mutableStateOf(false)
+    // Direct Composition (zero-copy AHB → SurfaceControl + HWC overlay).
+    // Per-container toggle; read once at activity startup. See Container.EXTRA_DIRECT_COMPOSITION.
+    val directComposition = mutableStateOf(false)
 
     // Advanced - CPU
     val cpuCount = mutableIntStateOf(Runtime.getRuntime().availableProcessors())
@@ -4840,17 +4843,13 @@ private fun AdvancedSection(
             onCheckedChange = { state.fullscreenStretched.value = it }
         )
 
-        // Direct Composition is currently a container-level toggle (sampled at
-        // activity startup, held for the session). Hide from shortcut-edit
-        // sheets to avoid suggesting it can be flipped per-launch.
-        if (state.isContainerEditMode.value) {
-            Spacer(Modifier.height(SettingItemGap))
-            SettingCheckbox(
-                label = stringResource(R.string.session_display_direct_composition),
-                checked = state.directComposition.value,
-                onCheckedChange = { state.directComposition.value = it }
-            )
-        }
+        Spacer(Modifier.height(SettingItemGap))
+
+        SettingCheckbox(
+            label = stringResource(R.string.session_display_direct_composition),
+            checked = state.directComposition.value,
+            onCheckedChange = { state.directComposition.value = it }
+        )
     }
 
     Spacer(Modifier.height(SettingSectionGap))
