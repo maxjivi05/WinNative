@@ -417,14 +417,6 @@ class GameSettingsStateHolder {
     val reshadeEffects = mutableStateOf<List<ReshadeManager.ReshadeEffect>>(emptyList())
     val reshadeLoadout = ReshadeLoadoutState()
 
-    // Per-container "Direct Composition" toggle. When true and the device exposes
-    // SurfaceControl (API 29+, see SurfaceCompositor.isAvailable()), fullscreen
-    // direct-scanout drawables are routed to a sibling Android SurfaceControl
-    // layer (HWC/DPU overlay plane) instead of being composited by the in-process
-    // GLRenderer. The toggle is sampled at activity startup and held for the
-    // session — only takes effect on the next launch of the container.
-    val directComposition = mutableStateOf(false)
-
     // Graphics Driver Configuration (inline card)
     val gfxConfigExpanded = mutableStateOf(false)
     val gfxVulkanVersionEntries = mutableStateOf<List<String>>(emptyList())
