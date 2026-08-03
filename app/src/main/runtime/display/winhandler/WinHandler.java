@@ -10,16 +10,22 @@ import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.Log;
+import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import androidx.preference.PreferenceManager;
 import com.winlator.cmod.runtime.display.XServerDisplayActivity;
+import com.winlator.cmod.runtime.display.xserver.Pointer;
+import com.winlator.cmod.runtime.display.xserver.XKeycode;
 import com.winlator.cmod.runtime.display.xserver.XServer;
 import com.winlator.cmod.runtime.input.controls.ControllerManager;
+import com.winlator.cmod.runtime.input.controls.Binding;
 import com.winlator.cmod.runtime.input.controls.ControlsProfile;
 import com.winlator.cmod.runtime.input.controls.ExternalController;
 import com.winlator.cmod.runtime.input.controls.FakeInputWriter;
 import com.winlator.cmod.runtime.input.controls.GamepadState;
+import com.winlator.cmod.runtime.input.rumble.GamepadRumbleManager;
+import com.winlator.cmod.runtime.input.rumble.GcmRumbleMode;
 import com.winlator.cmod.shared.util.StringUtils;
 import java.io.IOException;
 import java.net.DatagramPacket;
@@ -60,8 +66,13 @@ public class WinHandler {
   private static final int OSC_DEVICE_ID = -1;
   private static final short SERVER_PORT = 7947;
   private static final long VIRTUAL_REBALANCE_AFTER_PHYSICAL_DISCONNECT_MS = 200;
+  private static final long PHYSICAL_DISCONNECT_DEBOUNCE_MS = 400;
   private static final float GYRO_AXIS_EPSILON = 0.001f;
   private static final float GYRO_TRIGGER_PRESS_THRESHOLD = 0.15f;
+  // Orientation stick gain: ~14 deg tilt = full deflection before per-axis sensitivity.
+  private static final float GYRO_ORIENTATION_STICK_GAIN = 4.0f;
+  // Sensitivity offset: a displayed slider value of 100% acts as 200% effective.
+  private static final float GYRO_SENSITIVITY_OFFSET = 1.0f;
   private final XServerDisplayActivity activity;
   private String fakeInputBasePath;
   private final InputManager inputManager;
@@ -85,7 +96,8 @@ public class WinHandler {
   private byte inputType = 4;
   private final List<Integer> gamepadClients = new CopyOnWriteArrayList();
   private FakeInputWriter[] writers = new FakeInputWriter[MAX_CONTROLLERS];
-  private Map<Integer, Integer> deviceToSlot = new HashMap();
+  // ConcurrentHashMap: input thread mutates while the vibration thread iterates (avoid CME).
+  private Map<Integer, Integer> deviceToSlot = new java.util.concurrent.ConcurrentHashMap<>();
   private Map<String, Integer> descriptorToSlot = new HashMap<>(); // physical device → slot
   private Map<Integer, String> deviceToDescriptor = new HashMap<>(); // deviceId → descriptor
   private Set<Integer> usedSlots = new HashSet();
@@ -93,7 +105,9 @@ public class WinHandler {
   private LocalServerSocket vibrationServer;
   private volatile boolean vibrationRunning = false;
   private final boolean[] vibrationEnabledSlots = new boolean[MAX_CONTROLLERS];
-  private boolean globalVibrationEnabled = true;
+  // volatile: UI thread writes, vibration thread reads.
+  private volatile boolean globalVibrationEnabled = true;
+  private volatile GcmRumbleMode gcmRumbleMode = GcmRumbleMode.DISABLED;
   private int fallbackSlot = -1;
   private ExternalController currentController;
   private final GamepadState outputGamepadState = new GamepadState();
@@ -102,23 +116,37 @@ public class WinHandler {
   private float smoothedGyroY = 0.0f;
   private float currentGyroStickX = 0.0f;
   private float currentGyroStickY = 0.0f;
+  private float currentTouchStickX = 0.0f;
+  private float currentTouchStickY = 0.0f;
+  private boolean screenTouchStickActive = false;
+  private float rightStickSensitivity = 1.0f;
   private float accumulatedGyroX = 0.0f;
   private float accumulatedGyroY = 0.0f;
   private boolean gyroToggleEnabled = false;
   private boolean gyroActivatorPressed = false;
+  private boolean gyroMouseActivatorPressed = false;
   private int lastGyroTargetSource = 0;
   private ExternalController lastGyroTargetController;
+  // Cached activation; read by shouldApplyGyroToTarget so the query stays side-effect free.
+  private boolean lastGyroActive = false;
+  // Orientation recenter reference, captured on the rising edge of activation.
+  private boolean gyroOrientationCalibrated = false;
+  private float orientationYaw0 = 0.0f;
+  private float orientationPitch0 = 0.0f;
   private Runnable pendingVirtualGamepadRebalance;
+  private final Map<Integer, Runnable> pendingDeviceReleases = new HashMap<>();
+  private final GamepadRumbleManager gamepadRumbleManager;
   private final InputManager.InputDeviceListener inputDeviceListener =
       new InputManager.InputDeviceListener() {
         @Override
         public void onInputDeviceAdded(int deviceId) {
+          WinHandler.this.cancelPendingDeviceRelease(deviceId);
           WinHandler.this.assignConnectedDeviceIfPossible(deviceId, "hotplug");
         }
 
         @Override
         public void onInputDeviceRemoved(int deviceId) {
-          WinHandler.this.releaseSlot(deviceId);
+          WinHandler.this.scheduleDeviceRelease(deviceId);
         }
 
         @Override
@@ -128,8 +156,10 @@ public class WinHandler {
   public WinHandler(XServerDisplayActivity activity) {
     this.activity = activity;
     this.inputManager = (InputManager) activity.getSystemService(Context.INPUT_SERVICE);
+    this.gamepadRumbleManager = new GamepadRumbleManager(activity, this.inputHandler);
     this.inputManager.registerInputDeviceListener(this.inputDeviceListener, null);
     this.preferences = PreferenceManager.getDefaultSharedPreferences(activity.getBaseContext());
+    boolean anySlotEnabled = false;
     for (int i = 0; i < MAX_CONTROLLERS; i++) {
       String key = "vibration_slot_" + i;
       String legacyKey = "vibrate_slot_" + i;
@@ -138,9 +168,26 @@ public class WinHandler {
       } else {
         this.vibrationEnabledSlots[i] = this.preferences.getBoolean(legacyKey, true);
       }
+      if (this.vibrationEnabledSlots[i]) {
+        anySlotEnabled = true;
+      }
     }
     this.globalVibrationEnabled =
         this.preferences.getBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, true);
+    // Heal stale #403 prefs: master on + all slots off → re-enable all.
+    if (this.globalVibrationEnabled && !anySlotEnabled) {
+      SharedPreferences.Editor editor = this.preferences.edit();
+      for (int i = 0; i < MAX_CONTROLLERS; i++) {
+        this.vibrationEnabledSlots[i] = true;
+        editor.putBoolean("vibration_slot_" + i, true);
+        editor.putBoolean("vibrate_slot_" + i, true);
+      }
+      editor.apply();
+    }
+    this.gcmRumbleMode =
+        GcmRumbleMode.fromPrefValue(
+            this.preferences.getString(GcmRumbleMode.PREF_KEY, GcmRumbleMode.DISABLED.toPrefValue()));
+    this.gamepadRumbleManager.setMode(this.gcmRumbleMode);
   }
 
   public int preAssignConnectedControllers() {
@@ -200,9 +247,17 @@ public class WinHandler {
     }
 
     if (this.usedSlots.size() >= MAX_CONTROLLERS) {
-      Log.d(
-          "WinHandler", "Ignoring device " + deviceId + " from " + source + ": slot limit reached.");
-      return false;
+      // Still allow a reconnecting / sub-device that will reuse an existing
+      // physical controller's slot instead of consuming a new one. Without this,
+      // a transient remove/add while all four slots are full would be dropped.
+      android.view.InputDevice probe = android.view.InputDevice.getDevice(deviceId);
+      String descriptor = probe != null ? probe.getDescriptor() : null;
+      if (descriptor == null || !this.descriptorToSlot.containsKey(descriptor)) {
+        Log.d(
+            "WinHandler",
+            "Ignoring device " + deviceId + " from " + source + ": slot limit reached.");
+        return false;
+      }
     }
 
     android.view.InputDevice device = android.view.InputDevice.getDevice(deviceId);
@@ -357,24 +412,36 @@ public class WinHandler {
   }
 
   public void mouseEvent(final int flags, final int dx, final int dy, final int wheelDelta) {
+    checkGyroActivatorMouseFlags(flags);
     if (!this.initReceived) {
       return;
     }
     addAction(
         () -> {
-          try {
-            this.sendData.rewind();
-            this.sendData.put((byte) 7);
-            this.sendData.putInt(10);
-            this.sendData.putInt(flags);
-            this.sendData.putShort((short) dx);
-            this.sendData.putShort((short) dy);
-            this.sendData.putShort((short) wheelDelta);
-            this.sendData.put((byte) ((flags & 1) != 0 ? 1 : 0));
-            sendPacket(CLIENT_PORT);
-          } catch (IOException ignored) {
-          }
+          sendMouseEventPacket(flags, dx, dy, wheelDelta);
+          XServer xServer = activity.getXServer();
+          if (xServer != null && xServer.getRenderer() != null)
+            xServer.getRenderer().requestRenderCoalesced();
         });
+  }
+
+  public void mouseMoveDelta(final int dx, final int dy) {
+    mouseEvent(MouseEventFlags.MOVE, dx, dy, 0);
+  }
+
+  private void sendMouseEventPacket(final int flags, final int dx, final int dy, final int wheelDelta) {
+    try {
+      this.sendData.rewind();
+      this.sendData.put((byte) 7);
+      this.sendData.putInt(10);
+      this.sendData.putInt(flags);
+      this.sendData.putShort((short) dx);
+      this.sendData.putShort((short) dy);
+      this.sendData.putShort((short) wheelDelta);
+      this.sendData.put((byte) ((flags & 1) != 0 ? 1 : 0));
+      sendPacket(CLIENT_PORT);
+    } catch (IOException ignored) {
+    }
   }
 
   public void keyboardEvent(final byte vkey, final int flags) {
@@ -440,17 +507,21 @@ public class WinHandler {
     this.sendExecutor.execute(
         () -> {
           while (true) {
+            Runnable action;
             synchronized (this.actions) {
-              while (this.running && this.initReceived && !this.actions.isEmpty()) {
-                this.actions.poll().run();
+              while (this.running && (!this.initReceived || this.actions.isEmpty())) {
+                try {
+                  this.actions.wait();
+                } catch (InterruptedException e) {
+                  Thread.currentThread().interrupt();
+                  return;
+                }
               }
               if (!this.running) return;
-              try {
-                this.actions.wait();
-              } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-              }
+              action = this.actions.poll();
+            }
+            if (action != null) {
+              action.run();
             }
           }
         });
@@ -480,18 +551,51 @@ public class WinHandler {
     if (this.vibrationExecutor != null) this.vibrationExecutor.shutdownNow();
   }
 
+  // Hand the socket/threads to a replacement handler while keeping the fake-input writers/rings the running guest is mapped to (unlike stop()).
+  public void stopForReattach() {
+    synchronized (this.actions) {
+      this.running = false;
+      this.actions.clear();
+      this.actions.notifyAll();
+    }
+    this.vibrationRunning = false;
+    if (this.socket != null) {
+      this.socket.close();
+      this.socket = null;
+    }
+    if (this.vibrationServer != null) {
+      try {
+        this.vibrationServer.close();
+      } catch (IOException ignored) {
+      }
+      this.vibrationServer = null;
+    }
+    if (this.sendExecutor != null) this.sendExecutor.shutdownNow();
+    if (this.receiveExecutor != null) this.receiveExecutor.shutdownNow();
+    if (this.vibrationExecutor != null) this.vibrationExecutor.shutdownNow();
+  }
+
+  private void applyInitHandshake() {
+    this.initReceived = true;
+    this.preferences =
+        PreferenceManager.getDefaultSharedPreferences(this.activity.getBaseContext());
+    if (!this.xinputDisabledInitialized) {
+      this.xinputDisabled = this.preferences.getBoolean("xinput_toggle", false);
+    }
+    synchronized (this.actions) {
+      this.actions.notifyAll();
+    }
+  }
+
+  // Reused session: the guest already handshook and won't repeat it, so adopt init state or mouse/keyboard input stays gated off.
+  public void markSessionInitialized() {
+    applyInitHandshake();
+  }
+
   private void handleRequest(byte requestCode, int port) {
     switch (requestCode) {
       case 1:
-        this.initReceived = true;
-        this.preferences =
-            PreferenceManager.getDefaultSharedPreferences(this.activity.getBaseContext());
-        if (!this.xinputDisabledInitialized) {
-          this.xinputDisabled = this.preferences.getBoolean("xinput_toggle", false);
-        }
-        synchronized (this.actions) {
-          this.actions.notifyAll();
-        }
+        applyInitHandshake();
         return;
       case 5:
         if (this.onGetProcessInfoListener != null) {
@@ -516,15 +620,23 @@ public class WinHandler {
         short x = this.receiveData.getShort();
         short y = this.receiveData.getShort();
         XServer xServer = this.activity.getXServer();
-        xServer.pointer.setX(x);
-        xServer.pointer.setY(y);
+        if (xServer != null) {
+          xServer.pointer.setX(x);
+          xServer.pointer.setY(y);
+          if (xServer.getRenderer() != null) {
+            xServer.getRenderer().requestCursorRender();
+          } else if (this.activity.getXServerView() != null) {
+            this.activity.getXServerView().requestTransientRender(100);
+          }
+        }
         return;
       default:
         return;
     }
   }
 
-  public void start() {
+  public synchronized void start() {
+    if (running) return;
     try {
       this.localhost = InetAddress.getLocalHost();
     } catch (UnknownHostException e) {
@@ -560,9 +672,67 @@ public class WinHandler {
     setLastGamepadSource(GAMEPAD_SOURCE_VIRTUAL, null);
     maybeClearGyroTarget(GAMEPAD_SOURCE_VIRTUAL, null);
     writeVirtualGamepadState(shouldApplyGyroToTarget(GAMEPAD_SOURCE_VIRTUAL, null));
+    XServer xServer = activity.getXServer();
+    if (xServer != null && xServer.getRenderer() != null) xServer.getRenderer().requestRenderCoalesced();
+  }
+
+  public boolean canUseScreenTouchStick() {
+    ControlsProfile profile = this.activity.getInputControlsView().getProfile();
+    return profile != null && profile.isVirtualGamepad();
+  }
+
+  public void setScreenTouchStickActive(boolean active) {
+    if (this.screenTouchStickActive == active) return;
+    this.screenTouchStickActive = active;
+    this.currentTouchStickX = 0.0f;
+    this.currentTouchStickY = 0.0f;
+    writeScreenTouchStickFrame();
+    requestScreenTouchRender();
+  }
+
+  public void setRightStickSensitivity(float sensitivity) {
+    this.rightStickSensitivity = sensitivity;
+  }
+
+  public void setScreenTouchRightStick(float x, float y) {
+    if (!this.screenTouchStickActive) return;
+    this.currentTouchStickX = x;
+    this.currentTouchStickY = y;
+    writeScreenTouchStickFrame();
+    requestScreenTouchRender();
+  }
+
+  private void writeScreenTouchStickFrame() {
+    if (this.lastGamepadSource == GAMEPAD_SOURCE_CONTROLLER && this.currentController != null) {
+      writeControllerGamepadState(
+          this.currentController, shouldApplyGyroToTarget(GAMEPAD_SOURCE_CONTROLLER, this.currentController));
+    } else {
+      writeVirtualGamepadState(shouldApplyGyroToTarget(GAMEPAD_SOURCE_VIRTUAL, null), true);
+    }
+  }
+
+  private void requestScreenTouchRender() {
+    XServer xServer = activity.getXServer();
+    if (xServer != null && xServer.getRenderer() != null) xServer.getRenderer().requestRenderCoalesced();
   }
 
   private void writeVirtualGamepadState(boolean applyGyroOverlay) {
+    writeVirtualGamepadState(applyGyroOverlay, false);
+  }
+
+  // allowHiddenControls relaxes the on-screen-controls gate for gesture-driven gamepad output.
+  public void injectGestureGamepad(Binding binding, boolean pressed) {
+    if (binding == null || !binding.isGamepad()) return;
+    ControlsProfile profile = this.activity.getInputControlsView().getProfile();
+    if (profile == null || !profile.isVirtualGamepad()) return;
+    this.activity.getInputControlsView().handleInputEvent(null, binding, pressed, 0f, false);
+    setLastGamepadSource(GAMEPAD_SOURCE_VIRTUAL, null);
+    writeVirtualGamepadState(shouldApplyGyroToTarget(GAMEPAD_SOURCE_VIRTUAL, null), true);
+    XServer xServer = activity.getXServer();
+    if (xServer != null && xServer.getRenderer() != null) xServer.getRenderer().requestRenderCoalesced();
+  }
+
+  private void writeVirtualGamepadState(boolean applyGyroOverlay, boolean allowHiddenControls) {
     ControlsProfile profile = this.activity.getInputControlsView().getProfile();
     if (profile == null) {
       return;
@@ -570,7 +740,7 @@ public class WinHandler {
     GamepadState gamepadState = profile.getGamepadState();
     boolean useVirtualGamepad =
         profile.isVirtualGamepad()
-            && this.activity.getInputControlsView().isShowTouchscreenControls();
+            && (allowHiddenControls || this.activity.getInputControlsView().isShowTouchscreenControls());
     if (useVirtualGamepad) {
       int slot = assignSlot(-1);
       if (slot >= 0 && this.writers[slot] != null) {
@@ -594,6 +764,37 @@ public class WinHandler {
     maybeClearGyroTarget(GAMEPAD_SOURCE_CONTROLLER, controller);
     writeControllerGamepadState(
         controller, shouldApplyGyroToTarget(GAMEPAD_SOURCE_CONTROLLER, controller));
+    XServer xServer = activity.getXServer();
+    if (xServer != null && xServer.getRenderer() != null) xServer.getRenderer().requestRenderCoalesced();
+  }
+
+  // Menu owns the controller while open; zero tracked state and push it once so nothing stays held in the guest.
+  public void neutralizeControllers() {
+    for (ExternalController controller : this.controllers.values()) {
+      if (controller == null) {
+        continue;
+      }
+      clearGamepadState(controller.state);
+      clearGamepadState(controller.remappedState);
+      int slot = assignSlot(controller.getDeviceId());
+      if (slot >= 0 && this.writers[slot] != null) {
+        try {
+          this.writers[slot].writeGamepadState(controller.state);
+        } catch (IOException ignored) {
+        }
+      }
+    }
+  }
+
+  private static void clearGamepadState(GamepadState state) {
+    state.thumbLX = 0;
+    state.thumbLY = 0;
+    state.thumbRX = 0;
+    state.thumbRY = 0;
+    state.triggerL = 0;
+    state.triggerR = 0;
+    state.buttons = 0;
+    state.dpad[0] = state.dpad[1] = state.dpad[2] = state.dpad[3] = false;
   }
 
   private void writeControllerGamepadState(
@@ -685,7 +886,7 @@ public class WinHandler {
     ensureWriterForSlot(slot);
   }
 
-  private boolean moveVirtualGamepadToSlot(int targetSlot) {
+  private boolean moveVirtualGamepadToSlot(int targetSlot, boolean releaseVacatedSlot) {
     Integer currentSlot = this.deviceToSlot.get(OSC_DEVICE_ID);
     if (currentSlot == null) {
       return false;
@@ -700,7 +901,15 @@ public class WinHandler {
 
     ensureWriterForSlot(targetSlot);
     if (this.writers[currentSlot] != null) {
-      this.writers[currentSlot].reset();
+      if (releaseVacatedSlot && !isPhysicalSlotOccupied(currentSlot)) {
+        // The virtual pad is leaving this slot for good (consolidation, not a
+        // hand-off to an incoming physical pad). Tear it down so winebus sees the
+        // device disappear instead of a phantom stuck-at-neutral controller.
+        this.writers[currentSlot].destroy();
+        this.writers[currentSlot] = null;
+      } else {
+        this.writers[currentSlot].reset();
+      }
     }
 
     this.deviceToSlot.put(OSC_DEVICE_ID, targetSlot);
@@ -726,7 +935,7 @@ public class WinHandler {
     if (preferredVirtualSlot == -1) {
       releaseSlot(OSC_DEVICE_ID);
     } else if (preferredVirtualSlot != virtualSlot) {
-      moveVirtualGamepadToSlot(preferredVirtualSlot);
+      moveVirtualGamepadToSlot(preferredVirtualSlot, true);
     }
   }
 
@@ -776,7 +985,7 @@ public class WinHandler {
           if (this.pendingVirtualGamepadRebalance != null) {
             return existing;
           }
-          moveVirtualGamepadToSlot(preferredVirtualSlot);
+          moveVirtualGamepadToSlot(preferredVirtualSlot, true);
           Integer updatedSlot = this.deviceToSlot.get(deviceId);
           return updatedSlot != null ? updatedSlot : -1;
         }
@@ -831,7 +1040,7 @@ public class WinHandler {
     Integer virtualSlot = this.deviceToSlot.get(OSC_DEVICE_ID);
     if (virtualSlot != null && virtualSlot == preferredPhysicalSlot) {
       int relocatedVirtualSlot = findPreferredVirtualSlot(null);
-      moveVirtualGamepadToSlot(relocatedVirtualSlot);
+      moveVirtualGamepadToSlot(relocatedVirtualSlot, false);
     }
 
     bindDeviceToSlot(deviceId, descriptor, preferredPhysicalSlot);
@@ -899,6 +1108,49 @@ public class WinHandler {
     }
   }
 
+  private void scheduleDeviceRelease(int deviceId) {
+    if (deviceId == OSC_DEVICE_ID) {
+      releaseSlot(deviceId);
+      return;
+    }
+    // Debounce transient Android remove/add churn (Bluetooth flaps, sub-device
+    // re-enumeration). A real unplug stays gone and is released after the delay;
+    // a quick reconnect re-seats onto the same slot via descriptorToSlot before
+    // the writer is ever torn down, so the guest never sees a disconnect.
+    cancelPendingDeviceRelease(deviceId);
+    Runnable release =
+        new Runnable() {
+          @Override
+          public void run() {
+            pendingDeviceReleases.remove(deviceId);
+            releaseSlot(deviceId);
+          }
+        };
+    pendingDeviceReleases.put(deviceId, release);
+    this.inputHandler.postDelayed(release, PHYSICAL_DISCONNECT_DEBOUNCE_MS);
+    Log.d(
+        "WinHandler",
+        "Device "
+            + deviceId
+            + " removed; scheduling slot release in "
+            + PHYSICAL_DISCONNECT_DEBOUNCE_MS
+            + "ms (debounce). Reconnect within window keeps the slot.");
+  }
+
+  private void cancelPendingDeviceRelease(int deviceId) {
+    Runnable pending = pendingDeviceReleases.remove(deviceId);
+    if (pending != null) {
+      this.inputHandler.removeCallbacks(pending);
+    }
+  }
+
+  private void cancelAllPendingDeviceReleases() {
+    for (Runnable pending : pendingDeviceReleases.values()) {
+      this.inputHandler.removeCallbacks(pending);
+    }
+    pendingDeviceReleases.clear();
+  }
+
   public void setXInputDisabled(boolean disabled) {
     this.xinputDisabled = disabled;
     this.xinputDisabledInitialized = true;
@@ -910,6 +1162,9 @@ public class WinHandler {
       this.fakeInputBasePath = fakeInputPath;
       Log.d("WinHandler", "FakeInputWriter base path set: " + fakeInputPath);
       startVibrationListener();
+      if (this.gcmRumbleMode != GcmRumbleMode.DISABLED) {
+        this.gamepadRumbleManager.requestPermissionIfNeeded();
+      }
     }
   }
 
@@ -959,6 +1214,19 @@ public class WinHandler {
       return;
     }
     if (slot >= 0 && slot < MAX_CONTROLLERS && !this.vibrationEnabledSlots[slot]) {
+      return;
+    }
+
+    // GameSir GCM-mode pads expose no Android vibrator; route them through the GCM manager first.
+    InputDevice physicalInputDevice = getPhysicalInputDeviceForSlot(slot);
+    if (this.gcmRumbleMode != GcmRumbleMode.DISABLED
+        && this.gamepadRumbleManager.handleRumble(
+            slot, physicalInputDevice, strong, weak, durationMs)) {
+      return;
+    }
+
+    // Suppress the phone fallback for GCM-owned devices so they don't double-rumble.
+    if (this.gcmRumbleMode != GcmRumbleMode.DISABLED && isGcmManagedDevice(physicalInputDevice)) {
       return;
     }
 
@@ -1020,6 +1288,38 @@ public class WinHandler {
     }
   }
 
+  private InputDevice getPhysicalInputDeviceForSlot(int slot) {
+    for (Map.Entry<Integer, Integer> entry : this.deviceToSlot.entrySet()) {
+      if (entry.getValue() != slot || entry.getKey() == OSC_DEVICE_ID) {
+        continue;
+      }
+      InputDevice device = InputDevice.getDevice(entry.getKey());
+      if (device != null) {
+        return device;
+      }
+    }
+    return null;
+  }
+
+  private boolean isGcmManagedDevice(InputDevice device) {
+    if (device == null) return false; // OSC/virtual slot: keep the phone fallback
+    if (device.getVendorId() != GamepadRumbleManager.GAMESIR_VENDOR_ID) return false;
+    if (gcmRumbleMode == GcmRumbleMode.ALL) return true;
+    // KNOWN: models with a driver — X5s (BLE), G8+ MFi (USB), X3 Pro (BLE).
+    int pid = device.getProductId();
+    return pid == 0x1119 || pid == 274 || pid == 0x0106;
+  }
+
+  public GcmRumbleMode getGcmRumbleMode() {
+    return this.gcmRumbleMode;
+  }
+
+  public void setGcmRumbleMode(GcmRumbleMode mode) {
+    this.gcmRumbleMode = mode;
+    this.preferences.edit().putString(GcmRumbleMode.PREF_KEY, mode.toPrefValue()).apply();
+    this.gamepadRumbleManager.setMode(mode);
+  }
+
   public boolean isVibrationEnabledForSlot(int slot) {
     return slot >= 0 && slot < MAX_CONTROLLERS && this.vibrationEnabledSlots[slot];
   }
@@ -1042,7 +1342,17 @@ public class WinHandler {
 
   public void setGlobalVibrationEnabled(boolean enabled) {
     this.globalVibrationEnabled = enabled;
-    this.preferences.edit().putBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, enabled).apply();
+    SharedPreferences.Editor editor = this.preferences.edit();
+    editor.putBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, enabled);
+    if (enabled) {
+      // Master switch enables every slot, overriding stale per-slot prefs.
+      for (int i = 0; i < MAX_CONTROLLERS; i++) {
+        this.vibrationEnabledSlots[i] = true;
+        editor.putBoolean("vibration_slot_" + i, true);
+        editor.putBoolean("vibrate_slot_" + i, true);
+      }
+    }
+    editor.apply();
   }
 
   public int getMaxControllers() {
@@ -1051,6 +1361,7 @@ public class WinHandler {
 
   public void closeFakeInputWriter() {
     cancelPendingVirtualGamepadRebalance();
+    cancelAllPendingDeviceReleases();
     if (this.inputManager != null && this.inputDeviceListener != null) {
       this.inputManager.unregisterInputDeviceListener(this.inputDeviceListener);
     }
@@ -1083,6 +1394,10 @@ public class WinHandler {
     this.currentGyroStickY = 0.0f;
     this.gyroToggleEnabled = false;
     this.gyroActivatorPressed = false;
+    this.lastGyroActive = false;
+    this.gyroOrientationCalibrated = false;
+    this.accumulatedGyroX = 0.0f;
+    this.accumulatedGyroY = 0.0f;
     this.lastGyroTargetSource = GAMEPAD_SOURCE_NONE;
     this.lastGyroTargetController = null;
   }
@@ -1163,14 +1478,7 @@ public class WinHandler {
   public void updateGyroData(float rawGyroX, float rawGyroY) {
     GyroSettings gyroSettings = getGyroSettings();
     if (!gyroSettings.enabled) {
-      this.smoothedGyroX = 0.0f;
-      this.smoothedGyroY = 0.0f;
-      this.currentGyroStickX = 0.0f;
-      this.currentGyroStickY = 0.0f;
-      this.gyroToggleEnabled = false;
-      this.gyroActivatorPressed = false;
-      this.accumulatedGyroX = 0.0f;
-      this.accumulatedGyroY = 0.0f;
+      resetGyroRuntimeState();
       clearLastGyroTarget();
       return;
     }
@@ -1195,28 +1503,114 @@ public class WinHandler {
         (this.smoothedGyroY * gyroSettings.smoothing)
             + (rawGyroY * (1.0f - gyroSettings.smoothing));
 
+    GyroTarget target = resolveActiveGyroTarget(gyroSettings);
+    if (target == null) {
+      return;
+    }
+
+    float nextGyroStickX = target.active ? clamp(this.smoothedGyroX, -1.0f, 1.0f) : 0.0f;
+    float nextGyroStickY = target.active ? clamp(this.smoothedGyroY, -1.0f, 1.0f) : 0.0f;
+    applyGyroStickToTarget(target, nextGyroStickX, nextGyroStickY);
+  }
+
+  // Tilt-to-position path: drives the stick from absolute yaw/pitch offset, so a held tilt sustains.
+  public void updateGyroOrientation(float yaw, float pitch) {
+    GyroSettings gyroSettings = getGyroSettings();
+    if (!gyroSettings.enabled) {
+      resetGyroRuntimeState();
+      clearLastGyroTarget();
+      return;
+    }
+
+    GyroTarget target = resolveActiveGyroTarget(gyroSettings);
+    if (target == null) {
+      this.gyroOrientationCalibrated = false;
+      return;
+    }
+
+    if (target.active) {
+      if (!this.gyroOrientationCalibrated) {
+        // Rising edge: current pose becomes stick-center.
+        this.orientationYaw0 = yaw;
+        this.orientationPitch0 = pitch;
+        this.gyroOrientationCalibrated = true;
+      }
+    } else {
+      this.gyroOrientationCalibrated = false;
+    }
+
+    float deltaX = target.active ? wrapAngle(yaw - this.orientationYaw0) : 0.0f;
+    float deltaY = target.active ? wrapAngle(pitch - this.orientationPitch0) : 0.0f;
+
+    if (Math.abs(deltaX) < gyroSettings.deadzone) deltaX = 0.0f;
+    if (Math.abs(deltaY) < gyroSettings.deadzone) deltaY = 0.0f;
+    if (gyroSettings.invertX) deltaX = -deltaX;
+    if (gyroSettings.invertY) deltaY = -deltaY;
+
+    deltaX *= gyroSettings.sensitivityX * GYRO_ORIENTATION_STICK_GAIN;
+    deltaY *= gyroSettings.sensitivityY * GYRO_ORIENTATION_STICK_GAIN;
+
+    this.smoothedGyroX =
+        (this.smoothedGyroX * gyroSettings.smoothing) + (deltaX * (1.0f - gyroSettings.smoothing));
+    this.smoothedGyroY =
+        (this.smoothedGyroY * gyroSettings.smoothing) + (deltaY * (1.0f - gyroSettings.smoothing));
+
+    float nextGyroStickX = target.active ? clamp(this.smoothedGyroX, -1.0f, 1.0f) : 0.0f;
+    float nextGyroStickY = target.active ? clamp(this.smoothedGyroY, -1.0f, 1.0f) : 0.0f;
+    applyGyroStickToTarget(target, nextGyroStickX, nextGyroStickY);
+  }
+
+  // Recenters orientation mode: next sample recaptures the current pose as stick-center.
+  public void recenterGyroOrientation() {
+    this.gyroOrientationCalibrated = false;
+    this.smoothedGyroX = 0.0f;
+    this.smoothedGyroY = 0.0f;
+  }
+
+  private void resetGyroRuntimeState() {
+    this.smoothedGyroX = 0.0f;
+    this.smoothedGyroY = 0.0f;
+    this.currentGyroStickX = 0.0f;
+    this.currentGyroStickY = 0.0f;
+    this.gyroToggleEnabled = false;
+    this.gyroActivatorPressed = false;
+    this.gyroMouseActivatorPressed = false;
+    this.accumulatedGyroX = 0.0f;
+    this.accumulatedGyroY = 0.0f;
+    this.lastGyroActive = false;
+    this.gyroOrientationCalibrated = false;
+  }
+
+  // Resolves the target and evaluates activation once per sample (sole updateGyroActivation caller).
+  private GyroTarget resolveActiveGyroTarget(GyroSettings gyroSettings) {
     int targetSource = resolveGyroTargetSource();
     ExternalController targetController =
         targetSource == GAMEPAD_SOURCE_CONTROLLER ? getPreferredGyroController() : null;
-    if (targetSource == GAMEPAD_SOURCE_NONE) {
+    if (targetSource == GAMEPAD_SOURCE_NONE
+        || (targetSource == GAMEPAD_SOURCE_CONTROLLER && targetController == null)) {
       clearLastGyroTarget();
-      return;
+      this.lastGyroActive = false;
+      return null;
     }
-
-    if (targetSource == GAMEPAD_SOURCE_CONTROLLER && targetController == null) {
-      clearLastGyroTarget();
-      return;
-    }
-
     GamepadState targetState = getTargetGamepadState(targetSource, targetController);
     if (targetState == null) {
       clearLastGyroTarget();
-      return;
+      this.lastGyroActive = false;
+      return null;
     }
+    boolean active =
+        updateGyroActivation(
+            targetState, targetController != null ? targetController.state : null, gyroSettings);
+    this.lastGyroActive = active;
+    return new GyroTarget(targetSource, targetController, active);
+  }
 
-    boolean gyroActive = updateGyroActivation(targetState, targetController != null ? targetController.state : null, gyroSettings);
-    float nextGyroStickX = gyroActive ? clamp(this.smoothedGyroX, -1.0f, 1.0f) : 0.0f;
-    float nextGyroStickY = gyroActive ? clamp(this.smoothedGyroY, -1.0f, 1.0f) : 0.0f;
+  // Writes the stick value to the target. Must stay a leaf (no sendGamepadState/updateGyro* calls).
+  private void applyGyroStickToTarget(
+      GyroTarget target, float nextGyroStickX, float nextGyroStickY) {
+    int targetSource = target.source;
+    ExternalController targetController = target.controller;
+    boolean gyroActive = target.active;
 
     boolean targetChanged =
         targetSource != this.lastGyroTargetSource
@@ -1243,14 +1637,57 @@ public class WinHandler {
       writeControllerGamepadState(targetController, gyroActive);
     }
 
+    XServer xServer = activity.getXServer();
+    if (xServer != null && xServer.getRenderer() != null) xServer.getRenderer().requestRenderCoalesced();
+
     this.lastGyroTargetSource = gyroActive ? targetSource : GAMEPAD_SOURCE_NONE;
     this.lastGyroTargetController =
         gyroActive && targetSource == GAMEPAD_SOURCE_CONTROLLER ? targetController : null;
   }
 
+  // Normalizes to [-pi, pi] so the yaw wrap at +/-pi doesn't cause a full-scale jump.
+  private static float wrapAngle(float radians) {
+    return (float) Math.IEEEremainder(radians, 2.0 * Math.PI);
+  }
+
+  private static final class GyroTarget {
+    final int source;
+    final ExternalController controller;
+    final boolean active;
+
+    GyroTarget(int source, ExternalController controller, boolean active) {
+      this.source = source;
+      this.controller = controller;
+      this.active = active;
+    }
+  }
+
   public void refreshControllerMappings() {}
 
   private void updateGyroDataMouse(float rawGyroX, float rawGyroY, GyroSettings gyroSettings) {
+    // Mouse mode doesn't use the stick: clear any overlay left by a prior stick session.
+    if (this.lastGyroTargetSource != GAMEPAD_SOURCE_NONE) {
+      clearLastGyroTarget();
+    }
+    this.currentGyroStickX = 0.0f;
+    this.currentGyroStickY = 0.0f;
+
+    Binding activator = getGyroMouseActivator();
+    boolean active;
+    if (activator.isMouse() || activator.isKeyboard()) {
+      active = gyroSettings.mode == 1 ? this.gyroToggleEnabled : this.gyroMouseActivatorPressed;
+      this.lastGyroActive = active;
+    } else {
+      // Gate on the activator; stay always-on when no controller target exists (controllerless use).
+      GyroTarget target = resolveActiveGyroTarget(gyroSettings);
+      active = target == null || target.active;
+    }
+    if (!active) {
+      this.accumulatedGyroX = 0.0f;
+      this.accumulatedGyroY = 0.0f;
+      return;
+    }
+
     if (Math.abs(rawGyroX) < gyroSettings.deadzone) rawGyroX = 0.0f;
     if (Math.abs(rawGyroY) < gyroSettings.deadzone) rawGyroY = 0.0f;
     if (gyroSettings.invertX) rawGyroX = -rawGyroX;
@@ -1266,7 +1703,8 @@ public class WinHandler {
     int dx = (int) this.accumulatedGyroX;
     int dy = (int) this.accumulatedGyroY;
     if (dx != 0 || dy != 0) {
-      mouseEvent(MouseEventFlags.MOVE, dx, dy, 0);
+      mouseMoveDelta(dx, dy);
+      this.activity.notifyPointerActivity();
       this.accumulatedGyroX -= dx;
       this.accumulatedGyroY -= dy;
     }
@@ -1278,12 +1716,18 @@ public class WinHandler {
     settings.mode = this.preferences.getInt("gyro_mode", 0);
     settings.activatorKeyCode =
         this.preferences.getInt("gyro_trigger_button", KeyEvent.KEYCODE_BUTTON_L1);
+    if (this.preferences.getBoolean("mouse_gyro_enabled", false)) {
+      Binding activator = getGyroMouseActivator();
+      settings.activatorBinding = activator.isGamepad() ? activator : null;
+    }
     settings.applyToRightStick =
         this.preferences.getBoolean("process_gyro_with_left_trigger", false);
-    settings.sensitivityX = getFloatPreference("gyro_x_sensitivity", 1.0f);
-    settings.sensitivityY = getFloatPreference("gyro_y_sensitivity", 1.0f);
-    settings.smoothing = clamp(getFloatPreference("gyro_smoothing", 0.9f), 0.0f, 0.99f);
-    settings.deadzone = clamp(getFloatPreference("gyro_deadzone", 0.05f), 0.0f, 1.0f);
+    float sensitivityOffset =
+        this.preferences.getBoolean("gyro_orientation_enabled", false) ? 0.0f : GYRO_SENSITIVITY_OFFSET;
+    settings.sensitivityX = getFloatPreference("gyro_x_sensitivity", 1.0f) + sensitivityOffset;
+    settings.sensitivityY = getFloatPreference("gyro_y_sensitivity", 1.0f) + sensitivityOffset;
+    settings.smoothing = clamp(getFloatPreference("gyro_smoothing", 0.5f), 0.0f, 0.99f);
+    settings.deadzone = getFloatPreference("gyro_deadzone", 0.05f);
     settings.invertX = this.preferences.getBoolean("invert_gyro_x", false);
     settings.invertY = this.preferences.getBoolean("invert_gyro_y", false);
     return settings;
@@ -1350,10 +1794,7 @@ public class WinHandler {
   }
 
   private void setLastGamepadSource(int source, ExternalController controller) {
-    if (source != this.lastGamepadSource) {
-      this.gyroToggleEnabled = false;
-      this.gyroActivatorPressed = false;
-    }
+    // Don't reset gyroToggleEnabled here: the toggle is global and was dying on source changes.
     this.lastGamepadSource = source;
     if (controller != null) {
       this.currentController = controller;
@@ -1388,6 +1829,9 @@ public class WinHandler {
     if (!gyroSettings.enabled) {
       return false;
     }
+    if (this.preferences.getBoolean("mouse_gyro_enabled", false)) {
+      return false; // mouse mode doesn't overlay the stick
+    }
     int preferredSource = resolveGyroTargetSource();
     if (source != preferredSource) {
       return false;
@@ -1397,8 +1841,8 @@ public class WinHandler {
       return false;
     }
     GamepadState targetState = getTargetGamepadState(source, controller);
-    // Pass both remapped and raw state to activation check
-    return targetState != null && updateGyroActivation(targetState, controller != null ? controller.state : null, gyroSettings);
+    // Use cached activation (no mutation here) to keep this query side-effect free.
+    return targetState != null && this.lastGyroActive;
   }
 
   private GamepadState getTargetGamepadState(int source, ExternalController controller) {
@@ -1420,9 +1864,13 @@ public class WinHandler {
 
   private boolean updateGyroActivation(GamepadState targetState, GamepadState rawState, GyroSettings gyroSettings) {
     // Check both remapped and raw state for the activator
-    boolean activatorPressed = isActivatorPressed(targetState, gyroSettings.activatorKeyCode) ||
-                               isActivatorPressed(rawState, gyroSettings.activatorKeyCode);
-    
+    boolean activatorPressed =
+        gyroSettings.activatorBinding != null
+            ? isActivatorPressed(targetState, gyroSettings.activatorBinding)
+                || isActivatorPressed(rawState, gyroSettings.activatorBinding)
+            : isActivatorPressed(targetState, gyroSettings.activatorKeyCode)
+                || isActivatorPressed(rawState, gyroSettings.activatorKeyCode);
+
     if (gyroSettings.mode == 1 && activatorPressed && !this.gyroActivatorPressed) {
       this.gyroToggleEnabled = !this.gyroToggleEnabled;
     }
@@ -1446,23 +1894,140 @@ public class WinHandler {
     return buttonIdx != -1 && state.isButtonPressed(buttonIdx);
   }
 
+  private boolean isActivatorPressed(GamepadState state, Binding binding) {
+    if (state == null || !binding.isGamepad()) {
+      return false;
+    }
+    int buttonIdx = gamepadButtonIdxOf(binding);
+    if (buttonIdx == GamepadState.BUTTON_L2) {
+      return state.triggerL > GYRO_TRIGGER_PRESS_THRESHOLD
+          || state.isButtonPressed(GamepadState.BUTTON_L2);
+    }
+    if (buttonIdx == GamepadState.BUTTON_R2) {
+      return state.triggerR > GYRO_TRIGGER_PRESS_THRESHOLD
+          || state.isButtonPressed(GamepadState.BUTTON_R2);
+    }
+    return state.isButtonPressed(buttonIdx);
+  }
+
+  // Binding gamepad ordinals line up with GamepadState button indices, except the d-pad.
+  private static int gamepadButtonIdxOf(Binding binding) {
+    switch (binding) {
+      case GAMEPAD_DPAD_UP:
+        return GamepadState.BUTTON_DPAD_UP;
+      case GAMEPAD_DPAD_DOWN:
+        return GamepadState.BUTTON_DPAD_DOWN;
+      case GAMEPAD_DPAD_LEFT:
+        return GamepadState.BUTTON_DPAD_LEFT;
+      case GAMEPAD_DPAD_RIGHT:
+        return GamepadState.BUTTON_DPAD_RIGHT;
+      default:
+        return binding.ordinal() - Binding.GAMEPAD_BUTTON_A.ordinal();
+    }
+  }
+
+  public static Binding getGyroMouseActivator(SharedPreferences preferences) {
+    try {
+      return Binding.valueOf(
+          preferences.getString("gyro_mouse_trigger_binding", Binding.MOUSE_RIGHT_BUTTON.name()));
+    } catch (Exception e) {
+      return Binding.MOUSE_RIGHT_BUTTON;
+    }
+  }
+
+  private Binding getGyroMouseActivator() {
+    return getGyroMouseActivator(this.preferences);
+  }
+
+  // Called for every pointer button heading to the guest, from any source.
+  public void onPointerButtonInjected(Pointer.Button button, boolean pressed) {
+    if (button == null || !isGyroMouseGated()) {
+      return;
+    }
+    if (getGyroMouseActivator().getPointerButton() == button) {
+      updateGyroMouseActivation(pressed);
+    }
+  }
+
+  // Called for every key heading to the guest, from any source.
+  public void onKeyInjected(XKeycode keycode, boolean pressed) {
+    if (keycode == null || !isGyroMouseGated()) {
+      return;
+    }
+    Binding activator = getGyroMouseActivator();
+    if (activator.isKeyboard() && activator.keycode == keycode) {
+      updateGyroMouseActivation(pressed);
+    }
+  }
+
+  private boolean isGyroMouseGated() {
+    return this.preferences.getBoolean("gyro_enabled", false)
+        && this.preferences.getBoolean("mouse_gyro_enabled", false);
+  }
+
+  // Rising-edge guarded, so the same press arriving on more than one path stays idempotent.
+  private void updateGyroMouseActivation(boolean pressed) {
+    if (pressed
+        && !this.gyroMouseActivatorPressed
+        && this.preferences.getInt("gyro_mode", 0) == 1) {
+      this.gyroToggleEnabled = !this.gyroToggleEnabled;
+    }
+    this.gyroMouseActivatorPressed = pressed;
+  }
+
+  private void checkGyroActivatorMouseFlags(int flags) {
+    if ((flags & MouseEventFlags.LEFTDOWN) != 0) {
+      onPointerButtonInjected(Pointer.Button.BUTTON_LEFT, true);
+    } else if ((flags & MouseEventFlags.LEFTUP) != 0) {
+      onPointerButtonInjected(Pointer.Button.BUTTON_LEFT, false);
+    } else if ((flags & MouseEventFlags.RIGHTDOWN) != 0) {
+      onPointerButtonInjected(Pointer.Button.BUTTON_RIGHT, true);
+    } else if ((flags & MouseEventFlags.RIGHTUP) != 0) {
+      onPointerButtonInjected(Pointer.Button.BUTTON_RIGHT, false);
+    } else if ((flags & MouseEventFlags.MIDDLEDOWN) != 0) {
+      onPointerButtonInjected(Pointer.Button.BUTTON_MIDDLE, true);
+    } else if ((flags & MouseEventFlags.MIDDLEUP) != 0) {
+      onPointerButtonInjected(Pointer.Button.BUTTON_MIDDLE, false);
+    }
+  }
+
   private GamepadState getOutputGamepadState(GamepadState baseState, boolean applyGyroOverlay) {
-    if (!applyGyroOverlay || baseState == null) {
+    boolean applyTouch = this.screenTouchStickActive;
+    boolean applyRsScale = !applyTouch && this.rightStickSensitivity != 1.0f;
+    if ((!applyGyroOverlay && !applyTouch && !applyRsScale) || baseState == null) {
       return baseState;
     }
 
-    GyroSettings gyroSettings = getGyroSettings();
     this.outputGamepadState.copy(baseState);
-    if (gyroSettings.applyToRightStick) {
+    if (applyGyroOverlay) {
+      GyroSettings gyroSettings = getGyroSettings();
+      if (gyroSettings.applyToRightStick) {
+        this.outputGamepadState.thumbRX =
+            clamp(baseState.thumbRX + this.currentGyroStickX, -1.0f, 1.0f);
+        this.outputGamepadState.thumbRY =
+            clamp(baseState.thumbRY + this.currentGyroStickY, -1.0f, 1.0f);
+      } else {
+        this.outputGamepadState.thumbLX =
+            clamp(baseState.thumbLX + this.currentGyroStickX, -1.0f, 1.0f);
+        this.outputGamepadState.thumbLY =
+            clamp(baseState.thumbLY + this.currentGyroStickY, -1.0f, 1.0f);
+      }
+    }
+    if (applyTouch) {
       this.outputGamepadState.thumbRX =
-          clamp(baseState.thumbRX + this.currentGyroStickX, -1.0f, 1.0f);
+          clamp(this.outputGamepadState.thumbRX + this.currentTouchStickX, -1.0f, 1.0f);
       this.outputGamepadState.thumbRY =
-          clamp(baseState.thumbRY + this.currentGyroStickY, -1.0f, 1.0f);
-    } else {
-      this.outputGamepadState.thumbLX =
-          clamp(baseState.thumbLX + this.currentGyroStickX, -1.0f, 1.0f);
-      this.outputGamepadState.thumbLY =
-          clamp(baseState.thumbLY + this.currentGyroStickY, -1.0f, 1.0f);
+          clamp(this.outputGamepadState.thumbRY + this.currentTouchStickY, -1.0f, 1.0f);
+    }
+    if (applyRsScale) {
+      float rx = this.outputGamepadState.thumbRX;
+      float ry = this.outputGamepadState.thumbRY;
+      float mag = (float) Math.sqrt(rx * rx + ry * ry);
+      if (mag > 0.0f) {
+        float k = Math.min(mag * this.rightStickSensitivity, 1.0f) / mag;
+        this.outputGamepadState.thumbRX = rx * k;
+        this.outputGamepadState.thumbRY = ry * k;
+      }
     }
     return this.outputGamepadState;
   }
@@ -1490,6 +2055,7 @@ public class WinHandler {
     boolean enabled;
     int mode;
     int activatorKeyCode;
+    Binding activatorBinding;
     boolean applyToRightStick;
     float sensitivityX;
     float sensitivityY;

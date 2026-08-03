@@ -26,7 +26,9 @@ import androidx.core.text.HtmlCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
+import com.winlator.cmod.app.shell.UnifiedActivity
 import com.winlator.cmod.R
+import com.winlator.cmod.runtime.display.winhandler.WinHandler
 import com.winlator.cmod.runtime.input.ControllerHelper
 import com.winlator.cmod.runtime.input.ControlsEditorActivity
 import com.winlator.cmod.runtime.input.controls.Binding
@@ -34,8 +36,10 @@ import com.winlator.cmod.runtime.input.controls.ControlElement
 import com.winlator.cmod.runtime.input.controls.ControlsProfile
 import com.winlator.cmod.runtime.input.controls.ExternalController
 import com.winlator.cmod.runtime.input.controls.ExternalControllerBinding
+import com.winlator.cmod.runtime.input.controls.GestureProfileManager
 import com.winlator.cmod.runtime.input.controls.InputControlsManager
 import com.winlator.cmod.runtime.input.ui.InputControlsView
+import com.winlator.cmod.runtime.input.ui.TouchGestureConfig
 import com.winlator.cmod.shared.ui.toast.WinToast
 import com.winlator.cmod.shared.android.DirectoryPickerDialog
 import com.winlator.cmod.shared.io.FileUtils
@@ -53,6 +57,7 @@ import kotlinx.coroutines.launch
 
 class InputControlsFragment : Fragment() {
     private lateinit var manager: InputControlsManager
+    private lateinit var gestureProfileManager: GestureProfileManager
     private lateinit var preferences: SharedPreferences
 
     private var screenState by mutableStateOf(InputControlsScreenState())
@@ -63,6 +68,8 @@ class InputControlsFragment : Fragment() {
     private var pendingMultiChoiceAction: ((Set<Int>) -> Unit)? = null
 
     private var currentProfile: ControlsProfile? = null
+    private var selectedGestureProfileId = -1
+    private var gestureEditorExpanded = false
     private var triggerTypeExpanded = false
     private var gyroscopeExpanded = false
     private val expandedControllerIds = mutableSetOf<String>()
@@ -80,7 +87,12 @@ class InputControlsFragment : Fragment() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         manager = InputControlsManager(requireContext())
+        gestureProfileManager = GestureProfileManager(requireContext())
         preferences = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        val deepLink = activity?.intent?.getIntExtra("gesture_profile_id", -1) ?: -1
+        activity?.intent?.removeExtra("gesture_profile_id")
+        selectedGestureProfileId = deepLink
+        gestureEditorExpanded = deepLink >= 0
 
         val selectedProfileId = arguments?.getInt(ARG_SELECTED_PROFILE_ID, 0) ?: 0
         val profileId =
@@ -112,6 +124,7 @@ class InputControlsFragment : Fragment() {
                 ) {
                     InputControlsScreen(
                         state = screenState,
+                        bridge = (requireActivity() as? UnifiedActivity)?.settingsNavBridge,
                         actions =
                             InputControlsScreenActions(
                                 onSelectProfile = ::showProfilePicker,
@@ -119,6 +132,7 @@ class InputControlsFragment : Fragment() {
                                 onAddProfile = ::addProfile,
                                 onEditProfile = ::editProfile,
                                 onDuplicateProfile = ::duplicateProfile,
+                                onResetProfile = ::resetProfile,
                                 onRemoveProfile = ::removeProfile,
                                 onDismissDialog = ::dismissComposeDialog,
                                 onConfirmDialog = ::confirmComposeDialog,
@@ -126,6 +140,12 @@ class InputControlsFragment : Fragment() {
                                 onChoiceDialogSelect = ::selectChoiceDialog,
                                 onMultiChoiceDialogConfirm = ::confirmMultiChoiceDialog,
                                 onOverlayOpacityChanged = ::setOverlayOpacity,
+                                onAutoHideTouchOnControllerChanged = { enabled ->
+                                    preferences.edit()
+                                        .putBoolean("auto_hide_touch_on_controller", enabled)
+                                        .apply()
+                                    publishUiState()
+                                },
                                 onGyroscopeEnabledChanged = { enabled ->
                                     val editor = preferences.edit()
                                     editor.putBoolean("gyro_enabled", enabled)
@@ -134,6 +154,10 @@ class InputControlsFragment : Fragment() {
                                 },
                                 onGyroscopeModeSelected = { mode ->
                                     preferences.edit().putInt("gyro_mode", mode).apply()
+                                    publishUiState()
+                                },
+                                onGyroOrientationModeChanged = { enabled ->
+                                    preferences.edit().putBoolean("gyro_orientation_enabled", enabled).apply()
                                     publishUiState()
                                 },
                                 onGyroscopeActivatorClick = ::showActivatorPicker,
@@ -172,6 +196,15 @@ class InputControlsFragment : Fragment() {
                                 },
                                 onAttachGyroPreview = ::attachGyroPreview,
                                 onDetachGyroPreview = ::detachGyroPreview,
+                                onSelectGestureProfile = ::showGestureProfilePicker,
+                                onToggleGestureEditor = ::toggleGestureEditor,
+                                onGestureConfigChanged = ::saveSelectedGestureConfig,
+                                onNewGestureProfile = ::addGestureProfile,
+                                onRenameGestureProfile = ::renameSelectedGestureProfile,
+                                onDuplicateGestureProfile = ::duplicateSelectedGestureProfile,
+                                onDeleteGestureProfile = ::removeSelectedGestureProfile,
+                                onImportGestureProfile = ::promptImportGestureProfile,
+                                onExportGestureProfile = ::exportSelectedGestureProfile,
                                 onTriggerTypeSelected = { index ->
                                     preferences.edit().putInt("trigger_type", index).apply()
                                     publishUiState()
@@ -286,9 +319,12 @@ class InputControlsFragment : Fragment() {
             InputControlsScreenState(
                 selectedProfileName = profile?.name,
                 selectedProfileElementCount = profile?.elementCountFromFile ?: 0,
+                selectedProfileCanReset = profile != null && manager.canResetProfile(profile),
                 overlayOpacity = (preferences.getFloat("overlay_opacity", InputControlsView.DEFAULT_OVERLAY_OPACITY) * 100).toInt(),
+                autoHideTouchOnController = preferences.getBoolean("auto_hide_touch_on_controller", false),
                 gyroscopeEnabled = preferences.getBoolean("gyro_enabled", false),
                 gyroscopeModeIndex = preferences.getInt("gyro_mode", 0),
+                gyroOrientationEnabled = preferences.getBoolean("gyro_orientation_enabled", false),
                 gyroscopeActivatorLabel = currentGyroActivatorLabel(),
                 rightStickGyroEnabled = preferences.getBoolean("process_gyro_with_left_trigger", false),
                 gyroMouseEnabled = preferences.getBoolean("mouse_gyro_enabled", false),
@@ -296,10 +332,13 @@ class InputControlsFragment : Fragment() {
                 gyroscopeExpanded = gyroscopeExpanded,
                 gyroXSensitivity = (preferences.getFloat("gyro_x_sensitivity", 1.0f) * 100).toInt(),
                 gyroYSensitivity = (preferences.getFloat("gyro_y_sensitivity", 1.0f) * 100).toInt(),
-                gyroSmoothing = (preferences.getFloat("gyro_smoothing", 0.9f) * 100).toInt(),
+                gyroSmoothing = (preferences.getFloat("gyro_smoothing", 0.5f) * 100).toInt(),
                 gyroDeadzone = (preferences.getFloat("gyro_deadzone", 0.05f) * 100).toInt(),
                 invertGyroX = preferences.getBoolean("invert_gyro_x", false),
                 invertGyroY = preferences.getBoolean("invert_gyro_y", false),
+                selectedGestureProfileName = selectedGestureProfile().name,
+                gestureEditorExpanded = gestureEditorExpanded,
+                selectedGestureConfig = TouchGestureConfig.fromJson(selectedGestureProfile().configJson),
                 triggerTypeIndex = preferences.getInt("trigger_type", ExternalController.TRIGGER_IS_AXIS.toInt()),
                 triggerCardExpanded = triggerTypeExpanded,
                 triggerDescription = triggerDescription,
@@ -489,6 +528,31 @@ class InputControlsFragment : Fragment() {
             }
         } else {
             WinToast.show(requireContext(), R.string.input_controls_editor_no_profile_selected)
+        }
+    }
+
+    private fun resetProfile() {
+        val profile = currentProfile
+        if (profile == null) {
+            WinToast.show(requireContext(), R.string.input_controls_editor_no_profile_selected)
+            return
+        }
+        if (!manager.canResetProfile(profile)) {
+            WinToast.show(requireContext(), R.string.input_controls_editor_reset_unavailable)
+            return
+        }
+        showConfirmDialog(
+            message = getString(R.string.input_controls_editor_confirm_reset_profile),
+            confirmLabel = getString(R.string.common_ui_reset),
+            tone = InputDialogTone.Danger,
+        ) {
+            currentProfile = manager.resetProfile(profile)
+            persistSelectedProfileId()
+            expandedControllerIds.clear()
+            stopControllerInputCapture()
+            refreshVisibleControllers()
+            publishUiState()
+            WinToast.show(requireContext(), R.string.input_controls_editor_profile_reset)
         }
     }
 
@@ -730,7 +794,142 @@ class InputControlsFragment : Fragment() {
         }
     }
 
+    private fun selectedGestureProfile() =
+        gestureProfileManager.getProfile(selectedGestureProfileId)
+            ?: gestureProfileManager.profiles.firstOrNull()
+            ?: gestureProfileManager.defaultProfile
+
+    private fun showGestureProfilePicker() {
+        val profiles =
+            gestureProfileManager.profiles.ifEmpty { listOf(gestureProfileManager.defaultProfile) }
+        val names = profiles.map { it.name }.toTypedArray()
+        val current = selectedGestureProfile().id
+        val checkedIndex = profiles.indexOfFirst { it.id == current }.let { if (it >= 0) it else 0 }
+        showChoiceDialog(
+            title = getString(R.string.input_controls_editor_select_profile),
+            items = names,
+            checkedIndex = checkedIndex,
+        ) { which ->
+            selectedGestureProfileId = profiles[which].id
+            publishUiState()
+        }
+    }
+
+    private fun toggleGestureEditor() {
+        gestureEditorExpanded = !gestureEditorExpanded
+        publishUiState()
+    }
+
+    private fun saveSelectedGestureConfig(config: TouchGestureConfig) {
+        val profile = selectedGestureProfile()
+        profile.configJson = config.toJson()
+        gestureProfileManager.saveProfile(profile)
+        selectedGestureProfileId = profile.id
+        publishUiState()
+    }
+
+    private fun addGestureProfile() {
+        showPromptDialog(
+            title = getString(R.string.input_controls_editor_profile_name),
+            initialValue = "",
+            confirmLabel = getString(R.string.common_ui_ok),
+        ) { name ->
+            val profile = gestureProfileManager.createProfile(name)
+            selectedGestureProfileId = profile.id
+            gestureEditorExpanded = true
+            publishUiState()
+        }
+    }
+
+    private fun renameSelectedGestureProfile() {
+        val profile = selectedGestureProfile()
+        showPromptDialog(
+            title = getString(R.string.input_controls_editor_profile_name),
+            initialValue = profile.name,
+            confirmLabel = getString(R.string.common_ui_ok),
+        ) { name ->
+            gestureProfileManager.renameProfile(profile, name)
+            publishUiState()
+        }
+    }
+
+    private fun duplicateSelectedGestureProfile() {
+        val duplicate = gestureProfileManager.duplicateProfile(selectedGestureProfile())
+        selectedGestureProfileId = duplicate.id
+        publishUiState()
+    }
+
+    private fun removeSelectedGestureProfile() {
+        val profile = selectedGestureProfile()
+        showConfirmDialog(
+            message = getString(R.string.input_controls_editor_confirm_remove_profile),
+            confirmLabel = getString(R.string.common_ui_remove),
+            tone = InputDialogTone.Danger,
+        ) {
+            gestureProfileManager.removeProfile(profile)
+            selectedGestureProfileId = gestureProfileManager.profiles.firstOrNull()?.id ?: -1
+            publishUiState()
+        }
+    }
+
+    private fun promptImportGestureProfile() {
+        val activity = activity ?: return
+        DirectoryPickerDialog.showFile(
+            activity = activity,
+            title = getString(R.string.gesture_profile_import),
+            allowedExtensions = setOf("gcp"),
+        ) { path ->
+            if (!isAdded) return@showFile
+            importGestureProfileFromJson(FileUtils.readString(File(path)))
+        }
+    }
+
+    private fun importGestureProfileFromJson(jsonString: String?) {
+        try {
+            if (jsonString.isNullOrBlank()) {
+                WinToast.show(
+                    requireContext(),
+                    getString(R.string.input_controls_editor_unable_to_import) + ": Empty file",
+                )
+                return
+            }
+            val imported =
+                runCatching {
+                    gestureProfileManager.importProfile(JSONObject(jsonString))
+                }.getOrNull()
+            if (imported != null) {
+                selectedGestureProfileId = imported.id
+                publishUiState()
+            } else {
+                publishUiState()
+                WinToast.show(
+                    requireContext(),
+                    getString(R.string.input_controls_editor_unable_to_import) + ": Invalid profile data",
+                )
+            }
+        } catch (e: Exception) {
+            WinToast.show(
+                requireContext(),
+                getString(R.string.input_controls_editor_unable_to_import) + ": " + e.message,
+            )
+        }
+    }
+
+    private fun exportSelectedGestureProfile() {
+        val profile = selectedGestureProfile()
+        val exportedFile = gestureProfileManager.exportProfile(profile)
+        if (exportedFile != null) {
+            WinToast.show(
+                requireContext(),
+                getString(R.string.input_controls_editor_profile_exported_to) + " " + exportedFile.path,
+            )
+        }
+    }
+
     private fun currentGyroActivatorLabel(): String {
+        if (preferences.getBoolean("mouse_gyro_enabled", false)) {
+            return WinHandler.getGyroMouseActivator(preferences).toString()
+        }
         val names = resources.getStringArray(R.array.button_options)
         val keycodes = resources.getIntArray(R.array.button_keycodes)
         val currentKeycode = preferences.getInt("gyro_trigger_button", KeyEvent.KEYCODE_BUTTON_L1)
@@ -739,6 +938,10 @@ class InputControlsFragment : Fragment() {
     }
 
     private fun showActivatorPicker() {
+        if (preferences.getBoolean("mouse_gyro_enabled", false)) {
+            showMouseGyroActivatorPicker()
+            return
+        }
         val names = resources.getStringArray(R.array.button_options)
         val keycodes = resources.getIntArray(R.array.button_keycodes)
         val currentKeycode = preferences.getInt("gyro_trigger_button", KeyEvent.KEYCODE_BUTTON_L1)
@@ -749,6 +952,19 @@ class InputControlsFragment : Fragment() {
             checkedIndex = checkedIndex,
         ) { which ->
             preferences.edit().putInt("gyro_trigger_button", keycodes[which]).apply()
+            publishUiState()
+        }
+    }
+
+    private fun showMouseGyroActivatorPicker() {
+        val bindings = Binding.activatorBindingValues()
+        val current = WinHandler.getGyroMouseActivator(preferences)
+        showSingleChoiceDialog(
+            title = getString(R.string.session_gyroscope_activator_button),
+            items = bindings.map { it.toString() }.toTypedArray(),
+            checkedIndex = bindings.indexOf(current).coerceAtLeast(0),
+        ) { which ->
+            preferences.edit().putString("gyro_mouse_trigger_binding", bindings[which].name).apply()
             publishUiState()
         }
     }
@@ -781,18 +997,18 @@ class InputControlsFragment : Fragment() {
         val sensorManager = requireContext().getSystemService(Activity.SENSOR_SERVICE) as SensorManager
         val gyroscopeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE) ?: return
 
-        val smoothingFactor = preferences.getFloat("gyro_smoothing", 0.9f)
-        val gyroDeadzone = preferences.getFloat("gyro_deadzone", 0.05f)
-        val invertGyroX = preferences.getBoolean("invert_gyro_x", false)
-        val invertGyroY = preferences.getBoolean("invert_gyro_y", false)
-        val gyroSensitivityX = preferences.getFloat("gyro_x_sensitivity", 1.0f)
-        val gyroSensitivityY = preferences.getFloat("gyro_y_sensitivity", 1.0f)
         val smoothGyroX = floatArrayOf(0f)
         val smoothGyroY = floatArrayOf(0f)
 
         val listener =
             object : SensorEventListener {
                 override fun onSensorChanged(event: SensorEvent) {
+                    val smoothingFactor = preferences.getFloat("gyro_smoothing", 0.5f)
+                    val gyroDeadzone = preferences.getFloat("gyro_deadzone", 0.05f)
+                    val invertGyroX = preferences.getBoolean("invert_gyro_x", false)
+                    val invertGyroY = preferences.getBoolean("invert_gyro_y", false)
+                    val gyroSensitivityX = preferences.getFloat("gyro_x_sensitivity", 1.0f)
+                    val gyroSensitivityY = preferences.getFloat("gyro_y_sensitivity", 1.0f)
                     var rawGyroX = event.values[0]
                     var rawGyroY = event.values[1]
 
@@ -1147,7 +1363,7 @@ class InputControlsFragment : Fragment() {
     companion object {
         private const val ARG_SELECTED_PROFILE_ID = "selectedProfileId"
         private const val INPUT_CONTROLS_URL =
-            "https://raw.githubusercontent.com/Xnick417x/winlator-nightly-wcp/main/Profiles/%s"
+            "https://raw.githubusercontent.com/nicholasx417/WinNative-Components/main/Profiles/%s"
         private const val PREF_SELECTED_PROFILE_ID = "input_controls_selected_profile_id"
 
         fun newInstance(profileId: Int = 0): InputControlsFragment =

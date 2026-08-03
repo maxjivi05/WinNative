@@ -85,7 +85,7 @@ public class XClientRequestHandler implements RequestHandler {
       outputStream.writeInt(0);
       outputStream.writeInt(0xffffff);
       outputStream.writeInt(0x000000);
-      outputStream.writeInt(client.xServer.windowManager.rootWindow.getAllEventMasks().getBits());
+      outputStream.writeInt((int) client.xServer.windowManager.rootWindow.getAllEventMasks().getBits());
       outputStream.writeShort(client.xServer.screenInfo.width);
       outputStream.writeShort(client.xServer.screenInfo.height);
       outputStream.writeShort(client.xServer.screenInfo.getWidthInMillimeters());
@@ -213,6 +213,7 @@ public class XClientRequestHandler implements RequestHandler {
                   XServer.Lockable.INPUT_DEVICE)) {
             WindowRequests.destroySubWindows(client, inputStream, outputStream);
           }
+          break;
         case ClientOpcodes.REPARENT_WINDOW:
           try (XLock lock = client.xServer.lock(XServer.Lockable.WINDOW_MANAGER)) {
             WindowRequests.reparentWindow(client, inputStream, outputStream);
@@ -428,14 +429,10 @@ public class XClientRequestHandler implements RequestHandler {
           }
           break;
         case ClientOpcodes.PUT_IMAGE:
-          boolean isLargeImage = false;
           try (XLock lock =
               client.xServer.lock(
                   XServer.Lockable.DRAWABLE_MANAGER, XServer.Lockable.GRAPHIC_CONTEXT_MANAGER)) {
-            isLargeImage = DrawRequests.putImage(client, inputStream, outputStream);
-          }
-          if (isLargeImage) {
-            client.enforceAbsoluteFramerate();
+            DrawRequests.putImage(client, inputStream, outputStream);
           }
           break;
         case ClientOpcodes.GET_IMAGE:

@@ -169,6 +169,18 @@ object PrefManager {
             setInt("steam_user_account_id", value)
         }
 
+    var wnHybridMode: Boolean
+        get() = getBoolean("wn_hybrid_mode", true)
+        set(value) {
+            setBoolean("wn_hybrid_mode", value)
+        }
+
+    var wnPlanW: Boolean
+        get() = getBoolean("wn_plan_w", true)
+        set(value) {
+            setBoolean("wn_plan_w", value)
+        }
+
     var cellId: Int
         get() = getInt("cell_id", 0)
         set(value) {
@@ -197,6 +209,12 @@ object PrefManager {
         get() = getString("steam_user_avatar_hash", "")
         set(value) {
             setString("steam_user_avatar_hash", value)
+        }
+
+    var friendsSnapshotJson: String
+        get() = getString("friends_snapshot_json", "")
+        set(value) {
+            setString("friends_snapshot_json", value)
         }
 
     var personaState: Int
@@ -258,6 +276,18 @@ object PrefManager {
             setString("library_content_filters", value)
         }
 
+    var libraryImmersiveMode: Boolean
+        get() = getBoolean("library_immersive_mode", false)
+        set(value) {
+            setBoolean("library_immersive_mode", value)
+        }
+
+    var libraryImmersiveBlur: Boolean
+        get() = getBoolean("library_immersive_blur", false)
+        set(value) {
+            setBoolean("library_immersive_blur", value)
+        }
+
     var enableSteamLogs: Boolean
         get() = getBoolean("enable_steam_logs", false)
         set(value) {
@@ -294,6 +324,42 @@ object PrefManager {
             setString("gog_download_folder", value)
         }
 
+    var chatServiceEnabled: Boolean
+        get() = getBoolean("chat_service_enabled", true)
+        set(value) {
+            setBoolean("chat_service_enabled", value)
+        }
+
+    var chatNotificationsEnabled: Boolean
+        get() = getBoolean("chat_notifications_enabled", true)
+        set(value) {
+            setBoolean("chat_notifications_enabled", value)
+        }
+
+    var chatHeadsEnabled: Boolean
+        get() = getBoolean("chat_heads_enabled", false)
+        set(value) {
+            setBoolean("chat_heads_enabled", value)
+        }
+
+    var chatInGameEnabled: Boolean
+        get() = getBoolean("chat_in_game_enabled", false)
+        set(value) {
+            setBoolean("chat_in_game_enabled", value)
+        }
+
+    var chatHeadsAutoHide: Boolean
+        get() = getBoolean("chat_heads_auto_hide", false)
+        set(value) {
+            setBoolean("chat_heads_auto_hide", value)
+        }
+
+    var chatStayRunningOnExit: Boolean
+        get() = getBoolean("chat_stay_running_on_exit", false)
+        set(value) {
+            setBoolean("chat_stay_running_on_exit", value)
+        }
+
     fun clearAuthTokens() {
         requirePrefs().edit().apply {
             remove("user_name")
@@ -312,11 +378,4 @@ object PrefManager {
         libraryLayoutModeCache = null
         requirePrefs().edit().clear().commit()
     }
-
-    // Legacy support for Winlator properties if needed
-    var graphicsDriver: String
-        get() = getString("graphics_driver", "virgl")
-        set(value) {
-            setString("graphics_driver", value)
-        }
 }

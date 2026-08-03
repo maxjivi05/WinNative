@@ -1,6 +1,5 @@
 package com.winlator.cmod.feature.sync.google
 import android.app.Activity
-import android.content.Context
 import android.text.format.DateUtils
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -13,15 +12,12 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -38,10 +34,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.Gamepad
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.Icon
@@ -49,6 +47,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -70,11 +70,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.winlator.cmod.R
+import com.winlator.cmod.feature.settings.SettingsNavBridge
+import com.winlator.cmod.shared.ui.focus.rememberSettingsContentNav
+import com.winlator.cmod.shared.ui.nav.LocalPaneNav
+import com.winlator.cmod.shared.ui.nav.paneNavItem
 import com.winlator.cmod.shared.ui.toast.WinToast
-import com.winlator.cmod.shared.ui.outlinedSwitchColors
 import kotlinx.coroutines.launch
 
-private val BgDark = Color(0xFF18181D)
+private val BgDark = Color(0xFF11111C)
 private val CardDark = Color(0xFF1C1C2A)
 private val CardBorder = Color(0xFF2A2A3A)
 private val IconBoxBg = Color(0xFF242434)
@@ -84,10 +87,11 @@ private val TextSecondary = Color(0xFF7A8FA8)
 private val StatusGreen = Color(0xFF3FB950)
 private val WarningAmber = Color(0xFFFFC857)
 private val DangerRed = Color(0xFFFF6B6B)
+private val NavHighlight = Color(0xFF4FC3F7)
 private val StoreLoginActionButtonWidth = 112.dp
 
 @Composable
-fun GoogleScreen() {
+fun GoogleScreen(bridge: SettingsNavBridge? = null) {
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
@@ -97,19 +101,14 @@ fun GoogleScreen() {
     val navBarEndPadding = navBarPadding.calculateEndPadding(layoutDirection)
     val navBarBottomPadding = navBarPadding.calculateBottomPadding()
 
+    val contentNav = rememberSettingsContentNav(bridge)
+
     var googleSignedIn by remember { mutableStateOf(false) }
     var syncState by remember { mutableStateOf(CloudSyncManager.StoreLoginSyncState()) }
     var busy by remember { mutableStateOf(false) }
+    var autoSignIn by remember { mutableStateOf(CloudSyncManager.isAutoSignInOnLaunchEnabled(context)) }
 
-    val autoBackupPrefs =
-        remember {
-            context.getSharedPreferences("google_store_login_sync", Context.MODE_PRIVATE)
-        }
-    var autoBackupEnabled by remember {
-        mutableStateOf(autoBackupPrefs.getBoolean("cloud_sync_auto_backup", false))
-    }
-
-    fun refreshState() {
+    fun loadCachedState() {
         val currentActivity = activity ?: return
         scope.launch {
             syncState = CloudSyncManager.readStoreLoginState(currentActivity)
@@ -117,33 +116,67 @@ fun GoogleScreen() {
         }
     }
 
-    LaunchedEffect(activity) {
-        val currentActivity = activity ?: return@LaunchedEffect
+    fun refreshRemoteState() {
+        val currentActivity = activity ?: return
         busy = true
-        syncState = CloudSyncManager.syncOnGoogleScreenOpened(currentActivity)
-        googleSignedIn = syncState.googleSignedIn
-        busy = false
+        scope.launch {
+            try {
+                syncState = CloudSyncManager.refreshStoreLoginState(currentActivity)
+                googleSignedIn = syncState.googleSignedIn
+            } finally {
+                busy = false
+            }
+        }
     }
 
-    LazyColumn(
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .background(BgDark),
-        contentPadding =
-            PaddingValues(
-                start = 16.dp + navBarStartPadding,
-                top = 16.dp,
-                end = 16.dp + navBarEndPadding,
-                bottom = 16.dp + navBarBottomPadding,
-            ),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item("services_section") {
-            SectionLabel(stringResource(R.string.google_cloud_services))
-        }
+    LaunchedEffect(activity) {
+        val currentActivity = activity ?: return@LaunchedEffect
+        syncState = CloudSyncManager.syncOnGoogleScreenOpened(currentActivity)
+        googleSignedIn = syncState.googleSignedIn
+    }
 
-        item("google_account_card") {
+    CompositionLocalProvider(LocalPaneNav provides contentNav) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .background(BgDark)
+                    .verticalScroll(rememberScrollState())
+                    .padding(
+                        start = 16.dp + navBarStartPadding,
+                        top = 16.dp,
+                        end = 16.dp + navBarEndPadding,
+                        bottom = 16.dp + navBarBottomPadding,
+                    ),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SectionLabel(stringResource(R.string.google_auto_signin_section))
+
+            AutoSignInToggleCard(
+                checked = autoSignIn,
+                onCheckedChange = { enabled ->
+                    autoSignIn = enabled
+                    CloudSyncManager.setAutoSignInOnLaunchEnabled(context, enabled)
+                    if (enabled) {
+                        // Opted in: sign in right away (a toast here is expected, unlike the silent OFF path).
+                        val currentActivity = activity ?: return@AutoSignInToggleCard
+                        busy = true
+                        CloudSyncManager.signIn(currentActivity) { success, message ->
+                            busy = false
+                            googleSignedIn = success
+                            if (success) {
+                                com.winlator.cmod.feature.sync.google.GameSaveBackupManager
+                                    .setDriveConnected(context, true)
+                            }
+                            WinToast.show(context, message)
+                            refreshRemoteState()
+                        }
+                    }
+                },
+            )
+
+            SectionLabel(stringResource(R.string.google_cloud_services))
+
             GoogleAccountCard(
                 isLoggedIn = googleSignedIn,
                 busy = busy,
@@ -153,8 +186,10 @@ fun GoogleScreen() {
                     CloudSyncManager.signIn(currentActivity) { success, message ->
                         busy = false
                         googleSignedIn = success
+                        // Keep the Google Saved-Games gate (used by save backup/history) in sync.
+                        GameSaveBackupManager.setDriveConnected(context, success)
                         WinToast.show(context, message)
-                        refreshState()
+                        refreshRemoteState()
                     }
                 },
                 onSignOut = {
@@ -163,21 +198,21 @@ fun GoogleScreen() {
                     CloudSyncManager.signOut(currentActivity) { success, message ->
                         busy = false
                         googleSignedIn = !success
+                        if (success) GameSaveBackupManager.setDriveConnected(context, false)
                         WinToast.show(context, message)
-                        refreshState()
+                        loadCachedState()
                     }
                 },
             )
-        }
 
-        item("store_logins_section") {
             SectionLabel(stringResource(R.string.google_cloud_store_logins), modifier = Modifier.padding(top = 8.dp))
-        }
 
-        item("store_login_card") {
             StoreLoginCard(
                 state = syncState,
                 busy = busy,
+                onRefresh = {
+                    refreshRemoteState()
+                },
                 onBackup = {
                     val currentActivity = activity ?: return@StoreLoginCard
                     busy = true
@@ -185,7 +220,7 @@ fun GoogleScreen() {
                         try {
                             val message = CloudSyncManager.backupStoreLogins(currentActivity)
                             WinToast.show(context, message)
-                            syncState = CloudSyncManager.readStoreLoginState(currentActivity)
+                            syncState = CloudSyncManager.refreshStoreLoginState(currentActivity)
                             googleSignedIn = syncState.googleSignedIn
                         } finally {
                             busy = false
@@ -199,123 +234,13 @@ fun GoogleScreen() {
                         try {
                             val message = CloudSyncManager.restoreStoreLogins(currentActivity)
                             WinToast.show(context, message)
-                            syncState = CloudSyncManager.readStoreLoginState(currentActivity)
+                            syncState = CloudSyncManager.refreshStoreLoginState(currentActivity)
                             googleSignedIn = syncState.googleSignedIn
                         } finally {
                             busy = false
                         }
                     }
                 },
-            )
-        }
-
-        item("auto_backup_section") {
-            SectionLabel(stringResource(R.string.google_cloud_auto_backup), modifier = Modifier.padding(top = 8.dp))
-        }
-
-        item("auto_backup_card") {
-            AutoBackupCard(
-                enabled = autoBackupEnabled,
-                googleSignedIn = googleSignedIn,
-                busy = busy,
-                onToggle = { newValue ->
-                    if (newValue) {
-                        val currentActivity = activity ?: return@AutoBackupCard
-                        busy = true
-                        scope.launch {
-                            try {
-                                val alreadyAuthorized = GameSaveBackupManager.requestDriveAuthorization(currentActivity)
-                                if (alreadyAuthorized) {
-                                    autoBackupEnabled = true
-                                    autoBackupPrefs.edit().putBoolean("cloud_sync_auto_backup", true).apply()
-                                } else {
-                                    autoBackupEnabled = false
-                                    autoBackupPrefs.edit().putBoolean("cloud_sync_auto_backup", false).apply()
-                                }
-                            } catch (e: Exception) {
-                                WinToast.show(context, "Drive authorization failed: ${e.message}")
-                            } finally {
-                                busy = false
-                            }
-                        }
-                    } else {
-                        autoBackupEnabled = false
-                        autoBackupPrefs.edit().putBoolean("cloud_sync_auto_backup", false).apply()
-                    }
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun AutoBackupCard(
-    enabled: Boolean,
-    googleSignedIn: Boolean,
-    busy: Boolean,
-    onToggle: (Boolean) -> Unit,
-) {
-    Box(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(CardDark)
-                .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
-                .clickable(enabled = !busy) { onToggle(!enabled) },
-    ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier =
-                    Modifier
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(IconBoxBg),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.CloudSync,
-                    contentDescription = null,
-                    tint = if (enabled && googleSignedIn) StatusGreen else TextSecondary,
-                    modifier = Modifier.size(17.dp),
-                )
-            }
-
-            Spacer(Modifier.width(13.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.google_cloud_auto_backup),
-                    color = TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.google_cloud_auto_backup_summary),
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                )
-            }
-
-            Spacer(Modifier.width(4.dp))
-
-            Switch(
-                checked = enabled && googleSignedIn,
-                onCheckedChange = { onToggle(it) },
-                enabled = !busy,
-                modifier = Modifier.scale(0.78f),
-                colors =
-                    outlinedSwitchColors(
-                        accentColor = StatusGreen,
-                        textSecondaryColor = TextSecondary,
-                    ),
             )
         }
     }
@@ -334,6 +259,75 @@ private fun SectionLabel(
         letterSpacing = 1.4.sp,
         modifier = modifier.padding(bottom = 4.dp),
     )
+}
+
+@Composable
+private fun AutoSignInToggleCard(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(CardDark)
+                .border(1.dp, CardBorder, RoundedCornerShape(14.dp))
+                .paneNavItem(
+                    cornerRadius = 14.dp,
+                    onActivate = { onCheckedChange(!checked) },
+                    highlightColor = NavHighlight,
+                    tapToSelect = true,
+                )
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(IconBoxBg),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Gamepad,
+                contentDescription = null,
+                tint = Accent,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.google_auto_signin_title),
+                color = TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.google_auto_signin_summary),
+                color = TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.focusProperties { canFocus = false },
+            colors =
+                SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Accent,
+                    uncheckedThumbColor = TextSecondary,
+                    uncheckedTrackColor = IconBoxBg,
+                    uncheckedBorderColor = CardBorder,
+                ),
+        )
+    }
 }
 
 @Composable
@@ -533,6 +527,7 @@ private fun GoogleAccountCard(
 private fun StoreLoginCard(
     state: CloudSyncManager.StoreLoginSyncState,
     busy: Boolean,
+    onRefresh: () -> Unit,
     onBackup: () -> Unit,
     onRestore: () -> Unit,
 ) {
@@ -647,6 +642,14 @@ private fun StoreLoginCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         ActionButton(
+                            label = if (busy) stringResource(R.string.google_cloud_working) else stringResource(R.string.cloud_saves_history_refresh),
+                            textColor = StatusGreen,
+                            icon = Icons.Outlined.Refresh,
+                            enabled = !busy && state.googleSignedIn,
+                            onClick = onRefresh,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        ActionButton(
                             label = if (busy) stringResource(R.string.google_cloud_working) else stringResource(R.string.google_cloud_backup),
                             textColor = WarningAmber,
                             icon = Icons.Outlined.Upload,
@@ -705,7 +708,16 @@ private fun StoreLoginCard(
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ActionButton(
+                            label = if (busy) stringResource(R.string.google_cloud_working) else stringResource(R.string.cloud_saves_history_refresh),
+                            textColor = StatusGreen,
+                            icon = Icons.Outlined.Refresh,
+                            enabled = !busy && state.googleSignedIn,
+                            onClick = onRefresh,
+                        )
                         ActionButton(
                             label = if (busy) stringResource(R.string.google_cloud_working) else stringResource(R.string.google_cloud_backup),
                             textColor = WarningAmber,
@@ -847,7 +859,12 @@ private fun ActionButton(
                     1.dp,
                     if (enabled) textColor.copy(alpha = 0.30f) else TextSecondary.copy(alpha = 0.2f),
                     RoundedCornerShape(8.dp),
-                ).pointerInput(onClick, enabled) {
+                ).paneNavItem(
+                    cornerRadius = 8.dp,
+                    onActivate = { if (enabled) onClick() },
+                    highlightColor = NavHighlight,
+                )
+                .pointerInput(onClick, enabled) {
                     detectTapGestures(
                         onPress = {
                             if (!enabled) return@detectTapGestures

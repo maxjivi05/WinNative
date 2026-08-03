@@ -17,6 +17,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -46,15 +47,27 @@ public abstract class WineUtils {
         if (relativePath.isEmpty()) return "C:\\";
         return "C:\\" + relativePath;
       }
+
+      String driveZRoot =
+          normalizeHostPath(new File(container.getRootDir(), "../..").getAbsolutePath());
+      if (pathStartsWith(normalizedHostPath, driveZRoot)) {
+        String relativePath = normalizedHostPath.substring(driveZRoot.length()).replace("/", "\\");
+        while (relativePath.startsWith("\\")) relativePath = relativePath.substring(1);
+        if (relativePath.isEmpty()) return "Z:\\";
+        return "Z:\\" + relativePath;
+      }
     }
 
     String bestDriveLetter = null;
     String bestDriveRoot = null;
 
-    String drives =
-        container != null && container.getDrives() != null
-            ? container.getDrives()
-            : Container.DEFAULT_DRIVES;
+    String drives = readDrivesFromPrefix(container);
+    if (drives.isEmpty()) {
+      drives =
+          container != null && container.getDrives() != null
+              ? container.getDrives()
+              : Container.DEFAULT_DRIVES;
+    }
 
     for (String[] drive : Container.drivesIterator(drives)) {
       if (drive.length < 2) continue;
@@ -92,6 +105,11 @@ public abstract class WineUtils {
   }
 
   public static String normalizePersistentDrives(Context context, String drives) {
+    return normalizePersistentDrives(context, drives, true);
+  }
+
+  public static String normalizePersistentDrives(
+      Context context, String drives, boolean ensureDefaults) {
     List<String[]> entries = new ArrayList<>();
     LinkedHashSet<String> usedLetters = new LinkedHashSet<>();
     LinkedHashSet<String> usedPaths = new LinkedHashSet<>();
@@ -115,15 +133,17 @@ public abstract class WineUtils {
       }
     }
 
-    String downloadsPath =
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            .getAbsolutePath();
-    String externalStoragePath = Environment.getExternalStorageDirectory().getAbsolutePath();
+    if (ensureDefaults) {
+      String downloadsPath =
+          Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+              .getAbsolutePath();
+      String externalStoragePath = Environment.getExternalStorageDirectory().getAbsolutePath();
 
-    ensureDriveMapping(entries, usedLetters, usedPaths, "D", downloadsPath);
-    ensureDriveMapping(entries, usedLetters, usedPaths, "F", externalStoragePath);
-    for (String sdCardRootPath : getMountedSdCardRootPaths(context)) {
-      ensureDriveMapping(entries, usedLetters, usedPaths, "G", sdCardRootPath);
+      ensureDriveMapping(entries, usedLetters, usedPaths, "D", downloadsPath);
+      ensureDriveMapping(entries, usedLetters, usedPaths, "F", externalStoragePath);
+      for (String sdCardRootPath : getMountedSdCardRootPaths(context)) {
+        ensureDriveMapping(entries, usedLetters, usedPaths, "G", sdCardRootPath);
+      }
     }
 
     StringBuilder normalized = new StringBuilder();
@@ -234,6 +254,7 @@ public abstract class WineUtils {
   public static File ensureDriveCGameSymlink(
       Container container, String source, String gameInstallPath) {
     if (container == null || gameInstallPath == null || gameInstallPath.isEmpty()) return null;
+    if ("CUSTOM".equalsIgnoreCase(source)) return null;
 
     File gameDir = new File(gameInstallPath);
     if (!gameDir.exists()) return null;
@@ -358,72 +379,57 @@ public abstract class WineUtils {
     return letter.length() == 1 && Character.isLetter(letter.charAt(0));
   }
 
-  public static void createDosdevicesSymlinks(
-      Container container, @Nullable String gameDirectoryPath, boolean exposeSteamGameLink) {
-    Log.d(
-        "ContainerLaunch",
-        "createDosdevicesSymlinks: rootDir="
-            + container.getRootDir().getAbsolutePath()
-            + " drives="
-            + container.getDrives()
-            + " gameDir="
-            + gameDirectoryPath);
+  // dosdevices is the source of truth for drives; c: and z: stay app-managed
+  public static String readDrivesFromPrefix(@Nullable Container container) {
+    if (container == null) return "";
     File dosdevicesDir = new File(container.getRootDir(), ".wine/dosdevices");
-    if (!dosdevicesDir.exists()) {
-      boolean created = dosdevicesDir.mkdirs();
-      Log.d("ContainerLaunch", "createDosdevicesSymlinks: created dosdevices dir=" + created);
-    }
-    String dosdevicesPath = dosdevicesDir.getPath();
     File[] files = dosdevicesDir.listFiles();
-    if (files != null) for (File file : files) if (file.getName().matches("[a-z]:")) file.delete();
+    if (files == null) return "";
 
-    FileUtils.symlink("../drive_c", dosdevicesPath + "/c:");
-    FileUtils.symlink(container.getRootDir().getPath() + "/../..", dosdevicesPath + "/z:");
+    List<String> names = new ArrayList<>();
+    for (File file : files) if (file.getName().matches("[a-z]:")) names.add(file.getName());
+    Collections.sort(names);
+
+    StringBuilder drives = new StringBuilder();
+    for (String name : names) {
+      if (name.equals("c:") || name.equals("z:")) continue;
+      String target = FileUtils.readSymlink(new File(dosdevicesDir, name));
+      if (target.isEmpty()) continue;
+
+      String path = target;
+      if (!new File(target).isAbsolute()) {
+        File resolved = new File(dosdevicesDir, target);
+        try {
+          path = resolved.getCanonicalPath();
+        } catch (IOException e) {
+          path = resolved.getAbsolutePath();
+        }
+      }
+      if (path.isEmpty() || path.contains(":")) continue;
+      drives.append(name.substring(0, 1).toUpperCase(Locale.ENGLISH)).append(':').append(path);
+    }
+    return drives.toString();
+  }
+
+  public static void applyDrivesToPrefix(@Nullable Container container, @Nullable String drives) {
+    if (container == null) return;
+    File dosdevicesDir = new File(container.getRootDir(), ".wine/dosdevices");
+    if (!dosdevicesDir.exists()) dosdevicesDir.mkdirs();
+    String dosdevicesPath = dosdevicesDir.getPath();
 
     String packageStorageSuffix = "/com.winnative.cmod/storage";
     String legacyPackageStorageSuffix = "/com.winlator.cmod/storage";
-    String packageStoragePath = "/data/data/com.winnative.cmod/storage";
-    Context context = null;
     if (container.getManager() != null && container.getManager().getContext() != null) {
-      context = container.getManager().getContext();
-      String packageName = context.getPackageName();
-      packageStorageSuffix = "/" + packageName + "/storage";
-      packageStoragePath = "/data/data/" + packageName + "/storage";
+      packageStorageSuffix =
+          "/" + container.getManager().getContext().getPackageName() + "/storage";
     }
 
-    if (context != null) {
-      String normalizedDrives = normalizePersistentDrives(context, container.getDrives());
-      if (normalizedDrives != null
-          && !normalizedDrives.isEmpty()
-          && !normalizedDrives.equals(container.getDrives())) {
-        container.setDrives(normalizedDrives);
-        Log.d("WineUtils", "Normalized launch drives in memory to: " + normalizedDrives);
-      }
-    }
+    LinkedHashSet<String> applied = new LinkedHashSet<>();
+    for (String[] drive : Container.drivesIterator(drives != null ? drives : "")) {
+      if (drive.length < 2 || "A".equalsIgnoreCase(drive[0])) continue;
+      String letter = drive[0].toLowerCase(Locale.ENGLISH);
+      if (letter.equals("c") || letter.equals("z")) continue;
 
-    // Auto-fix containers missing D: and E: drives.
-    // IMPORTANT: Only update in-memory drives — do NOT call container.saveData()
-    String currentDrives = container.getDrives();
-    if (currentDrives != null && (!currentDrives.contains("D:") || !currentDrives.contains("E:"))) {
-      Log.d("WineUtils", "Container missing D: or E: drives, appending them...");
-      StringBuilder updatedDrives = new StringBuilder(currentDrives);
-      if (!currentDrives.contains("D:")) {
-        updatedDrives
-            .append("D:")
-            .append(
-                android.os.Environment.getExternalStoragePublicDirectory(
-                    android.os.Environment.DIRECTORY_DOWNLOADS));
-      }
-      if (!currentDrives.contains("E:")) {
-        updatedDrives.append("E:").append(packageStoragePath);
-      }
-      container.setDrives(updatedDrives.toString());
-      Log.d("WineUtils", "Updated container drives (in-memory only) to: " + updatedDrives);
-    }
-
-    int driveCount = 0;
-    for (String[] drive : container.drivesIterator()) {
-      if ("A".equalsIgnoreCase(drive[0])) continue;
       String path = resolveReadableDrivePath(drive[1]);
       File linkTarget = new File(path);
       path = linkTarget.getAbsolutePath();
@@ -433,11 +439,44 @@ public abstract class WineUtils {
         linkTarget.mkdirs();
         FileUtils.chmod(linkTarget, 0771);
       }
-      FileUtils.symlink(path, dosdevicesPath + "/" + drive[0].toLowerCase(Locale.ENGLISH) + ":");
-      Log.d("ContainerLaunch", "createDosdevicesSymlinks: " + drive[0] + ": -> " + path);
-      driveCount++;
+      FileUtils.symlink(path, dosdevicesPath + "/" + letter + ":");
+      applied.add(letter + ":");
+      Log.d("ContainerLaunch", "applyDrivesToPrefix: " + letter + ": -> " + path);
     }
-    Log.d("ContainerLaunch", "createDosdevicesSymlinks: created " + driveCount + " drive symlinks");
+
+    File[] files = dosdevicesDir.listFiles();
+    if (files != null)
+      for (File file : files) {
+        String name = file.getName();
+        if (!name.matches("[a-z]:") || name.equals("c:") || name.equals("z:")) continue;
+        if (!applied.contains(name)) file.delete();
+      }
+  }
+
+  public static void createDosdevicesSymlinks(
+      Container container, @Nullable String gameDirectoryPath, boolean exposeSteamGameLink) {
+    File dosdevicesDir = new File(container.getRootDir(), ".wine/dosdevices");
+    if (!dosdevicesDir.exists()) dosdevicesDir.mkdirs();
+    String dosdevicesPath = dosdevicesDir.getPath();
+
+    FileUtils.symlink("../drive_c", dosdevicesPath + "/c:");
+    FileUtils.symlink(container.getRootDir().getPath() + "/../..", dosdevicesPath + "/z:");
+
+    // the container config only seeds a prefix that has no drives yet
+    String drives = readDrivesFromPrefix(container);
+    Log.d("ContainerLaunch", "createDosdevicesSymlinks: entries=" + Arrays.toString(dosdevicesDir.list()) + " read=" + drives);
+    if (drives.isEmpty()) {
+      drives = container.getDrives();
+      Context context =
+          container.getManager() != null ? container.getManager().getContext() : null;
+      if (context != null) {
+        String normalizedDrives = normalizePersistentDrives(context, drives, false);
+        if (normalizedDrives != null && !normalizedDrives.isEmpty()) drives = normalizedDrives;
+      }
+      Log.d("ContainerLaunch", "createDosdevicesSymlinks: seeding fresh prefix with " + drives);
+    }
+
+    applyDrivesToPrefix(container, drives);
 
     // Only expose Steam's steamapps/common symlink for actual Steam launches.
     if (gameDirectoryPath != null && !gameDirectoryPath.isEmpty()) {
@@ -478,17 +517,6 @@ public abstract class WineUtils {
     return "/storage/" + uuid + rest;
   }
 
-  /**
-   * Ensures the steamapps/common/{gameName} symlink exists and points to the correct game install
-   * directory. This is critical for ColdClientLoader path resolution, especially when games are
-   * installed at custom download paths.
-   *
-   * <p>- Creates the symlink if it doesn't exist - Recreates if it exists but points to a different
-   * (stale) location - Also creates the _CommonRedist and steamapps directory structure
-   *
-   * @param container The container whose Wine prefix to modify
-   * @param gameDirectoryPath The actual path to the game install directory
-   */
   public static void ensureSteamappsCommonSymlink(Container container, String gameDirectoryPath) {
     if (gameDirectoryPath == null || gameDirectoryPath.isEmpty()) return;
 
@@ -510,8 +538,6 @@ public abstract class WineUtils {
       steamCommonDir.mkdirs();
     }
 
-    // Symlink steamapps/common/{gameName} -> actual game directory
-    // Always validate the symlink target matches the actual game path (handles custom paths)
     File steamGameLink = new File(steamCommonDir, gameName);
     boolean needsCreation = false;
     if (steamGameLink.exists() || isSymlink(steamGameLink)) {
@@ -553,9 +579,6 @@ public abstract class WineUtils {
               + canonicalGameDirectoryPath);
     }
 
-    // Keep Steamworks Shared/_CommonRedist writable inside the Wine prefix.
-    // Symlinking to the Android-backed game folder causes Steam's installscript.vdf
-    // writes to fail with "disk write error" for shared redistributables.
     File gameCommonRedist = new File(canonicalGameDirectory, "_CommonRedist");
     File steamworksSharedDir = new File(steamCommonDir, "Steamworks Shared");
     if (!steamworksSharedDir.exists()) {
@@ -663,14 +686,6 @@ public abstract class WineUtils {
     File rootDir = ImageFs.find(context).getRootDir();
     File systemRegFile = new File(rootDir, ImageFs.WINEPREFIX + "/system.reg");
     File userRegFile = new File(rootDir, ImageFs.WINEPREFIX + "/user.reg");
-    File userCacheDir = new File(rootDir, "/home/xuser/.cache");
-    if (!userCacheDir.isDirectory()) {
-      userCacheDir.mkdirs();
-    }
-    File userConfigDir = new File(rootDir, "/home/xuser/.config");
-    if (!userConfigDir.isDirectory()) {
-      userConfigDir.mkdirs();
-    }
 
     try (WineRegistryEditor registryEditor = new WineRegistryEditor(systemRegFile)) {
       registryEditor.setStringValue("Software\\Classes\\.reg", null, "REGfile");
@@ -686,17 +701,6 @@ public abstract class WineUtils {
           "Software\\Classes\\lnkfile\\DefaultIcon", null, "shell32.dll,-30");
       registryEditor.setStringValue(
           "Software\\Classes\\inifile\\DefaultIcon", null, "shell32.dll,-151");
-
-      // Set up system fonts if not already done
-      File corefontsAddedFile = new File(userConfigDir, "corefonts.added");
-      if (!corefontsAddedFile.isFile()) {
-        try {
-          setupSystemFonts(registryEditor);
-          FileUtils.writeString(corefontsAddedFile, String.valueOf(System.currentTimeMillis()));
-        } catch (Throwable th) {
-          Log.e("WineUtils", "Failed to setup system fonts", th);
-        }
-      }
     }
 
     final String[] direct3dLibs = {
@@ -712,12 +716,7 @@ public abstract class WineUtils {
       "dxgi",
       "wined3d"
     };
-    // evshim creates SDL virtual joysticks that Wine picks up through winebus,
-    // so Wine's builtin dinput/xinput path should stay preferred on all arches.
-    final String[] dinputLibs = {"dinput", "dinput8"};
-    final String[] xinputLibs = {
-      "xinput1_1", "xinput1_2", "xinput1_3", "xinput1_4", "xinput9_1_0", "xinputuap"
-    };
+    final String[] dinputLibs = {"dinput"};
 
     final String dllOverridesKey = "Software\\Wine\\DllOverrides";
 
@@ -725,9 +724,7 @@ public abstract class WineUtils {
       for (String name : direct3dLibs)
         registryEditor.setStringValue(dllOverridesKey, name, "native,builtin");
       for (String name : dinputLibs)
-        registryEditor.setStringValue(dllOverridesKey, name, "builtin,native");
-      for (String name : xinputLibs)
-        registryEditor.setStringValue(dllOverridesKey, name, "builtin,native");
+        registryEditor.setStringValue(dllOverridesKey, name, "native,builtin");
       // Conditional OpenGL override for ARM64EC (exclude Mali GPUs)
       if (wineInfo != null
           && wineInfo.isArm64EC()
@@ -741,15 +738,6 @@ public abstract class WineUtils {
     copyWineDllsToContainer(rootDir, wineInfo);
   }
 
-  // Skipped on ARM64EC. The proton arm64ec wcp's container_pattern.tzst already seeded
-  // a consistent system32 plus matching winsxs/arm64_microsoft.windows.common-controls
-  // SXS assembly; overwriting user32/shell32 from wineInfo.path/lib/wine pairs them with
-  // a possibly-different proton's comctl32 inside winsxs, and Burn-based installers
-  // (vc_redist) then hit ERROR_CLASS_DOES_NOT_EXIST (0x583) at InitCommonControlsEx
-  // because the class atom tables disagree across builds — flash-and-exit "Failed to
-  // initialize theme manager". Winlator-Ludashi never copies these post-seed and vc_redist
-  // works there on the same proton wcp. wineboot's fakedll mechanism resolves missing
-  // system32 entries to wine builtins at load time, so a no-op is safe.
   private static void copyWineDllsToContainer(File rootDir, WineInfo wineInfo) {
     if (wineInfo == null || wineInfo.path == null || wineInfo.path.isEmpty()) return;
     if (wineInfo.isArm64EC()) {
@@ -783,45 +771,6 @@ public abstract class WineUtils {
     }
   }
 
-  private static final String[] XINPUT_DLLS = {
-    "xinput1_1.dll", "xinput1_2.dll", "xinput1_3.dll",
-    "xinput1_4.dll", "xinput9_1_0.dll", "xinputuap.dll"
-  };
-
-  public static void ensureControllerDllOverrides(Container container) {
-    if (container == null) return;
-
-    File userRegFile = new File(container.getRootDir(), ".wine/user.reg");
-    if (!userRegFile.isFile()) return;
-
-    final String dllOverridesKey = "Software\\Wine\\DllOverrides";
-    final String[] dinputLibs = {"dinput", "dinput8"};
-
-    try (WineRegistryEditor registryEditor = new WineRegistryEditor(userRegFile)) {
-      for (String name : dinputLibs) {
-        if (!"builtin,native".equals(registryEditor.getStringValue(dllOverridesKey, name, ""))) {
-          registryEditor.setStringValue(dllOverridesKey, name, "builtin,native");
-        }
-      }
-
-      for (String dll : XINPUT_DLLS) {
-        String name = dll.substring(0, dll.length() - 4);
-        if (!"builtin,native".equals(registryEditor.getStringValue(dllOverridesKey, name, ""))) {
-          registryEditor.setStringValue(dllOverridesKey, name, "builtin,native");
-        }
-      }
-    }
-  }
-
-  // Pre-seed the VC++ 2015-2022 redistributable registry markers when the proton
-  // wcp has already laid down the runtime DLLs (msvcp140, vcruntime140, etc.) in
-  // system32. Without these registry keys vc_redist's Burn bootstrapper sees
-  // "not installed" and tries to run its installer UI; on Wine ARM64EC its theme
-  // manager init fails (ERROR_CLASS_DOES_NOT_EXIST 0x583) and the installer
-  // exits without doing anything. Game prerequisite checkers read the same keys,
-  // so seeding them is also what unblocks games that gate on "VC++ redist
-  // installed" before launching.
-  // The DLLs are genuinely present, so we are recording fact, not faking state.
   public static void seedVcRedistRegistryIfDllsPresent(File containerRootDir, boolean isArm64EC) {
     File system32 = new File(containerRootDir, ".wine/drive_c/windows/system32");
     if (!new File(system32, "msvcp140.dll").isFile()
@@ -836,103 +785,139 @@ public abstract class WineUtils {
       return;
     }
 
-    // Microsoft's published current VC++ 2015-2022 14.50 redist build (matches
-    // what vc_redist 14.50.35719 self-identifies as).
-    final String version = "14.50.35719.0";
-    final int major = 14, minor = 50, build = 35719, rebuild = 0;
-
     String[] runtimeArches = isArm64EC ? new String[] {"X64", "ARM64"} : new String[] {"X64", "X86"};
 
-    try (WineRegistryEditor reg = new WineRegistryEditor(systemRegFile)) {
-      for (String arch : runtimeArches) {
-        String k = "Software\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\" + arch;
-        reg.setDwordValue(k, "Installed", 1);
-        reg.setStringValue(k, "Version", "v" + version);
-        reg.setDwordValue(k, "Major", major);
-        reg.setDwordValue(k, "Minor", minor);
-        reg.setDwordValue(k, "Bld", build);
-        reg.setDwordValue(k, "Rbld", rebuild);
-
-        // Same under Wow6432Node so 32-bit consumers see it too.
-        String k32 = "Software\\Wow6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\" + arch;
-        reg.setDwordValue(k32, "Installed", 1);
-        reg.setStringValue(k32, "Version", "v" + version);
-        reg.setDwordValue(k32, "Major", major);
-        reg.setDwordValue(k32, "Minor", minor);
-        reg.setDwordValue(k32, "Bld", build);
-        reg.setDwordValue(k32, "Rbld", rebuild);
-      }
-
-      // Burn bundle dependency providers: vc_redist consults these to decide
-      // "already installed" and exits cleanly if present.
-      String[] bundleKeys = isArm64EC
-          ? new String[] {"VC,redist.x64,amd64,14.50,bundle", "VC,redist.arm64,arm64,14.50,bundle"}
-          : new String[] {"VC,redist.x64,amd64,14.50,bundle", "VC,redist.x86,x86,14.50,bundle"};
-      for (String bundle : bundleKeys) {
-        String k = "Software\\Classes\\Installer\\Dependencies\\" + bundle;
-        reg.setStringValue(k, "Version", version);
-        reg.setStringValue(k, "DisplayName", "Microsoft Visual C++ 2015-2022 Redistributable");
-      }
+    if (seedVcRedistBatched(systemRegFile, runtimeArches, isArm64EC)) {
+      Log.i("WineUtils", "seedVcRedistRegistryIfDllsPresent: wrote VC++ 14.50 markers (batched, arches="
+          + java.util.Arrays.toString(runtimeArches) + ")");
+      return;
     }
-    Log.i("WineUtils", "seedVcRedistRegistryIfDllsPresent: wrote VC++ 14.50 markers (arches="
+
+    try (WineRegistryEditor reg = new WineRegistryEditor(systemRegFile)) {
+      seedVcRedistWithEditor(reg, runtimeArches, isArm64EC);
+    }
+    Log.i("WineUtils", "seedVcRedistRegistryIfDllsPresent: wrote VC++ 14.50 markers (fallback, arches="
         + java.util.Arrays.toString(runtimeArches) + ")");
   }
 
-  /** Registers core Windows fonts and Wine fonts in the registry. */
-  private static void setupSystemFonts(WineRegistryEditor registryEditor) {
-    Log.d("WineUtils", "Setting up system fonts");
-    String[][] corefonts = {
-      {"Andale Mono (TrueType)", "andalemo.ttf"},
-      {"Arial (TrueType)", "arial.ttf"},
-      {"Arial Black (TrueType)", "ariblk.ttf"},
-      {"Arial Bold (TrueType)", "arialbd.ttf"},
-      {"Arial Bold Italic (TrueType)", "arialbi.ttf"},
-      {"Arial Italic (TrueType)", "ariali.ttf"},
-      {"Comic Sans MS (TrueType)", "comic.ttf"},
-      {"Comic Sans MS Bold (TrueType)", "comicbd.ttf"},
-      {"Courier New (TrueType)", "cour.ttf"},
-      {"Courier New Bold (TrueType)", "courbd.ttf"},
-      {"Courier New Bold Italic (TrueType)", "courbi.ttf"},
-      {"Courier New Italic (TrueType)", "couri.ttf"},
-      {"Georgia (TrueType)", "georgia.ttf"},
-      {"Georgia Bold (TrueType)", "georgiab.ttf"},
-      {"Georgia Bold Italic (TrueType)", "georgiaz.ttf"},
-      {"Georgia Italic (TrueType)", "georgiai.ttf"},
-      {"Impact (TrueType)", "impact.ttf"},
-      {"Times New Roman (TrueType)", "times.ttf"},
-      {"Times New Roman Bold (TrueType)", "timesbd.ttf"},
-      {"Times New Roman Bold Italic (TrueType)", "timesbi.ttf"},
-      {"Times New Roman Italic (TrueType)", "timesi.ttf"},
-      {"Trebuchet MS (TrueType)", "trebuc.ttf"},
-      {"Trebuchet MS Bold (TrueType)", "trebucbd.ttf"},
-      {"Trebuchet MS Bold Italic (TrueType)", "trebucbi.ttf"},
-      {"Trebuchet MS Italic (TrueType)", "trebucit.ttf"},
-      {"Verdana (TrueType)", "verdana.ttf"},
-      {"Verdana Bold (TrueType)", "verdanab.ttf"},
-      {"Verdana Bold Italic (TrueType)", "verdanaz.ttf"},
-      {"Verdana Italic (TrueType)", "verdanai.ttf"},
-      {"Webdings (TrueType)", "webdings.ttf"}
-    };
-    for (String[] font : corefonts) {
-      registryEditor.setStringValue(
-          "Software\\Microsoft\\Windows\\CurrentVersion\\Fonts", font[0], font[1]);
-      registryEditor.setStringValue(
-          "Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", font[0], font[1]);
-    }
+  private static final String VC_REDIST_VERSION = "14.50.35719.0";
 
-    String[][] wineFonts = {
-      {"Marlett (TrueType)", "Z:\\opt\\wine\\share\\wine\\fonts\\marlett.ttf"},
-      {"Symbol (TrueType)", "Z:\\opt\\wine\\share\\wine\\fonts\\symbol.ttf"},
-      {"Tahoma (TrueType)", "Z:\\opt\\wine\\share\\wine\\fonts\\tahoma.ttf"},
-      {"Tahoma Bold (TrueType)", "Z:\\opt\\wine\\share\\wine\\fonts\\tahomabd.ttf"},
-      {"Wingdings (TrueType)", "Z:\\opt\\wine\\share\\wine\\fonts\\wingding.ttf"}
-    };
-    for (String[] font : wineFonts) {
-      registryEditor.setStringValue(
-          "Software\\Microsoft\\Windows\\CurrentVersion\\Fonts", font[0], font[1]);
-      registryEditor.setStringValue(
-          "Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", font[0], font[1]);
+  private static String[] vcRedistBundleKeys(boolean isArm64EC) {
+    return isArm64EC
+        ? new String[] {"VC,redist.x64,amd64,14.50,bundle", "VC,redist.arm64,arm64,14.50,bundle"}
+        : new String[] {"VC,redist.x64,amd64,14.50,bundle", "VC,redist.x86,x86,14.50,bundle"};
+  }
+
+  private static void seedVcRedistWithEditor(
+      WineRegistryEditor reg, String[] runtimeArches, boolean isArm64EC) {
+    final String version = VC_REDIST_VERSION;
+    final int major = 14, minor = 50, build = 35719, rebuild = 0;
+    for (String arch : runtimeArches) {
+      String k = "Software\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\" + arch;
+      reg.setDwordValue(k, "Installed", 1);
+      reg.setStringValue(k, "Version", "v" + version);
+      reg.setDwordValue(k, "Major", major);
+      reg.setDwordValue(k, "Minor", minor);
+      reg.setDwordValue(k, "Bld", build);
+      reg.setDwordValue(k, "Rbld", rebuild);
+
+      String k32 = "Software\\Wow6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\" + arch;
+      reg.setDwordValue(k32, "Installed", 1);
+      reg.setStringValue(k32, "Version", "v" + version);
+      reg.setDwordValue(k32, "Major", major);
+      reg.setDwordValue(k32, "Minor", minor);
+      reg.setDwordValue(k32, "Bld", build);
+      reg.setDwordValue(k32, "Rbld", rebuild);
     }
+    for (String bundle : vcRedistBundleKeys(isArm64EC)) {
+      String k = "Software\\Classes\\Installer\\Dependencies\\" + bundle;
+      reg.setStringValue(k, "Version", version);
+      reg.setStringValue(k, "DisplayName", "Microsoft Visual C++ 2015-2022 Redistributable");
+    }
+  }
+
+  private static boolean seedVcRedistBatched(
+      File systemRegFile, String[] runtimeArches, boolean isArm64EC) {
+    File temp = null;
+    try {
+      String block = buildVcRedistRegBlock(runtimeArches, isArm64EC);
+      temp =
+          FileUtils.createTempFile(
+              systemRegFile.getParentFile(), FileUtils.getBasename(systemRegFile.getPath()));
+      if (temp == null || !FileUtils.copy(systemRegFile, temp)) return false;
+      try (java.io.BufferedWriter w =
+          new java.io.BufferedWriter(new java.io.FileWriter(temp, true))) {
+        w.write(block);
+      }
+      try (WineRegistryEditor reg = new WineRegistryEditor(temp)) {
+        for (String arch : runtimeArches) {
+          Integer v =
+              reg.getDwordValue(
+                  "Software\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\" + arch, "Installed");
+          if (v == null || v != 1) return false;
+        }
+      }
+      return temp.renameTo(systemRegFile);
+    } catch (Exception e) {
+      Log.w("WineUtils", "seedVcRedistBatched failed; falling back to per-value seed", e);
+      return false;
+    } finally {
+      if (temp != null && temp.exists()) temp.delete();
+    }
+  }
+
+  private static String buildVcRedistRegBlock(String[] runtimeArches, boolean isArm64EC) {
+    final String version = VC_REDIST_VERSION;
+    StringBuilder sb = new StringBuilder();
+    for (String arch : runtimeArches) {
+      String[] bases = {
+        "Software\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\",
+        "Software\\Wow6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\"
+      };
+      for (String base : bases) {
+        appendRegKeyHeader(sb, base + arch);
+        appendRegDword(sb, "Installed", 1);
+        appendRegString(sb, "Version", "v" + version);
+        appendRegDword(sb, "Major", 14);
+        appendRegDword(sb, "Minor", 50);
+        appendRegDword(sb, "Bld", 35719);
+        appendRegDword(sb, "Rbld", 0);
+      }
+    }
+    for (String bundle : vcRedistBundleKeys(isArm64EC)) {
+      appendRegKeyHeader(sb, "Software\\Classes\\Installer\\Dependencies\\" + bundle);
+      appendRegString(sb, "Version", version);
+      appendRegString(sb, "DisplayName", "Microsoft Visual C++ 2015-2022 Redistributable");
+    }
+    return sb.toString();
+  }
+
+  private static void appendRegKeyHeader(StringBuilder sb, String key) {
+    long ticks1601To1970 = 86400L * (369 * 365 + 89) * 10000000;
+    long currentTime = System.currentTimeMillis() + ticks1601To1970;
+    sb.append("\n[")
+        .append(escapeReg(key))
+        .append("] ")
+        .append((currentTime - ticks1601To1970) / 1000)
+        .append(
+            String.format(
+                java.util.Locale.ENGLISH, "\n#time=%x%08x", currentTime >> 32, (int) currentTime))
+        .append("\n");
+  }
+
+  private static void appendRegDword(StringBuilder sb, String name, int value) {
+    sb.append("\n\"")
+        .append(escapeReg(name))
+        .append("\"=dword:")
+        .append(String.format(java.util.Locale.ENGLISH, "%08x", value));
+  }
+
+  private static void appendRegString(StringBuilder sb, String name, String value) {
+    sb.append("\n\"").append(escapeReg(name)).append("\"=\"").append(escapeReg(value)).append("\"");
+  }
+
+  private static String escapeReg(String s) {
+    return s.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 
   public static void overrideWinComponentDlls(
@@ -949,6 +934,8 @@ public abstract class WineUtils {
         String dlname = dlnames.getString(i);
         if (useNative) {
           registryEditor.setStringValue(dllOverridesKey, dlname, "native,builtin");
+        } else if (identifier.equals("dinput8")) {
+          registryEditor.setStringValue(dllOverridesKey, dlname, "builtin");
         } else registryEditor.removeValue(dllOverridesKey, dlname);
       }
     } catch (JSONException e) {
@@ -1353,6 +1340,7 @@ public abstract class WineUtils {
       "FontCache3.0.0.0:3",
       "HTTP:3",
       "LanmanServer:3",
+      "MountMgr:2",
       "MSIServer:3",
       "NDIS:2",
       "nsiproxy:3",
@@ -1371,6 +1359,8 @@ public abstract class WineUtils {
       "Winmgmt:3",
       "wuauserv:3"
     };
+    final List<String> controllerCriticalServices =
+        Arrays.asList("winebus", "winehid", "MountMgr", "PlugPlay", "RpcSs");
     File systemRegFile = new File(container.getRootDir(), ".wine/system.reg");
     byte selection = 0;
     try {
@@ -1384,22 +1374,23 @@ public abstract class WineUtils {
       for (String service : aggressiveServices) {
         String name = service.substring(0, service.indexOf(":"));
         int value = Character.getNumericValue(service.charAt(service.length() - 1));
-        if (selection == 1) {
-          if (servicesList.contains(service)
-              && !name.equals("winebus")
-              && !name.equals("winehid")
-              && !name.equals("PlugPlay")) {
+        if (controllerCriticalServices.contains(name)) {
+          value = 2;
+        } else if (selection == 1) {
+          if (servicesList.contains(service)) {
             value = 4;
           }
-        } else if (selection == 2
-            && !name.equals("winebus")
-            && !name.equals("winehid")
-            && !name.equals("PlugPlay")) {
+        } else if (selection == 2) {
           value = 4;
+        }
+        if (name.equalsIgnoreCase("NDIS")) {
+          name = "Ndis";
+          value = selection == 2 ? 4 : 2;
         }
         registryEditor.setDwordValue(
             "System\\CurrentControlSet\\Services\\" + name, "Start", value);
         registryEditor.setDwordValue("System\\ControlSet001\\Services\\" + name, "Start", value);
+        registryEditor.setDwordValue("System\\ControlSet002\\Services\\" + name, "Start", value);
       }
       registryEditor.close();
     } finally {
@@ -1427,12 +1418,6 @@ public abstract class WineUtils {
     }
   }
 
-  /**
-   * Ensures winebus is configured correctly for the fake-input mechanism on every launch. Runs
-   * unconditionally so pre-existing containers are repaired. 1. Removes stale WINEBUS device
-   * entries (phantom VID_845E devices). 2. Sets DisableHidraw=1 so Proton winebus uses evdev
-   * (hooked by libfakeinput).
-   */
   public static void ensureWinebusConfig(Container container) {
     File systemRegFile = new File(container.getRootDir(), ".wine/system.reg");
     if (!systemRegFile.exists()) return;
@@ -1449,18 +1434,6 @@ public abstract class WineUtils {
       String winebusParamsKey2 = "System\\ControlSet001\\Services\\winebus\\Parameters";
       registryEditor.setDwordValue(winebusParamsKey2, "DisableHidraw", 1);
       registryEditor.setDwordValue(winebusParamsKey2, "DisableInput", 0);
-    }
-  }
-
-  public static void setJoystickRegistryKeys(File userRegFile, boolean enable) {
-    String value = enable ? "override" : "disabled";
-    try (WineRegistryEditor registryEditor = new WineRegistryEditor(userRegFile)) {
-      for (int i = 0; i < 4; i++) {
-        registryEditor.setStringValue(
-            "Software\\Wine\\DirectInput\\Joysticks", "Generic HID Gamepad " + i, value);
-        registryEditor.setStringValue(
-            "Software\\Wine\\DirectInput\\Joysticks", "ric HID Gamepad " + i, value);
-      }
     }
   }
 
@@ -1484,6 +1457,10 @@ public abstract class WineUtils {
       // Direct drive_c fallback
       if (drive.equals("c")) {
         return new File(homePrefix, ".wine/drive_c/" + relPath);
+      }
+      // Direct drive_z fallback (Z: maps to the imageFs root)
+      if (drive.equals("z")) {
+        return new File(imageFs.getRootDir(), relPath);
       }
     }
     return new File(imageFs.getRootDir(), path);

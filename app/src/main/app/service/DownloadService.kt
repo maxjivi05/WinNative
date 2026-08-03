@@ -116,13 +116,36 @@ object DownloadService {
         // (PAUSED or QUEUED) for which no store has yet created an in-memory DownloadInfo.
         // Fabricate stub DownloadInfos for those so the Downloads tab shows them and the user
         // can Resume / Cancel them.
-        val knownIds = list.map { it.first }.toSet()
         val coord = com.winlator.cmod.app.service.download.DownloadCoordinator
-        coord.snapshotRecords().forEach { record ->
+        val records = coord.snapshotRecords()
+        val recordsByUiId = records.associateBy { "${it.store}_${it.storeGameId}" }
+        list.forEach { (id, info) ->
+            val record = recordsByUiId[id] ?: return@forEach
+            if (record.bytesTotal > 0L) {
+                info.setDisplayTotalExpectedBytes(record.bytesTotal)
+                if (info.getTotalExpectedBytes() <= 0L) {
+                    info.setTotalExpectedBytes(record.bytesTotal)
+                    info.initializeBytesDownloaded(record.bytesDownloaded)
+                }
+            }
+        }
+
+        val knownIds = list.map { it.first }.toSet()
+        records.forEach { record ->
             val id = "${record.store}_${record.storeGameId}"
             if (id in knownIds) return@forEach
             val phase = mapRecordStatusToPhase(record.status)
             val gameIdInt = record.storeGameId.toIntOrNull() ?: 0
+            // Preserve the original FAILED reason across restarts so the row
+            // doesn't collapse to a generic "Unknown error" on rehydrate.
+            val stubStatusMessage =
+                when (phase) {
+                    com.winlator.cmod.feature.stores.steam.enums.DownloadPhase.PAUSED ->
+                        appContext?.getString(R.string.downloads_queue_paused_resume_hint)
+                    com.winlator.cmod.feature.stores.steam.enums.DownloadPhase.FAILED ->
+                        record.errorMessage?.takeUnless { it.isBlank() }
+                    else -> null
+                }
             val stub =
                 com.winlator.cmod.feature.stores.steam.data.DownloadInfo(
                     jobCount = 1,
@@ -130,14 +153,10 @@ object DownloadService {
                     downloadingAppIds = java.util.concurrent.CopyOnWriteArrayList(),
                 ).apply {
                     setActive(false)
-                    updateStatus(
-                        phase,
-                        appContext?.getString(R.string.downloads_queue_paused_resume_hint).takeIf {
-                            phase == com.winlator.cmod.feature.stores.steam.enums.DownloadPhase.PAUSED
-                        },
-                    )
+                    updateStatus(phase, stubStatusMessage)
                     if (record.bytesTotal > 0L) {
                         setTotalExpectedBytes(record.bytesTotal)
+                        setDisplayTotalExpectedBytes(record.bytesTotal)
                         initializeBytesDownloaded(record.bytesDownloaded)
                     }
                 }

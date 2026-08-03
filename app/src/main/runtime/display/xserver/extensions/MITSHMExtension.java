@@ -20,6 +20,8 @@ import java.nio.ByteBuffer;
 
 public class MITSHMExtension implements Extension {
   public static final byte MAJOR_OPCODE = -101;
+  private byte firstEventId = 0;
+  private byte firstErrorId = 0;
 
   private abstract static class ClientOpcodes {
     private static final byte QUERY_VERSION = 0;
@@ -40,12 +42,32 @@ public class MITSHMExtension implements Extension {
 
   @Override
   public byte getFirstErrorId() {
-    return Byte.MIN_VALUE;
+    return firstErrorId;
   }
 
   @Override
   public byte getFirstEventId() {
-    return 64;
+    return firstEventId;
+  }
+
+  @Override
+  public int getNumEvents() {
+    return 1;
+  }
+
+  @Override
+  public int getNumErrors() {
+    return 1;
+  }
+
+  @Override
+  public void setFirstEventId(byte id) {
+    this.firstEventId = id;
+  }
+
+  @Override
+  public void setFirstErrorId(byte id) {
+    this.firstErrorId = id;
   }
 
   private static void queryVersion(
@@ -111,6 +133,13 @@ public class MITSHMExtension implements Extension {
     drawable.drawImage(
         srcX, srcY, dstX, dstY, srcWidth, srcHeight, depth, data, totalWidth, totalHeight);
 
+    com.winlator.cmod.runtime.display.xserver.Window window =
+        client.xServer.windowManager.getWindow(drawableId);
+    if (window != null) {
+      client.xServer.windowManager.triggerOnFramePresented(
+          window, com.winlator.cmod.runtime.display.xserver.WindowManager.FrameSource.MIT_SHM, 0);
+    }
+
     return totalWidth > client.xServer.screenInfo.width / 2;
   }
 
@@ -133,16 +162,12 @@ public class MITSHMExtension implements Extension {
         }
         break;
       case ClientOpcodes.PUT_IMAGE:
-        boolean isLargeImage = false;
         try (XLock lock =
             client.xServer.lock(
                 XServer.Lockable.SHMSEGMENT_MANAGER,
                 XServer.Lockable.DRAWABLE_MANAGER,
                 XServer.Lockable.GRAPHIC_CONTEXT_MANAGER)) {
-          isLargeImage = putImage(client, inputStream, outputStream);
-        }
-        if (isLargeImage) {
-          client.enforceAbsoluteFramerate();
+          putImage(client, inputStream, outputStream);
         }
         break;
       default:

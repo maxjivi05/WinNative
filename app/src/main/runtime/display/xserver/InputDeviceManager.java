@@ -65,7 +65,8 @@ public class InputDeviceManager
     Window pointWindow =
         xServer.windowManager.findPointWindow(
             xServer.pointer.getClampedX(), xServer.pointer.getClampedY());
-    this.pointWindow = pointWindow != null ? pointWindow : xServer.windowManager.rootWindow;
+    Window resolved = pointWindow != null ? pointWindow : xServer.windowManager.rootWindow;
+    this.pointWindow = resolved;
   }
 
   public Window getPointWindow() {
@@ -238,6 +239,7 @@ public class InputDeviceManager
   @Override
   public void onPointerMove(short x, short y) {
     updatePointWindow();
+
     Bitmask eventMask = createPointerEventMask();
     Window grabWindow = xServer.grabManager.getWindow();
     Window window =

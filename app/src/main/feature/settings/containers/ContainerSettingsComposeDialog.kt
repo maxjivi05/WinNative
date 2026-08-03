@@ -1,7 +1,6 @@
 package com.winlator.cmod.feature.settings
 import android.app.Activity
 import android.app.Dialog
-import android.net.Uri
 import android.os.Build
 import android.util.Log
 import android.view.ViewGroup
@@ -9,13 +8,18 @@ import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatDialog
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import com.winlator.cmod.shared.ui.nav.PANE_DIR_ACTIVATE
+import com.winlator.cmod.shared.ui.nav.PaneNavWindowHandlers
+import com.winlator.cmod.shared.ui.nav.bindPaneNav
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
@@ -27,26 +31,31 @@ import com.winlator.cmod.feature.library.DriveItem
 import com.winlator.cmod.feature.library.EnvVarItem
 import com.winlator.cmod.feature.library.GameSettingsCallbacks
 import com.winlator.cmod.feature.library.GameSettingsContent
+import com.winlator.cmod.feature.library.GameSettingsNav
 import com.winlator.cmod.feature.library.GameSettingsStateHolder
 import com.winlator.cmod.feature.library.WinComponentItem
+import com.winlator.cmod.feature.library.parseEnvVarItems
 import com.winlator.cmod.runtime.compat.box64.Box64Preset
 import com.winlator.cmod.runtime.compat.box64.Box64PresetManager
 import com.winlator.cmod.runtime.container.Container
+import com.winlator.cmod.runtime.container.ContainerCreation
 import com.winlator.cmod.runtime.container.ContainerManager
 import com.winlator.cmod.runtime.content.ContentProfile
 import com.winlator.cmod.runtime.content.ContentsManager
 import com.winlator.cmod.feature.settings.DXVKConfigUtils
 import com.winlator.cmod.feature.settings.GraphicsDriverConfigUtils
+import com.winlator.cmod.feature.settings.OtherSettingsFragment
 import com.winlator.cmod.feature.settings.WineD3DConfigUtils
 import com.winlator.cmod.shared.android.AppUtils
 import com.winlator.cmod.shared.android.DirectoryPickerDialog
+import com.winlator.cmod.shared.android.RefreshRateUtils
 import com.winlator.cmod.shared.ui.toast.WinToast
 import com.winlator.cmod.shared.io.AssetPaths
 import com.winlator.cmod.runtime.wine.EnvVars
+import com.winlator.cmod.runtime.wine.LocaleEnv
 import com.winlator.cmod.shared.io.FileUtils
 import com.winlator.cmod.shared.util.KeyValueSet
 import com.winlator.cmod.shared.theme.WinNativeTheme
-import com.winlator.cmod.shared.ui.dialog.PreloaderDialog
 import com.winlator.cmod.shared.util.StringUtils
 import com.winlator.cmod.runtime.wine.WineInfo
 import com.winlator.cmod.runtime.wine.WineRegistryEditor
@@ -56,10 +65,16 @@ import com.winlator.cmod.runtime.compat.fexcore.FEXCorePresetManager
 import com.winlator.cmod.runtime.audio.midi.MidiManager
 import com.winlator.cmod.runtime.display.winhandler.WinHandler
 import com.winlator.cmod.runtime.display.environment.ImageFs
-import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlinx.coroutines.*
+import com.winlator.cmod.shared.ui.dialog.ContainerProgressPopup
+import com.winlator.cmod.shared.ui.dialog.PopupDialog
+import com.winlator.cmod.shared.ui.dialog.WinNativeComposeDialogs
+import android.os.Environment
 
 /**
  * Compose replacement for the legacy `ContainerDetailFragment`. Reuses
@@ -81,11 +96,14 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
 
     private val context = activity
     private val dialog: Dialog
+    private val nav = GameSettingsNav()
+    private var restorePaneNav: (() -> Unit)? = null
     private val state = GameSettingsStateHolder()
     private val manager = ContainerManager(context)
     private val contentsManager = ContentsManager(context)
     private var isArm64EC = false
-    private val preloaderDialog: PreloaderDialog = PreloaderDialog(activity)
+    private val creatingPopup: ContainerProgressPopup =
+        ContainerProgressPopup(activity, R.string.containers_list_creating)
 
     // Parallel id/display lists for presets and wine versions.
     private var box64PresetIds = mutableListOf<String>()
@@ -96,28 +114,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
     // Drives working copy, mirrored into state.drivesList via syncDrivesState.
     private val drivesWorking = mutableListOf<DriveDraft>()
     private var pendingDriveIndex: Int = -1
-
-    private val wallpaperPickerLauncher: ActivityResultLauncher<Array<String>>? =
-        (activity as? ComponentActivity)?.activityResultRegistry?.register(
-            "container_wallpaper_picker",
-            ActivityResultContracts.OpenDocument()
-        ) { uri: Uri? ->
-            if (uri == null) return@register
-            try {
-                val destFile = WineThemeManager.getUserWallpaperFile(context)
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    destFile.outputStream().use { output -> input.copyTo(output) }
-                }
-                state.desktopWallpaperSelected.value = true
-            } catch (e: Throwable) {
-                Log.e(TAG, "Error copying wallpaper", e)
-                WinToast.show(
-                    context,
-                    context.getString(R.string.settings_containers_error_saving_wallpaper),
-                    Toast.LENGTH_SHORT,
-                )
-            }
-        }
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     init {
         state.wined3dCsmtEntries.value =
@@ -138,13 +135,18 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 setDimAmount(0.5f)
                 addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                 setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    isNavigationBarContrastEnforced = false
+                }
             }
             // Centralize cleanup so back-button dismissal follows the same
             // path as Save/Cancel and still fires onFinished (important for
             // the setup wizard launcher that blocks on UnifiedActivity finishing).
             setOnDismissListener {
+                restorePaneNav?.invoke()
+                restorePaneNav = null
                 AppUtils.hideKeyboard(activity)
-                wallpaperPickerLauncher?.unregister()
+                scope.cancel()
                 onFinished?.run()
             }
         }
@@ -168,7 +170,8 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                     CompositionLocalProvider(
                         LocalDensity provides Density(defaultDensity.density, fontScale = 1f)
                     ) {
-                        GameSettingsContent(state = state, callbacks = createCallbacks())
+                        val callbacks = createCallbacks()
+                        GameSettingsContent(state = state, callbacks = callbacks, nav = nav)
                     }
                 }
             }
@@ -245,8 +248,9 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 val identifier = wineVersionIdentifiers.getOrNull(versionIndex) ?: return
                 val wineInfo = WineInfo.fromIdentifier(context, contentsManager, identifier)
                 isArm64EC = wineInfo.isArm64EC()
+                state.isArm64EC.value = isArm64EC
                 state.wineVersionDisplay.value = formatWineVersionDisplay(wineInfo)
-                applyDefaultContainerName(wineInfo)
+                applyDefaultContainerName(wineInfo, identifier)
                 // Box64 list depends on arch (box64 vs wowbox64 entries).
                 rebuildEmulatorLists()
                 loadBox64Versions()
@@ -282,7 +286,15 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             }
 
             override fun onPickWallpaper() {
-                wallpaperPickerLauncher?.launch(arrayOf("image/*"))
+                openWallpaperFilePicker()
+            }
+
+            override fun onExportSaves() {
+                showExportSavesConfirmation()
+            }
+
+            override fun onImportSaves() {
+                showImportSavesConfirmation()
             }
         }
     }
@@ -326,15 +338,53 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         syncDrivesState()
     }
 
+    private fun openWallpaperFilePicker() {
+        DirectoryPickerDialog.showFile(
+            activity,
+            title = context.getString(R.string.settings_general_select_wallpaper),
+            allowedExtensions = setOf("png", "jpg", "jpeg", "webp", "bmp", "gif", "heic", "heif"),
+            dimAmount = 0.5f,
+            preserveBackdropBlur = true,
+        ) { pickedPath ->
+            try {
+                val destFile = WineThemeManager.getUserWallpaperFile(context)
+                File(pickedPath).inputStream().use { input ->
+                    destFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                state.desktopWallpaperSelected.value = true
+            } catch (e: Throwable) {
+                Log.e(TAG, "Error copying wallpaper", e)
+                WinToast.show(
+                    context,
+                    context.getString(R.string.settings_containers_error_saving_wallpaper),
+                    dialog.window?.decorView,
+                )
+            }
+        }
+    }
+
     private fun openDriveDirectoryPicker() {
         val idx = pendingDriveIndex
         if (idx !in drivesWorking.indices) return
+
+        val imagefsRoot = ImageFs.find(context).getRootDir()
+        val driveRoots =
+            listOf(
+                DirectoryPickerDialog.ManagedRoot("C:", File(imagefsRoot, "home").absolutePath),
+                DirectoryPickerDialog.ManagedRoot("Z:", imagefsRoot.absolutePath),
+                DirectoryPickerDialog.ManagedRoot(
+                    "D:",
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath,
+                ),
+                DirectoryPickerDialog.ManagedRoot("Internal", Environment.getExternalStorageDirectory().absolutePath),
+            )
 
         DirectoryPickerDialog.show(
             activity = activity,
             initialPath = drivesWorking[idx].path.ifBlank { null },
             dimAmount = 0.5f,
             preserveBackdropBlur = true,
+            extraRoots = driveRoots,
         ) { path ->
             val currentIndex = pendingDriveIndex
             if (currentIndex in drivesWorking.indices) {
@@ -347,7 +397,6 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
 
     private fun loadInitialData() {
         val c = container
-        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
 
         if (c != null) {
             state.name.value = c.getName()
@@ -370,8 +419,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         state.selectedDInputMapperType.intValue =
             if ((inputType and WinHandler.FLAG_DINPUT_MAPPER_STANDARD.toInt()) == WinHandler.FLAG_DINPUT_MAPPER_STANDARD.toInt()) 0 else 1
 
-        // Exclusive Input is a global pref, not stored on the container.
-        state.containerExclusiveInput.value = prefs.getBoolean("xinput_toggle", false)
+        state.containerExclusiveInput.value = c?.isExclusiveXInput() ?: true
         if (!state.containerExclusiveInput.value) {
             state.enableXInput.value = true
             state.enableDInput.value = true
@@ -379,15 +427,15 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
 
         state.fullscreenStretched.value = c?.isFullscreenStretched() ?: false
         state.directComposition.value = c?.isDirectCompositionEnabled() ?: false
+        state.useUnixLibs.value = c?.isUseUnixLibs() ?: true
 
         // Steam fields are shortcut-only in the UI; leave any existing steam
         // state on the container untouched — saveSettings() skips them.
         state.isSteamGame.value = false
 
         state.execArgs.value = c?.getExecArgs() ?: ""
-        state.lcAll.value = c?.getLC_ALL() ?: (
-            Locale.getDefault().language + "_" + Locale.getDefault().country + ".UTF-8"
-            )
+        state.lcAll.value = c?.getLC_ALL().takeUnless { it.isNullOrEmpty() }
+            ?: LocaleEnv.deriveFromDevice()
 
         val cpuCount = Runtime.getRuntime().availableProcessors()
         state.cpuCount.intValue = cpuCount
@@ -409,16 +457,17 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         state.generalComponents.value = general
 
         val envVarsStr = c?.getEnvVars() ?: Container.DEFAULT_ENV_VARS
-        val envVars = EnvVars(envVarsStr)
-        val items = mutableListOf<EnvVarItem>()
-        for (key in envVars) items.add(EnvVarItem(key, envVars.get(key)))
-        state.sdl2Compatibility.value = envVars.get("SDL_XINPUT_ENABLED") == "1"
+        val items = parseEnvVarItems(envVarsStr)
+        state.sdl2Compatibility.value = EnvVars(envVarsStr).get("SDL_XINPUT_ENABLED") == "1"
         state.envVars.value = if (state.sdl2Compatibility.value) {
             items.filterNot { it.key in SDL2_KEYS }
         } else items
 
         drivesWorking.clear()
-        val drivesStr = c?.getDrives() ?: Container.DEFAULT_DRIVES
+        val drivesStr = c?.let {
+            com.winlator.cmod.runtime.wine.WineUtils.readDrivesFromPrefix(it)
+                .ifEmpty { it.getDrives() }
+        } ?: Container.DEFAULT_DRIVES
         for (drive in Container.drivesIterator(drivesStr)) {
             drivesWorking.add(
                 DriveDraft(
@@ -465,6 +514,20 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         state.screenSizeEntries.value = screenSizeArr
         selectScreenSize(c?.getScreenSize() ?: Container.DEFAULT_SCREEN_SIZE)
 
+        try {
+            val refreshEntries = OtherSettingsFragment.buildRefreshRateEntries(activity)
+            state.refreshRateEntries.value = refreshEntries
+            val savedRate = c?.getExtra("refreshRate", "0")
+            if (savedRate.isNullOrEmpty() || savedRate == "0") {
+                state.selectedRefreshRate.intValue = 0
+            } else {
+                val idx = refreshEntries.indexOfFirst { it == "$savedRate Hz" }
+                state.selectedRefreshRate.intValue = if (idx >= 0) idx else 0
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading refresh rate entries", e)
+        }
+
         val graphicsDriverArr = context.resources.getStringArray(R.array.graphics_driver_entries).toList()
         state.graphicsDriverEntries.value = graphicsDriverArr
         selectByIdentifier(
@@ -473,12 +536,31 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             state.selectedGraphicsDriver
         )
 
+        state.zinkModeEntries.value = context.resources.getStringArray(R.array.zink_mode_entries).toList()
+        state.selectedZinkMode.intValue =
+            if ((c?.getZinkMode() ?: Container.DEFAULT_ZINK_MODE) == "windows") 1 else 0
+
         val dxWrapperArr = context.resources.getStringArray(R.array.dxwrapper_entries).toList()
         state.dxWrapperEntries.value = dxWrapperArr
         selectByIdentifier(
             dxWrapperArr,
             c?.getDXWrapper() ?: Container.DEFAULT_DXWRAPPER,
             state.selectedDxWrapper
+        )
+
+        val surfaceEffectArr = context.resources.getStringArray(R.array.surface_effect_entries).toList()
+        state.surfaceEffectEntries.value = surfaceEffectArr
+        state.selectedSurfaceEffect.intValue = if (c?.getExtra("swapRB", "0") == "1") 1 else 0
+
+        // init() migrates a legacy single reshadeEffect / flat reshadeParams into the loadout model
+        val reshadeEffects = com.winlator.cmod.runtime.reshade.ReshadeManager.scanEffects(context)
+        state.reshadeEffects.value = reshadeEffects
+        state.reshadeLoadout.init(
+            reshadeEffects,
+            c?.getExtra(com.winlator.cmod.runtime.reshade.ReshadeConfigWriter.EXTRA_LOADOUT, null),
+            c?.getExtra(com.winlator.cmod.runtime.reshade.ReshadeConfigWriter.EXTRA_MODE, null),
+            c?.getExtra(com.winlator.cmod.runtime.reshade.ReshadeConfigWriter.EXTRA_PARAMS, null),
+            c?.getExtra(com.winlator.cmod.runtime.reshade.ReshadeConfigWriter.EXTRA_EFFECT, null),
         )
 
         val audioDriverArr = context.resources.getStringArray(R.array.audio_driver_entries).toList()
@@ -502,6 +584,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         if (c != null) {
             val wineInfo = WineInfo.fromIdentifier(context, contentsManager, c.getWineVersion())
             isArm64EC = wineInfo.isArm64EC()
+            state.isArm64EC.value = isArm64EC
             state.wineVersionDisplay.value = formatWineVersionDisplay(wineInfo)
 
             rebuildEmulatorLists()
@@ -633,8 +716,9 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         val wineInfo = WineInfo.fromIdentifier(context, contentsManager, selectedIdentifier)
         val archChanged = isArm64EC != wineInfo.isArm64EC()
         isArm64EC = wineInfo.isArm64EC()
+        state.isArm64EC.value = isArm64EC
         state.wineVersionDisplay.value = formatWineVersionDisplay(wineInfo)
-        applyDefaultContainerName(wineInfo)
+        applyDefaultContainerName(wineInfo, selectedIdentifier)
 
         rebuildEmulatorLists()
         // Always reset emulator selections when populating for the first time
@@ -665,12 +749,9 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         val c = container
         val name = state.name.value.trim()
         if (name.isEmpty()) {
-            WinToast.show(context, context.getString(R.string.common_ui_name_cannot_be_empty), Toast.LENGTH_SHORT)
+            WinToast.show(context, context.getString(R.string.common_ui_name_cannot_be_empty), dialog.window?.decorView)
             return
         }
-
-        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        prefs.edit().putBoolean("xinput_toggle", state.containerExclusiveInput.value).apply()
 
         val screenSize = getScreenSizeFromState()
         val graphicsDriver = getIdentifierFromEntries(
@@ -707,7 +788,8 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         val wincomponents = buildWinComponentsString()
         val drivesString = com.winlator.cmod.runtime.wine.WineUtils.normalizePersistentDrives(
             context,
-            buildDrivesString()
+            buildDrivesString(),
+            false
         )
 
         val cpuList = buildCpuListString(state.cpuChecked.value)
@@ -745,17 +827,40 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             c.setCPUList(cpuList)
             c.setCPUListWoW64(cpuListWoW64)
             c.setGraphicsDriver(graphicsDriver)
+            c.setZinkMode(if (state.selectedZinkMode.intValue == 1) "windows" else "unix")
             c.setGraphicsDriverConfig(graphicsDriverConfig)
             c.setDXWrapper(dxwrapper)
             c.setDXWrapperConfig(dxwrapperConfig)
+            c.putExtra("swapRB", if (state.selectedSurfaceEffect.intValue == 1) "1" else "0")
+            c.putExtra("refreshRate", getRefreshRateFromState())
+            run {
+                // reshadeEffect stays coherent (= first effect) for legacy readers; all null when empty
+                val loadoutJson = state.reshadeLoadout.loadoutJsonOrNull()
+                c.putExtra(com.winlator.cmod.runtime.reshade.ReshadeConfigWriter.EXTRA_LOADOUT, loadoutJson)
+                c.putExtra(
+                    com.winlator.cmod.runtime.reshade.ReshadeConfigWriter.EXTRA_MODE,
+                    if (loadoutJson == null) null else state.reshadeLoadout.mode)
+                c.putExtra(
+                    com.winlator.cmod.runtime.reshade.ReshadeConfigWriter.EXTRA_PARAMS,
+                    if (loadoutJson == null) null else state.reshadeLoadout.paramsJsonOrNull())
+                c.putExtra(
+                    com.winlator.cmod.runtime.reshade.ReshadeConfigWriter.EXTRA_EFFECT,
+                    if (loadoutJson == null) null else state.reshadeLoadout.firstEffectName())
+            }
             c.setAudioDriver(audioDriver)
             c.setEmulator(emulator)
             c.setEmulator64(emulator64)
             c.setWinComponents(wincomponents)
             c.setDrives(drivesString)
+            // an existing prefix owns the drive list, so write it there too
+            if (java.io.File(c.rootDir, ".wine/dosdevices").isDirectory) {
+                com.winlator.cmod.runtime.wine.WineUtils.applyDrivesToPrefix(c, drivesString)
+            }
             c.setFullscreenStretched(state.fullscreenStretched.value)
             c.setDirectCompositionEnabled(state.directComposition.value)
+            c.setUseUnixLibs(state.useUnixLibs.value)
             c.setInputType(finalInputType)
+            c.setExclusiveXInput(state.containerExclusiveInput.value)
             c.setStartupSelection(startupSelection)
             c.setBox64Version(box64Version)
             c.setBox64Preset(box64Preset)
@@ -773,7 +878,12 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             dismiss()
         } else {
             try {
-                val data = JSONObject()
+                val data = ContainerCreation.buildLaunchReadyData(
+                    context,
+                    contentsManager,
+                    name,
+                    selectedWineStr,
+                )
                 data.put("name", name)
                 data.put("screenSize", screenSize)
                 data.put("envVars", envVarsStr)
@@ -789,7 +899,9 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 data.put("wincomponents", wincomponents)
                 data.put("drives", drivesString)
                 data.put("fullscreenStretched", state.fullscreenStretched.value)
+                data.put("useUnixLibs", state.useUnixLibs.value)
                 data.put("inputType", finalInputType)
+                data.put("exclusiveXInput", state.containerExclusiveInput.value)
                 data.put("startupSelection", startupSelection.toInt())
                 data.put("box64Version", box64Version)
                 data.put("box64Preset", box64Preset)
@@ -801,11 +913,19 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 data.put("lc_all", state.lcAll.value)
                 data.put("execArgs", state.execArgs.value)
 
-                preloaderDialog.show(R.string.containers_list_creating)
+                creatingPopup.show()
                 ImageFs.find(File(context.filesDir, "imagefs"))
 
-                manager.createContainerAsync(data, contentsManager) { newContainer ->
+                ContainerCreation.createContainerAsync(manager, contentsManager, data) { newContainer ->
                     if (newContainer != null) {
+                        // Container.loadData() ignores unknown top-level keys, so extras must be set post-creation.
+                        newContainer.putExtra(
+                            "swapRB",
+                            if (state.selectedSurfaceEffect.intValue == 1) "1" else "0"
+                        )
+                        getRefreshRateFromState()?.let { newContainer.putExtra("refreshRate", it) }
+                        newContainer.setZinkMode(if (state.selectedZinkMode.intValue == 1) "windows" else "unix")
+                        newContainer.saveData()
                         saveMouseWarpOverride(newContainer)
                         // Persist Direct Composition on the new container — it's stored as
                         // an extraData entry, not a top-level JSON field, so it doesn't
@@ -817,12 +937,12 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                     } else {
                         WinToast.show(context, R.string.setup_wizard_unable_to_install_system_files)
                     }
-                    preloaderDialog.close()
+                    creatingPopup.close()
                     dismiss()
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "Error creating container", e)
-                preloaderDialog.close()
+                creatingPopup.close()
                 WinToast.show(
                     context,
                     context.getString(R.string.common_ui_error_with_message, e.message ?: ""),
@@ -910,7 +1030,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         fexcorePresetIds = ids
         val saved = container?.getFEXCorePreset()
             ?: PreferenceManager.getDefaultSharedPreferences(context)
-                .getString("fexcore_preset", FEXCorePreset.PERFORMANCE)
+                .getString("fexcore_preset", FEXCorePreset.PERFORMANCE_TSO)
         val idx = ids.indexOfFirst { it == saved }
         state.selectedFexcorePreset.intValue = if (idx >= 0) idx else 0
     }
@@ -971,14 +1091,22 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         return if (archLabel.isNotEmpty()) "$base ($archLabel)" else base
     }
 
-    private fun applyDefaultContainerName(wineInfo: WineInfo, force: Boolean = false) {
+    private fun applyDefaultContainerName(
+        wineInfo: WineInfo,
+        wineVersionIdentifier: String? = null,
+        force: Boolean = false,
+    ) {
         if (container != null) return
 
         val currentName = state.name.value.trim()
-        val defaultName = wineInfo.toString()
+        val defaultName =
+            wineVersionIdentifier
+                ?.let { ContainerCreation.displayNameForWineVersion(context, contentsManager, it) }
+                ?: wineInfo.toString()
+        val uniqueDefault = ContainerCreation.uniqueName(manager, defaultName)
         if (force || currentName.isEmpty() || currentName == autogeneratedContainerName) {
-            state.name.value = defaultName
-            autogeneratedContainerName = defaultName
+            state.name.value = uniqueDefault
+            autogeneratedContainerName = uniqueDefault
         }
     }
 
@@ -1036,6 +1164,8 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             context.resources.getStringArray(R.array.device_memory_entries).toList()
         state.gfxPresentModeEntries.value =
             context.resources.getStringArray(R.array.present_mode_entries).toList()
+        state.gfxCompositorPresentModeEntries.value =
+            context.resources.getStringArray(R.array.compositor_present_mode_entries).toList()
         state.gfxResourceTypeEntries.value =
             context.resources.getStringArray(R.array.resource_type_entries).toList()
         state.gfxBcnEmulationEntries.value =
@@ -1044,6 +1174,10 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             context.resources.getStringArray(R.array.bcn_emulation_type_entries).toList()
         state.gfxBcnEmulationCacheEntries.value =
             context.resources.getStringArray(R.array.bcn_emulation_cache_entries).toList()
+        state.gfxTranscoderEntries.value =
+            context.resources.getStringArray(R.array.wrapper_transcoder_entries).toList()
+        state.gfxQualityEntries.value =
+            context.resources.getStringArray(R.array.wrapper_quality_entries).toList()
 
         val gpuNames = mutableListOf("Device")
         try {
@@ -1061,14 +1195,17 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
 
         loadGraphicsDriverVersions()
 
-        selectByValue(state.gfxVulkanVersionEntries.value, config.get("vulkanVersion") ?: "1.3", state.gfxSelectedVulkanVersion)
+        selectByValue(state.gfxVulkanVersionEntries.value, config.get("vulkanVersion") ?: "1.4", state.gfxSelectedVulkanVersion)
         selectByValue(state.gfxGpuNameEntries.value, config.get("gpuName") ?: "Device", state.gfxSelectedGpuName)
         selectByNumber(state.gfxMaxDeviceMemoryEntries.value, config.get("maxDeviceMemory") ?: "0", state.gfxSelectedMaxDeviceMemory)
         selectByValue(state.gfxPresentModeEntries.value, config.get("presentMode") ?: "mailbox", state.gfxSelectedPresentMode)
+        selectByValue(state.gfxCompositorPresentModeEntries.value, config.get("compositorPresentMode") ?: "fifo", state.gfxSelectedCompositorPresentMode)
         selectByValue(state.gfxResourceTypeEntries.value, config.get("resourceType") ?: "auto", state.gfxSelectedResourceType)
         selectByValue(state.gfxBcnEmulationEntries.value, config.get("bcnEmulation") ?: "none", state.gfxSelectedBcnEmulation)
         selectByValue(state.gfxBcnEmulationTypeEntries.value, config.get("bcnEmulationType") ?: "compute", state.gfxSelectedBcnEmulationType)
         selectByValue(state.gfxBcnEmulationCacheEntries.value, config.get("bcnEmulationCache") ?: "0", state.gfxSelectedBcnEmulationCache)
+        selectByValue(state.gfxTranscoderEntries.value, config.get("transcoder") ?: "cpu", state.gfxSelectedTranscoder)
+        selectByValue(state.gfxQualityEntries.value, config.get("quality") ?: "low", state.gfxSelectedQuality)
         state.gfxSyncFrame.value = config.get("syncFrame") == "1"
         state.gfxDisablePresentWait.value = config.get("disablePresentWait") == "1"
         state.graphicsDriverVersion.value = config.get("version") ?: ""
@@ -1137,12 +1274,21 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         }
     }
 
+    private fun initialDxWrapperConfig(): String =
+        container?.getDXWrapperConfig()
+            ?: ContainerCreation.defaultDxWrapperConfig(contentsManager, isArm64EC)
+
     private fun loadDxvkConfigState() {
-        val configStr = container?.getDXWrapperConfig() ?: Container.DEFAULT_DXWRAPPERCONFIG
+        val configStr = initialDxWrapperConfig()
         val config = DXVKConfigUtils.parseConfig(configStr)
         state.dxvkVkd3dFeatureLevelEntries.value = DXVKConfigUtils.VKD3D_FEATURE_LEVEL.toList()
-        state.dxvkDdrawWrapperEntries.value =
-            context.resources.getStringArray(R.array.ddrawrapper_entries).toList()
+        val ddrawWrapperItems =
+            context.resources.getStringArray(R.array.ddrawrapper_entries).toMutableList()
+        for (profile in contentsManager.getProfiles(ContentProfile.ContentType.CONTENT_TYPE_D7VK)) {
+            ddrawWrapperItems.add(ContentsManager.getEntryName(profile))
+        }
+        if (!isArm64EC) ddrawWrapperItems.removeAll { it.contains("arm64ec") }
+        state.dxvkDdrawWrapperEntries.value = ddrawWrapperItems
         loadDxvkVersions()
         loadVkd3dVersions()
         selectByIdentifier(state.dxvkVkd3dFeatureLevelEntries.value, config.get("vkd3dLevel"), state.dxvkSelectedVkd3dFeatureLevel)
@@ -1160,7 +1306,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         }
         if (!isArm64EC) originalItems.removeAll { it.contains("arm64ec") }
         state.dxvkVersionEntries.value = originalItems
-        val configStr = container?.getDXWrapperConfig() ?: Container.DEFAULT_DXWRAPPERCONFIG
+        val configStr = initialDxWrapperConfig()
         val config = DXVKConfigUtils.parseConfig(configStr)
         selectByIdentifier(originalItems, config.get("version"), state.dxvkSelectedVersion)
     }
@@ -1172,7 +1318,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             items.add(profile.verName + "-" + profile.verCode)
         }
         state.dxvkVkd3dVersionEntries.value = items
-        val configStr = container?.getDXWrapperConfig() ?: Container.DEFAULT_DXWRAPPERCONFIG
+        val configStr = initialDxWrapperConfig()
         val config = DXVKConfigUtils.parseConfig(configStr)
         selectByIdentifier(items, config.get("vkd3dVersion"), state.dxvkSelectedVkd3dVersion)
     }
@@ -1206,7 +1352,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
     }
 
     private fun buildGraphicsDriverConfigFromState(): String {
-        val vulkanVersion = state.gfxVulkanVersionEntries.value.getOrElse(state.gfxSelectedVulkanVersion.intValue) { "1.3" }
+        val vulkanVersion = state.gfxVulkanVersionEntries.value.getOrElse(state.gfxSelectedVulkanVersion.intValue) { "1.4" }
         val version = state.gfxDriverVersionEntries.value.getOrElse(state.gfxSelectedDriverVersion.intValue) { "" }
         val blacklisted = state.gfxBlacklistedExtensions.value.joinToString(",")
         val gpuName = state.gfxGpuNameEntries.value.getOrElse(state.gfxSelectedGpuName.intValue) { "Device" }
@@ -1214,17 +1360,22 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             state.gfxMaxDeviceMemoryEntries.value.getOrElse(state.gfxSelectedMaxDeviceMemory.intValue) { "0" }
         )
         val presentMode = state.gfxPresentModeEntries.value.getOrElse(state.gfxSelectedPresentMode.intValue) { "mailbox" }
+        val compositorPresentMode = state.gfxCompositorPresentModeEntries.value.getOrElse(state.gfxSelectedCompositorPresentMode.intValue) { "fifo" }
         val syncFrame = if (state.gfxSyncFrame.value) "1" else "0"
         val disablePresentWait = if (state.gfxDisablePresentWait.value) "1" else "0"
         val resourceType = state.gfxResourceTypeEntries.value.getOrElse(state.gfxSelectedResourceType.intValue) { "auto" }
         val bcnEmulation = state.gfxBcnEmulationEntries.value.getOrElse(state.gfxSelectedBcnEmulation.intValue) { "none" }
         val bcnEmulationType = state.gfxBcnEmulationTypeEntries.value.getOrElse(state.gfxSelectedBcnEmulationType.intValue) { "compute" }
         val bcnEmulationCache = state.gfxBcnEmulationCacheEntries.value.getOrElse(state.gfxSelectedBcnEmulationCache.intValue) { "0" }
+        val transcoder = state.gfxTranscoderEntries.value.getOrElse(state.gfxSelectedTranscoder.intValue) { "cpu" }
+        val quality = state.gfxQualityEntries.value.getOrElse(state.gfxSelectedQuality.intValue) { "low" }
         return "vulkanVersion=$vulkanVersion;version=$version;blacklistedExtensions=$blacklisted;" +
             "maxDeviceMemory=$maxDeviceMemory;presentMode=$presentMode;syncFrame=$syncFrame;" +
             "disablePresentWait=$disablePresentWait;resourceType=$resourceType;" +
             "bcnEmulation=$bcnEmulation;bcnEmulationType=$bcnEmulationType;" +
-            "bcnEmulationCache=$bcnEmulationCache;gpuName=$gpuName"
+            "bcnEmulationCache=$bcnEmulationCache;gpuName=$gpuName;" +
+            "compositorPresentMode=$compositorPresentMode;" +
+            "transcoder=$transcoder;quality=$quality"
     }
 
     private fun buildDxvkConfigFromState(): String {
@@ -1313,6 +1464,15 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         }
     }
 
+    /** Selected rate, or null for "Default" — stored as key absence so it falls through to the phone's auto rate. */
+    private fun getRefreshRateFromState(): String? {
+        val entries = state.refreshRateEntries.value
+        val idx = state.selectedRefreshRate.intValue
+        if (idx !in entries.indices) return null
+        val rate = RefreshRateUtils.parseRefreshRateLabel(entries[idx])
+        return if (rate > 0) rate.toString() else null
+    }
+
     private fun getScreenSizeFromState(): String {
         val entries = state.screenSizeEntries.value
         val idx = state.selectedScreenSize.intValue
@@ -1367,9 +1527,8 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         val themeIdx = state.selectedDesktopTheme.intValue
         val theme = if (themeIdx in themeEntries.indices) themeEntries[themeIdx].uppercase() else "LIGHT"
 
-        val typeEntries = state.desktopBackgroundTypeEntries.value
         val typeIdx = state.selectedDesktopBackgroundType.intValue
-        val type = if (typeIdx in typeEntries.indices) typeEntries[typeIdx].uppercase() else "COLOR"
+        val type = WineThemeManager.BackgroundType.values().getOrNull(typeIdx)?.name ?: "IMAGE"
 
         val color = state.desktopBackgroundColor.value
         val base = "$theme,$type,$color"
@@ -1434,6 +1593,15 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
 
     fun show() {
         dialog.show()
+        restorePaneNav?.invoke()
+        restorePaneNav = dialog.window?.bindPaneNav(
+            PaneNavWindowHandlers(
+                onDir = { nav.dpad(it) },
+                onActivate = { nav.dpad(PANE_DIR_ACTIVATE) },
+                onDismiss = { if (nav.onContentBack?.invoke() != true) dialog.dismiss() },
+                onStart = { if (state.isLoaded.value) saveSettings() },
+            )
+        )
         dialog.window?.apply {
             applyDialogLayout()
             decorView.post { applyDialogLayout() }
@@ -1499,10 +1667,222 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
     }
 
     fun dismiss() {
-        // Cleanup (launcher unregister, keyboard hide, onFinished) runs in
         // the Dialog.OnDismissListener so back-button dismissal takes the
         // same path as Save/Cancel.
         dialog.dismiss()
+    }
+
+    private fun exportSaves(onComplete: () -> Unit) {
+        val container = this.container ?: run {
+            onComplete()
+            return
+        }
+        val sanitizedName = container.name.replace(" ", "_")
+        val date = SimpleDateFormat("MMddyyyy_HHmmss", Locale.US).format(Date())
+        val zipName = "${sanitizedName}_${date}.zip"
+        val exportDir = File(Environment.getExternalStorageDirectory(), "WinNative/saves")
+        if (!exportDir.exists()) exportDir.mkdirs()
+        val zipFile = File(exportDir, zipName)
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                zipFile.outputStream().use { os ->
+                    java.util.zip.ZipOutputStream(java.io.BufferedOutputStream(os)).use { zos ->
+                        val usersDir = File(container.getRootDir(), ".wine/drive_c/users")
+                        if (usersDir.exists()) {
+                            zos.putNextEntry(java.util.zip.ZipEntry("${usersDir.name}/"))
+                            zos.closeEntry()
+                            zipDir(usersDir, usersDir.name, zos)
+                        }
+
+                        val programDataDir = File(container.getRootDir(), ".wine/drive_c/ProgramData")
+                        if (programDataDir.exists()) {
+                            zos.putNextEntry(java.util.zip.ZipEntry("${programDataDir.name}/"))
+                            zos.closeEntry()
+                            zipDir(programDataDir, programDataDir.name, zos)
+                        }
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    onComplete()
+                    WinToast.show(context, context.getString(R.string.saves_export_success_path, "/WinNative/saves"), dialog.window?.decorView)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    onComplete()
+                    WinToast.show(context, context.getString(R.string.saves_import_export_exported_failed, e.message), dialog.window?.decorView)
+                }
+            }
+        }
+    }
+
+    private fun isExcluded(name: String): Boolean {
+        if (name.isEmpty()) return false
+        val excludedFolders = setOf(
+            "Contacts", "Desktop", "Downloads", "Favorites", "Links",
+            "Music", "Pictures", "Searches", "Temp", "Videos", "Package Cache", "Templates"
+        )
+        if (excludedFolders.any { it.equals(name, ignoreCase = true) }) return true
+        if (name.contains("Microsoft", ignoreCase = true)) return true
+        if (name.contains("Windows", ignoreCase = true)) return true
+        return false
+    }
+
+    private fun isPathExcluded(path: String): Boolean {
+        return path.split('/').any { isExcluded(it) }
+    }
+
+    private fun zipDir(
+        dir: File,
+        baseName: String,
+        zos: java.util.zip.ZipOutputStream,
+    ) {
+        val children = dir.listFiles() ?: return
+        for (child in children) {
+            if (isExcluded(child.name)) continue
+            val name = if (baseName.isEmpty()) child.name else "$baseName/${child.name}"
+            if (child.isDirectory) {
+                zos.putNextEntry(java.util.zip.ZipEntry("$name/"))
+                zos.closeEntry()
+                zipDir(child, name, zos)
+            } else {
+                zos.putNextEntry(java.util.zip.ZipEntry(name))
+                child.inputStream().use { it.copyTo(zos) }
+                zos.closeEntry()
+            }
+        }
+    }
+
+    private fun showExportSavesConfirmation() {
+        showSavesPopupConfirmation(
+            title = context.getString(R.string.saves_export_warning_title),
+            message = context.getString(R.string.saves_export_warning_body),
+            confirmLabel = context.getString(R.string.common_ui_export),
+            progressLabel = context.getString(R.string.common_ui_exporting),
+        ) { dismiss ->
+            exportSaves(onComplete = dismiss)
+        }
+    }
+
+    private fun showImportSavesConfirmation() {
+        showSavesPopupConfirmation(
+            title = context.getString(R.string.saves_import_warning_title),
+            message = context.getString(R.string.saves_import_warning_body),
+            confirmLabel = context.getString(R.string.common_ui_import),
+        ) { dismiss ->
+            dismiss()
+            val imagefsRoot = ImageFs.find(context).getRootDir()
+            val driveRoots =
+                listOf(
+                    DirectoryPickerDialog.ManagedRoot("C:", File(imagefsRoot, "home").absolutePath),
+                    DirectoryPickerDialog.ManagedRoot("Z:", imagefsRoot.absolutePath),
+                    DirectoryPickerDialog.ManagedRoot(
+                        "D:",
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath,
+                    ),
+                    DirectoryPickerDialog.ManagedRoot("Internal", Environment.getExternalStorageDirectory().absolutePath),
+                )
+            DirectoryPickerDialog.showFile(
+                activity,
+                title = context.getString(R.string.common_ui_import),
+                allowedExtensions = setOf("zip"),
+                extraRoots = driveRoots,
+            ) { pickedPath ->
+                importSaves(File(pickedPath))
+            }
+        }
+    }
+
+    private fun showSavesPopupConfirmation(
+        title: String,
+        message: String,
+        confirmLabel: String,
+        progressLabel: String? = null,
+        onConfirm: (dismiss: () -> Unit) -> Unit,
+    ) {
+        val dialog = AppCompatDialog(activity, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar).apply {
+            setCancelable(true)
+            setCanceledOnTouchOutside(true)
+            window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        }
+        val dismiss = { dialog.dismiss() }
+        val composeView = ComposeView(activity).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setContent {
+                WinNativeTheme {
+                    PopupDialog(
+                        title = title,
+                        message = message,
+                        confirmLabel = confirmLabel,
+                        progressLabel = progressLabel,
+                        modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
+                        onConfirm = { onConfirm(dismiss) },
+                        onCancel = dismiss,
+                    )
+                }
+            }
+        }
+        dialog.setContentView(composeView)
+        dialog.show()
+    }
+
+    private fun importSaves(zipFile: File) {
+        val container = this.container ?: return
+        scope.launch(Dispatchers.IO) {
+            val loadingDialog = withContext(Dispatchers.Main) {
+                WinNativeComposeDialogs.showLoading(context, context.getString(R.string.common_ui_loading))
+            }
+            try {
+                java.util.zip.ZipFile(zipFile).use { zf ->
+                    val usersDir = File(container.getRootDir(), ".wine/drive_c/users")
+                    val xuserDir = File(usersDir, "xuser")
+
+                    val entries = zf.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        val name = entry.name
+
+                        if (isPathExcluded(name)) continue
+
+                        var destFile: File? = null
+
+                        if (name.startsWith("users/")) {
+                            destFile = File(usersDir.parentFile, name)
+                        } else if (name.startsWith("ProgramData/")) {
+                            destFile = File(usersDir.parentFile, name)
+                        } else if (name.startsWith("xuser/")) {
+                            destFile = File(usersDir, name)
+                        } else if (name.startsWith("Documents/") || name.startsWith("Saved Games/") || name.startsWith("AppData/")) {
+                            destFile = File(xuserDir, name)
+                        }
+
+                        if (destFile != null) {
+                            if (entry.isDirectory) {
+                                destFile.mkdirs()
+                            } else {
+                                destFile.parentFile?.mkdirs()
+                                zf.getInputStream(entry).use { input ->
+                                    destFile.outputStream().use { input.copyTo(it) }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    loadingDialog?.dismiss()
+                    WinToast.show(context, R.string.saves_import_export_imported, dialog.window?.decorView)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    loadingDialog?.dismiss()
+                    WinToast.show(context, context.getString(R.string.saves_import_export_imported_failed, e.message), dialog.window?.decorView)
+                }
+            }
+        }
     }
 
     companion object {

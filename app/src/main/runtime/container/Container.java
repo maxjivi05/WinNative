@@ -23,16 +23,17 @@ public class Container {
     public static final String DEFAULT_ENV_VARS = "WRAPPER_MAX_IMAGE_COUNT=0 VKD3D_SHADER_MODEL=6_6 ZINK_DESCRIPTORS=lazy ZINK_DEBUG=compact MESA_SHADER_CACHE_DISABLE=false MESA_SHADER_CACHE_MAX_SIZE=512MB mesa_glthread=true TU_DEBUG=noconform,sysmem";
     public static final String DEFAULT_SCREEN_SIZE = "1280x720";
     public static final String DEFAULT_GRAPHICS_DRIVER = "wrapper";
+    public static final String DEFAULT_ZINK_MODE = "unix";
     public static final String DEFAULT_AUDIO_DRIVER = "alsa";
     public static final String DEFAULT_EMULATOR = "Box64";
     public static final String DEFAULT_EMULATOR64 = "Box64";
     public static final String DEFAULT_DXWRAPPER = "dxvk+vkd3d";
     public static final String DEFAULT_DXWRAPPERCONFIG = "version=,async=1,asyncCache=1" + ",vkd3dVersion=None,vkd3dLevel=12_1" + ",ddrawrapper=" + Container.DEFAULT_DDRAWRAPPER + ",csmt=3" + ",gpuName=NVIDIA GeForce GTX 480" + ",videoMemorySize=4096" + ",strict_shader_math=1" + ",OffscreenRenderingMode=fbo" + ",renderer=gl";
     public static final String DEFAULT_GRAPHICSDRIVERCONFIG =
-            "vulkanVersion=1.3" + ";version=" + ";blacklistedExtensions=" + ";maxDeviceMemory=0" + ";presentMode=mailbox" + ";syncFrame=0" + ";disablePresentWait=1" + ";resourceType=auto" + ";bcnEmulation=none" + ";bcnEmulationType=compute" + ";bcnEmulationCache=0" + ";gpuName=Device";
+            "vulkanVersion=1.4" + ";version=" + ";blacklistedExtensions=" + ";maxDeviceMemory=0" + ";presentMode=mailbox" + ";syncFrame=0" + ";disablePresentWait=0" + ";resourceType=auto" + ";bcnEmulation=auto" + ";bcnEmulationType=compute" + ";bcnEmulationCache=0" + ";gpuName=Device" + ";transcoder=cpu" + ";quality=low";
     public static final String DEFAULT_DDRAWRAPPER = "none";
-    public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,vcrun2010=1";
-    public static final String FALLBACK_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=1,directplay=1,xaudio=1,vcrun2010=1";
+    public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,dinput8=1,vcrun2010=1";
+    public static final String FALLBACK_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=1,directplay=1,xaudio=1,dinput8=1,vcrun2010=1";
     public static final String DEFAULT_DRIVES = "D:" + Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "F:" + Environment.getExternalStorageDirectory().getAbsolutePath();
     public static final byte STARTUP_SELECTION_NORMAL = 0;
     public static final byte STARTUP_SELECTION_ESSENTIAL = 1;
@@ -51,46 +52,40 @@ public class Container {
     private String drives = DEFAULT_DRIVES;
     private String wineVersion = WineInfo.MAIN_WINE_VERSION.identifier();
     private boolean fullscreenStretched;
+    private boolean useUnixLibs = true;
     private byte startupSelection = STARTUP_SELECTION_ESSENTIAL;
     private String cpuList;
     private String cpuListWoW64;
     private String desktopTheme = WineThemeManager.DEFAULT_DESKTOP_THEME;
     private String fexcoreVersion = "";
-    private String fexcorePreset = FEXCorePreset.PERFORMANCE;
+    private String fexcorePreset = FEXCorePreset.PERFORMANCE_TSO;
     private String box64Preset = Box64Preset.PERFORMANCE;
     private File rootDir;
     private JSONObject extraData;
     private String midiSoundFont = "";
     private int inputType = WinHandler.DEFAULT_INPUT_TYPE;
+    private boolean exclusiveXInput = true;
     private String lc_all = "";
     private String box64Version = "";
     private String emulator = DEFAULT_EMULATOR;
     private String emulator64 = DEFAULT_EMULATOR64;
     private String executablePath = "";
     private String execArgs = "";
-    private boolean launchRealSteam;
-    private boolean useColdClient = true;
-    private String steamType = "normal";
+    private boolean launchBionicSteam;
+    private boolean useColdClient = false;
     private boolean allowSteamUpdates;
     private boolean needsUnpacking = true;
-    private boolean forceDlc = false;
     private boolean steamOfflineMode = false;
-    private boolean unpackFiles = true;
+    private boolean unpackFiles = false;
     private boolean runtimePatcher = false;
 
-    public static final String STEAM_TYPE_NORMAL = "normal";
-    public static final String STEAM_TYPE_LIGHT = "light";
-    public static final String STEAM_TYPE_ULTRALIGHT = "ultralight";
-
     /**
-     * extraData JSON key for the per-container "Direct Composition" toggle.
-     * Stored as a string ("1"/"0") for symmetry with the rest of extraData. The
-     * setting is read at activity startup and applies for the whole session — it
-     * controls whether fullscreen drawables are pushed to a sibling Android
-     * SurfaceControl layer (zero-copy DPU scanout) instead of being composited
-     * by the in-process GLRenderer. Changing it mid-game is not supported.
+     * extraData JSON key for the per-container "Direct Composition" toggle,
+     * stored as "1"/"0" for symmetry with the rest of extraData. Read at
+     * activity startup; changing it mid-session is not supported.
      */
     public static final String EXTRA_DIRECT_COMPOSITION = "directComposition";
+
 
     private ContainerManager containerManager;
 
@@ -166,6 +161,14 @@ public class Container {
         this.graphicsDriver = graphicsDriver;
     }
 
+    public String getZinkMode() {
+        return getExtra("zinkMode", DEFAULT_ZINK_MODE);
+    }
+
+    public void setZinkMode(String zinkMode) {
+        putExtra("zinkMode", zinkMode);
+    }
+
     public String getGraphicsDriverConfig() { return this.graphicsDriverConfig; }
 
     public void setGraphicsDriverConfig(String graphicsDriverConfig) { this.graphicsDriverConfig = graphicsDriverConfig; }
@@ -221,6 +224,10 @@ public class Container {
     public boolean isFullscreenStretched() { return fullscreenStretched; }
 
     public void setFullscreenStretched(boolean fullscreenStretched) { this.fullscreenStretched = fullscreenStretched; }
+
+    public boolean isUseUnixLibs() { return useUnixLibs; }
+
+    public void setUseUnixLibs(boolean useUnixLibs) { this.useUnixLibs = useUnixLibs; }
 
     public byte getStartupSelection() {
         return startupSelection;
@@ -402,6 +409,14 @@ public class Container {
         this.inputType = inputType;
     }
 
+    public boolean isExclusiveXInput() {
+        return exclusiveXInput;
+    }
+
+    public void setExclusiveXInput(boolean exclusiveXInput) {
+        this.exclusiveXInput = exclusiveXInput;
+    }
+
     public Iterable<String[]> drivesIterator() {
         return drivesIterator(drives);
     }
@@ -447,7 +462,9 @@ public class Container {
             data.put("wincomponents", wincomponents);
             data.put("drives", drives);
             data.put("fullscreenStretched", fullscreenStretched);
+            data.put("useUnixLibs", useUnixLibs);
             data.put("inputType", inputType);
+            data.put("exclusiveXInput", exclusiveXInput);
             data.put("startupSelection", startupSelection);
             data.put("box64Version", box64Version);
             data.put("fexcorePreset", fexcorePreset);
@@ -457,13 +474,11 @@ public class Container {
             data.put("extraData", extraData);
             data.put("midiSoundFont", midiSoundFont);
             data.put("lc_all", lc_all);
-            data.put("launchRealSteam", launchRealSteam);
+            data.put("launchBionicSteam", launchBionicSteam);
             data.put("useColdClient", useColdClient);
             data.put("coldClientMigrated", true);
-            data.put("steamType", steamType);
             data.put("allowSteamUpdates", allowSteamUpdates);
             data.put("needsUnpacking", needsUnpacking);
-            data.put("forceDlc", forceDlc);
             data.put("steamOfflineMode", steamOfflineMode);
             data.put("unpackFiles", unpackFiles);
             data.put("runtimePatcher", runtimePatcher);
@@ -532,8 +547,14 @@ public class Container {
                 case "fullscreenStretched" :
                     setFullscreenStretched(data.getBoolean(key));
                     break;
+                case "useUnixLibs" :
+                    setUseUnixLibs(data.getBoolean(key));
+                    break;
                 case "inputType" :
                     setInputType(data.getInt(key));
+                    break;
+                case "exclusiveXInput" :
+                    setExclusiveXInput(data.getBoolean(key));
                     break;
                 case "startupSelection" :
                     setStartupSelection((byte)data.getInt(key));
@@ -571,8 +592,8 @@ public class Container {
                 case "lc_all" :
                     setLC_ALL(data.getString(key));
                     break;
-                case "launchRealSteam" :
-                    setLaunchRealSteam(data.getBoolean(key));
+                case "launchBionicSteam" :
+                    setLaunchBionicSteam(data.getBoolean(key));
                     break;
                 case "useColdClient" :
                     // Only respect explicit user choice if coldClientMigrated flag is set
@@ -584,17 +605,11 @@ public class Container {
                 case "useLegacyDRM" :
                     // Old field — always default to ColdClient on
                     break;
-                case "steamType" :
-                    setSteamType(data.getString(key));
-                    break;
                 case "allowSteamUpdates" :
                     setAllowSteamUpdates(data.getBoolean(key));
                     break;
                 case "needsUnpacking" :
                     setNeedsUnpacking(data.getBoolean(key));
-                    break;
-                case "forceDlc":
-                    setForceDlc(data.getBoolean(key));
                     break;
                 case "steamOfflineMode":
                     setSteamOfflineMode(data.getBoolean(key));
@@ -677,7 +692,7 @@ public class Container {
                 if (appVersion < 16) {
                     EnvVars defaultEnvVars = new EnvVars(DEFAULT_ENV_VARS);
                     EnvVars envVars = new EnvVars(data.getString("envVars"));
-                    for (String name : defaultEnvVars) if (!envVars.has(name)) envVars.put(name, defaultEnvVars.get(name));
+                    for (String name : defaultEnvVars) if (!name.equals("VKD3D_SHADER_MODEL") && !envVars.has(name)) envVars.put(name, defaultEnvVars.get(name));
                     data.put("envVars", envVars.toString());
                 }
             }
@@ -730,12 +745,14 @@ public class Container {
         return false;
     }
 
-    public boolean isLaunchRealSteam() {
-        return launchRealSteam;
+    /** Bionic Steam mode: wine launches steam.exe + game.exe and our embedded
+     *  libsteamclient.so via wn-steam-bootstrap handles the SteamWorks IPC. */
+    public boolean isLaunchBionicSteam() {
+        return launchBionicSteam;
     }
 
-    public void setLaunchRealSteam(boolean launchRealSteam) {
-        this.launchRealSteam = launchRealSteam;
+    public void setLaunchBionicSteam(boolean launchBionicSteam) {
+        this.launchBionicSteam = launchBionicSteam;
     }
 
     public boolean isUseColdClient() {
@@ -744,24 +761,6 @@ public class Container {
 
     public void setUseColdClient(boolean useColdClient) {
         this.useColdClient = useColdClient;
-    }
-
-    public String getSteamType() {
-        return steamType;
-    }
-
-    public void setSteamType(String steamType) {
-        String normalized = (steamType == null) ? "" : steamType.toLowerCase();
-        switch (normalized) {
-            case STEAM_TYPE_LIGHT:
-                this.steamType = STEAM_TYPE_LIGHT;
-                break;
-            case STEAM_TYPE_ULTRALIGHT:
-                this.steamType = STEAM_TYPE_ULTRALIGHT;
-                break;
-            default:
-                this.steamType = STEAM_TYPE_NORMAL;
-        }
     }
 
     public boolean isAllowSteamUpdates() {
@@ -778,14 +777,6 @@ public class Container {
 
     public void setNeedsUnpacking(boolean needsUnpacking) {
         this.needsUnpacking = needsUnpacking;
-    }
-
-    public boolean isForceDlc() {
-        return forceDlc;
-    }
-
-    public void setForceDlc(boolean forceDlc) {
-        this.forceDlc = forceDlc;
     }
 
     public boolean isSteamOfflineMode() {
