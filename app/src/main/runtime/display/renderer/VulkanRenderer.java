@@ -684,6 +684,13 @@ public class VulkanRenderer
         if (magnifierUIActive) {
             return false;
         }
+        // Same for the cursor: it is drawn in the Vulkan scene, and a frame
+        // owned by DC skips that composition entirely, so engaging DC while the
+        // cursor is visible would make it disappear. Fullscreen sessions hide
+        // the cursor at setup, so this only defers DC for windowed/touchpad use.
+        if (cursorVisible) {
+            return false;
+        }
         // No fullscreen candidate — fall back to VulkanRenderer.
         if (directCandidate == null) {
             return false;

@@ -189,7 +189,6 @@ static void on_transaction_complete(void* context, ASurfaceTransactionStats* sta
 
 // Block until any pending transaction completes (condvar wait, not busy-wait).
 static void wait_for_transaction_gate(long timeout_ms) {
-    if (!g_transaction_pending) return;
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
     int64_t add_ns = (int64_t)timeout_ms * 1000000L;
@@ -211,7 +210,9 @@ JNIEXPORT jboolean JNICALL
 Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_nativeWaitForPreviousFrame(
     JNIEnv* env, jobject thiz, jlong timeout_ms) {
     (void)env; (void)thiz;
-    if (!g_has_on_complete || g_inflight_count == 0) return JNI_TRUE;
+    // g_inflight_count is only safe to read under the mutex; the loop below
+    // already short-circuits when nothing is in flight.
+    if (!g_has_on_complete) return JNI_TRUE;
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
     int64_t add_ns = (int64_t)timeout_ms * 1000000L;
@@ -315,6 +316,10 @@ static void init_once_locked(void) {
              g_tx_set_buffer_dataspace          ? "yes" : "MISSING",
              g_tx_set_buffer_transparency       ? "yes" : "MISSING",
              g_tx_set_extended_range_brightness ? "yes (API 34+)" : "MISSING (API < 34)");
+        if (!g_has_on_complete) {
+            LOGW("ASurfaceTransaction_setOnComplete missing — no completion "
+                 "tracking; release falls back to a timed wait");
+        }
     } else {
         LOGW("Direct Composition NOT available — missing required symbols");
     }
@@ -359,16 +364,18 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
         return 0;
     }
 
-    const char* name_str = "winnative-direct-composition";
+    // Track the JNI-owned copy separately: if GetStringUTFChars fails we fall
+    // back to the literal, and releasing a literal is undefined behaviour.
+    const char* jni_name = NULL;
     if (debug_name != NULL) {
-        const char* tmp = (*env)->GetStringUTFChars(env, debug_name, NULL);
-        if (tmp) name_str = tmp;
+        jni_name = (*env)->GetStringUTFChars(env, debug_name, NULL);
     }
+    const char* name_str = jni_name ? jni_name : "winnative-direct-composition";
 
     struct ASurfaceControl* sc = g_create_from_window(win, name_str);
     ANativeWindow_release(win);  // release the ref fromSurface acquired
-    if (debug_name != NULL) {
-        (*env)->ReleaseStringUTFChars(env, debug_name, name_str);
+    if (jni_name != NULL) {
+        (*env)->ReleaseStringUTFChars(env, debug_name, jni_name);
     }
     if (sc == NULL) {
         LOGE("nativeCreateFromWindow: ASurfaceControl_createFromWindow failed");
@@ -425,6 +432,16 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
     // fix: releasing a SC while SF is still processing a transaction on it
     // crashes SF on Xiaomi/HyperOS 2.0+.
     inflight_wait_all();
+
+    // Without setOnComplete there is nothing to count, so inflight_wait_all
+    // returns immediately and the release above would race SF exactly as it
+    // does on unhardened builds. Fall back to a bounded sleep (~2 frames at
+    // 60Hz) so SF has had time to process the reparent. Teardown-only, and
+    // only on devices whose libandroid.so lacks the symbol.
+    if (!g_has_on_complete) {
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 32 * 1000000L };
+        nanosleep(&ts, NULL);
+    }
 
     g_sc_release(sc);
     LOGI("Direct Composition layer released: sc=%p", (void*)sc);

@@ -132,8 +132,13 @@ public final class SurfaceCompositor {
         Log.i(TAG, message);
         synchronized (diagLock) {
             if (diagWriter != null) {
-                try { diagWriter.write(timestamped + "\n"); }
-                catch (IOException ignored) {}
+                // Flush every line: this log exists to diagnose SurfaceFlinger
+                // crashes and soft reboots, and anything still buffered when the
+                // device goes down is exactly the part worth having.
+                try {
+                    diagWriter.write(timestamped + "\n");
+                    diagWriter.flush();
+                } catch (IOException ignored) {}
             }
         }
     }
