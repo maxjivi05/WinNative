@@ -84,6 +84,8 @@ public class FrameRating extends LinearLayout implements Runnable {
   private final int C_CPU;
   private final int C_DIVISOR;
   private final int C_FPS_OK;
+  /** Darker green for the "+ DC" badge, distinct from the bright FPS green. */
+  private static final int C_DC_ACTIVE = 0xFF2E7D32;
   private final int C_WARM;
   private final int C_HOT;
   private final int C_GPU;
@@ -1117,13 +1119,14 @@ public class FrameRating extends LinearLayout implements Runnable {
   private void updateRendererText() {
     if (this.tvRenderer != null) {
       if (directCompositionActive) {
-        // Append " + DC" in green to signal that Direct Composition
-        // (zero-copy AHB → SurfaceControl + HWC overlay) is active.
+        // "+ DC" in a darker green than the HUD's bright FPS green, so it reads
+        // as a state badge on the renderer rather than another metric.
         SpannableStringBuilder sb = new SpannableStringBuilder();
         sb.append(this.rendererName);
-        sb.append(" + DC");
-        sb.setSpan(new ForegroundColorSpan(0xFF4CAF50),  // Material Green 500
-                this.rendererName.length(), sb.length(),
+        sb.append(" ");
+        int badgeStart = sb.length();
+        sb.append("+ DC");
+        sb.setSpan(new ForegroundColorSpan(C_DC_ACTIVE), badgeStart, sb.length(),
                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         this.tvRenderer.setText(sb);
       } else {
