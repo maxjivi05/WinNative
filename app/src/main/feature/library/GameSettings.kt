@@ -115,6 +115,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
@@ -5027,6 +5029,9 @@ private fun DirectCompositionChip(
     onClick: () -> Unit
 ) {
     val active = supported && on
+    // "DC" alone is meaningless to a screen reader; reuse the translated
+    // Direct Composition label as the accessible name.
+    val label = stringResource(R.string.session_display_direct_composition)
     val bgColor = if (active) AccentBlue.copy(alpha = 0.15f) else ChipSurface
     val borderColor = if (active) AccentBlue.copy(alpha = 0.4f) else ChipBorder
     val textColor = if (active) AccentBlue else TextDim
@@ -5050,7 +5055,8 @@ private fun DirectCompositionChip(
                     Modifier
                 }
             )
-            .padding(horizontal = 10.dp, vertical = 2.dp),
+            .padding(horizontal = 10.dp, vertical = 2.dp)
+            .semantics { contentDescription = label },
         contentAlignment = Alignment.Center
     ) {
         Text(
