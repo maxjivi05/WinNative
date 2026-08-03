@@ -30,20 +30,14 @@ public class Drawable extends XResource {
   public final Object renderLock = new Object();
 
   /**
-   * Producer-side acquire fence FD for the Direct Composition path. -1 means
-   * "no fence; buffer is ready for immediate read".
+   * Producer-side acquire fence FD, or -1 when the buffer needs no wait.
    *
-   * <p>Today the value is usually -1: the in-process Java X server receives
-   * the AHardwareBuffer from the Wine client over the DRI3
-   * PIXMAP_FROM_BUFFERS path, which the X-server worker thread processes only
-   * after the client has already submitted its Vulkan command buffer.
-   * Empirically this CPU-side handoff latency exceeds the GPU-write completion
-   * time, so we observe no tearing without an explicit fence.
+   * <p>Usually -1: the X-server worker only processes DRI3 PIXMAP_FROM_BUFFERS
+   * after the client has already submitted its Vulkan commands, and that
+   * handoff latency has empirically exceeded GPU-write completion.
    *
-   * <p>Stored as AtomicInteger so the "consume" semantic is atomic with
-   * respect to concurrent setAcquireFenceFd writes — without it, a producer
-   * could overwrite a still-pending FD between the consumer's read and clear,
-   * leaking the old FD.
+   * <p>AtomicInteger so take-and-clear is atomic against a concurrent producer
+   * write, which would otherwise leak the previous FD.
    */
   private final AtomicInteger acquireFenceFd = new AtomicInteger(-1);
 

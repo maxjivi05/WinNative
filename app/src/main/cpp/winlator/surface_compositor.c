@@ -1,35 +1,20 @@
-// JNI wrapper around Android's ASurfaceControl / ASurfaceTransaction NDK API
-// (libandroid.so, API 29+).
+// JNI wrapper around ASurfaceControl / ASurfaceTransaction (libandroid.so,
+// API 29+). Hands a DRI3 game frame's AHardwareBuffer to a child
+// ASurfaceControl layer so HWC can scan it out from a DPU overlay plane
+// instead of the renderer blitting it.
 //
-// Direct Composition path: hands an AHardwareBuffer (the DRI3 game frame) to a
-// child ASurfaceControl layer so SurfaceFlinger + HWC can scan it out directly
-// via the DPU overlay plane — bypassing the VulkanRenderer's GPU compositing
-// blit for fullscreen game frames. This is the true zero-copy path.
+// Symbols are dlopen/dlsym'd so the library still loads on minSdk-26 devices;
+// the Java side gates every call on SurfaceCompositor.isAvailable().
 //
-// Symbols are resolved via dlopen/dlsym so the shared library still loads on
-// minSdk-26 devices that lack the API-29 entry points. Calling any resolved
-// pointer on a pre-API-29 device is gated by the Java side checking
-// SurfaceCompositor.isAvailable() first.
+// Device-safety invariants (regressing any of these has caused soft reboots):
+//   - Never allocate a CPU_WRITE + COMPOSER_OVERLAY buffer. That combination
+//     panics some gralloc implementations (Adreno 6xx qdgralloc, MediaTek,
+//     older Exynos). This is why there is no proof-of-life smoke-test buffer.
+//   - Reject negative destination coordinates; some OEM ROMs crash SF on them.
+//   - Never release an ASurfaceControl while SF is still processing a
+//     transaction on it — crashes SF on Xiaomi/HyperOS.
 //
-// === SOFT-BOOT HARDENING (vs original PR #380) ===
-//   1. Smoke-test buffer REMOVED. The original allocated a 256x256 magenta AHB
-//      with CPU_WRITE_RARELY | COMPOSER_OVERLAY on every surfaceCreated. On
-//      some gralloc implementations (Adreno 6xx qdgralloc, MediaTek, older
-//      Exynos) the CPU_WRITE + COMPOSER_OVERLAY combo triggers a kernel panic
-//      → soft boot. The proof-of-life is not needed; real game frames prove
-//      the path works.
-//   2. dstX/dstY validation. Negative destination coordinates were silently
-//      passed to ASurfaceTransaction, which on some OEM ROMs crashes SF.
-//   3. Wait-for-in-flight on release(). ASurfaceControl_release while an
-//      ASurfaceTransaction_apply is still being processed by SF can crash SF
-//      on Xiaomi/HyperOS. We track an in-flight flag and wait for it to clear
-//      before releasing.
-//   4. No per-frame apply storm. The Java side caches (ahbPtr, dstW, dstH) and
-//      only calls nativePushBuffer when something changed — so we don't create
-//      a transaction at all for unchanged frames.
-//
-// Reference: https://github.com/WinNative-Emu/WinNative/pull/380
-// Research:  /home/z/my-project/download/pr380-research-report.md
+// Ported from https://github.com/WinNative-Emu/WinNative/pull/380
 #include <android/data_space.h>
 #include <android/hardware_buffer.h>
 #include <android/log.h>
@@ -112,7 +97,7 @@ typedef void (*pfn_ASurfaceTransaction_setCrop)(struct ASurfaceTransaction* t,
 typedef void (*pfn_ASurfaceTransaction_setBufferTransform)(struct ASurfaceTransaction* t,
                                                            struct ASurfaceControl* sc,
                                                            int32_t transform);
-// Phase 4 colour / brightness control (optional — null on older Android).
+// Colour / brightness control (optional — null on older Android).
 typedef void (*pfn_ASurfaceTransaction_setBufferDataSpace)(struct ASurfaceTransaction* t,
                                                            struct ASurfaceControl* sc,
                                                            int data_space);
@@ -343,12 +328,7 @@ Java_com_winlator_cmod_runtime_display_composition_SurfaceCompositor_nativeIsAva
     return ensure_initialised() ? JNI_TRUE : JNI_FALSE;
 }
 
-// ---------------------------------------------------------------------------
-// JNI: nativeCreateFromWindow(Surface, debugName) -> jlong (sc pointer)
-// Creates a child ASurfaceControl bound to the SurfaceView's Surface, hides
-// it, sets z-order to 1 (above the SurfaceView's primary BufferQueue layer
-// at z=0). Returns 0 on failure.
-// ---------------------------------------------------------------------------
+// Creates a child ASurfaceControl at z=1, hidden until the first pushBuffer.
 JNIEXPORT jlong JNICALL
 Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_nativeCreateFromWindow(
     JNIEnv* env, jobject thiz, jobject surface, jstring debug_name) {
@@ -401,12 +381,7 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
     return (jlong)(uintptr_t)sc;
 }
 
-// ---------------------------------------------------------------------------
-// JNI: nativeDetachAndRelease(sc) -> void
-// Reparents to null (removes from display), waits for in-flight transactions,
-// then releases the ASurfaceControl. The wait prevents the Xiaomi/HyperOS
-// crash where releasing a SC while a transaction is in-flight kills SF.
-// ---------------------------------------------------------------------------
+// Reparents to null, drains in-flight transactions, then releases.
 JNIEXPORT void JNICALL
 Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_nativeDetachAndRelease(
     JNIEnv* env, jobject thiz, jlong sc_ptr) {
@@ -447,9 +422,6 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
     LOGI("Direct Composition layer released: sc=%p", (void*)sc);
 }
 
-// ---------------------------------------------------------------------------
-// JNI: nativeHide(sc) -> void
-// ---------------------------------------------------------------------------
 JNIEXPORT void JNICALL
 Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_nativeHide(
     JNIEnv* env, jobject thiz, jlong sc_ptr) {
@@ -467,23 +439,12 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
     g_tx_delete(tx);
 }
 
-// ---------------------------------------------------------------------------
-// JNI: nativePushBuffer(sc, ahb, dstX, dstY, dstW, dstH, acquire_fence_fd, opaque) -> jboolean
+// Per-frame hot path: setBuffer + geometry + SHOW in one atomic transaction,
+// which avoids a blank-frame race. The caller only invokes this when the
+// buffer or geometry actually changed.
 //
-// Per-frame hot path. Hands an AHardwareBuffer to the SurfaceControl in one
-// transaction: setBuffer + geometry + visibility(SHOW) + colour/brightness.
-// Atomic — same transaction avoids the blank-frame race.
-//
-// The Java side caches (ahbPtr, dstW, dstH) and only calls this when something
-// changed, so we don't create a transaction for unchanged frames — this is
-// the primary CPU/battery optimization.
-//
-// SOFT-BOOT HARDENING:
-//   - Validates dstX/dstY >= 0 (negative values crash SF on some OEM ROMs).
-//   - Tracks in-flight transactions so release() can wait.
-//   - Closes acquire_fence_fd on ALL error paths (framework only takes
-//     ownership on the success path of setBuffer).
-// ---------------------------------------------------------------------------
+// acquire_fence_fd must be closed on every error path — the framework only
+// takes ownership once setBuffer succeeds.
 JNIEXPORT jboolean JNICALL
 Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_nativePushBuffer(
     JNIEnv* env, jclass clazz, jlong sc_ptr, jlong ahb_ptr,
@@ -492,7 +453,7 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
     (void)env;
     (void)clazz;
 
-    // --- Validation (soft-boot hardening) ---
+    // --- Validation ---
     if (sc_ptr == 0 || ahb_ptr == 0) {
         if (acquire_fence_fd >= 0) close(acquire_fence_fd);
         return JNI_FALSE;
@@ -501,7 +462,7 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
         if (acquire_fence_fd >= 0) close(acquire_fence_fd);
         return JNI_FALSE;
     }
-    // Reject negative destination coordinates — some OEM ROMs crash SF.
+    // Negative destination coordinates crash SF on some OEM ROMs.
     if (dst_x < 0 || dst_y < 0 || dst_w <= 0 || dst_h <= 0) {
         LOGW("pushBuffer: invalid dst rect %dx%d at (%d,%d)", dst_w, dst_h, dst_x, dst_y);
         if (acquire_fence_fd >= 0) close(acquire_fence_fd);
@@ -538,7 +499,7 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
     // call the framework will close the fd; we MUST NOT touch it again.
     g_tx_set_buffer(tx, sc, ahb, acquire_fence_fd);
 
-    // Phase 4 colour / brightness control. Each call is best-effort.
+    // Colour / brightness control; each call is best-effort.
     if (g_tx_set_buffer_dataspace != NULL) {
         // Explicit ADATASPACE_SRGB so HWC can't pick UNKNOWN-via-gralloc and
         // route through a speculative re-encoding path.
@@ -577,11 +538,11 @@ Java_com_winlator_cmod_runtime_display_composition_DirectCompositionLayer_native
         // so the framework closes the fd properly.
     }
 
-    // Show the layer (atomic with setBuffer — avoids blank-frame race).
+    // Atomic with setBuffer, so the layer never shows an empty frame.
     g_tx_set_visibility(tx, sc, DC_VISIBILITY_SHOW);
 
-    // Atomic submission gate: block if a previous transaction is still in SF's pipeline.
-    // The render thread sleeps on a condvar until on_transaction_complete fires (hardware signal).
+    // Block until SF has retired the previous transaction, so we pace to the
+    // display rather than queueing ahead of it.
     if (g_has_on_complete) {
         if (pace) wait_for_transaction_gate(17); // ~60Hz budget; condvar wait, not busy-spin
         g_tx_set_on_complete(tx, NULL, on_transaction_complete);

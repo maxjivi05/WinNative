@@ -12,22 +12,11 @@ import java.util.Date;
 import java.util.Locale;
 
 /**
- * Bridge to the native {@code surface_compositor.c} module — gives the rest of
- * the app a stable Java entry point for the per-container "Direct Composition"
- * path without any caller having to know whether the underlying NDK
- * {@code ASurfaceControl} / {@code ASurfaceTransaction} symbols are actually
- * resolvable on this device.
+ * Java entry point for the native Direct Composition module.
  *
- * <h3>Availability gate</h3>
- * {@link #isAvailable()} returns {@code true} only when both of these hold:
- * <ol>
- *   <li>API level 29+ (ASurfaceControl arrived in API 29).</li>
- *   <li>The required libandroid.so symbols resolve via dlsym.</li>
- * </ol>
- *
- * Direct Composition is a per-container opt-in toggle
- * ({@link com.winlator.cmod.runtime.container.Container#EXTRA_DIRECT_COMPOSITION}),
- * so device eligibility is left to the user rather than a static blocklist.
+ * <p>{@link #isAvailable()} requires API 29+ and that the libandroid.so symbols
+ * resolve. Beyond that, device eligibility is left to the per-container opt-in
+ * toggle rather than a static brand blocklist.
  */
 public final class SurfaceCompositor {
 
@@ -45,19 +34,12 @@ public final class SurfaceCompositor {
         // Static-only utility.
     }
 
-    /**
-     * @return {@code true} when the device exposes the API 29+ SurfaceControl
-     *         + SurfaceTransaction NDK symbols. {@code false} on any earlier
-     *         Android version, on any device where libandroid.so is missing the
-     *         symbol, or if the JNI lookup itself fails.
-     */
+    /** @return true when the API 29+ SurfaceControl symbols are usable here. */
     public static boolean isAvailable() {
         Boolean cached = cachedAvailability;
         if (cached != null) {
             return cached;
         }
-        // Hard short-circuit on platforms where the native call would always
-        // resolve to the API-< 29 fallback.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             cachedAvailability = Boolean.FALSE;
             return false;
@@ -79,18 +61,9 @@ public final class SurfaceCompositor {
 
     private static native boolean nativeIsAvailable();
 
-    // === DIAGNOSTIC FILE LOGGING ===
-    //
-    // The wine_*.txt logs the user shares only capture Wine/FEX stderr — they
-    // do NOT contain Android logcat. To make Direct Composition status visible
-    // in the user's shared logs, we write DC events to a dedicated
-    // direct-composition.log file in the app's logs directory. This file is
-    // automatically included when the user shares logs (LogManager shares all
-    // *.log / *.txt files in the logs dir).
-    //
-    // Call SurfaceCompositor.logEvent("message") from anywhere in the app to
-    // append a timestamped line. The file is opened lazily on first call and
-    // kept open for the session.
+    // Shared wine_*.txt logs only capture Wine/FEX stderr, not logcat, so DC
+    // events go to their own direct-composition.log in the logs directory —
+    // LogManager includes it automatically when the user shares logs.
 
     private static volatile File diagFile = null;
     private static volatile FileWriter diagWriter = null;
@@ -98,10 +71,7 @@ public final class SurfaceCompositor {
     private static final SimpleDateFormat diagDateFormat =
             new SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
 
-    /**
-     * Set the diagnostic file location. Called once from XServerDisplayActivity
-     * at session start (before any DC code runs). Pass the app's logs directory.
-     */
+    /** Called once at session start, before any DC code runs. */
     public static void initDiagnosticFile(File logsDir) {
         synchronized (diagLock) {
             try {
@@ -123,10 +93,7 @@ public final class SurfaceCompositor {
         }
     }
 
-    /**
-     * Append a timestamped line to the diagnostic file. Also goes to logcat
-     * (Log.i) so it appears in logcat.log too. Safe to call from any thread.
-     */
+    /** Appends a timestamped line to the diagnostic file and logcat. Thread-safe. */
     public static void logEvent(String message) {
         String timestamped = "[" + diagDateFormat.format(new Date()) + "] " + message;
         Log.i(TAG, message);
@@ -143,9 +110,7 @@ public final class SurfaceCompositor {
         }
     }
 
-    /**
-     * Close the diagnostic file. Called from XServerDisplayActivity.onDestroy.
-     */
+    /** Called from XServerDisplayActivity.onDestroy. */
     public static void closeDiagnosticFile() {
         synchronized (diagLock) {
             try {

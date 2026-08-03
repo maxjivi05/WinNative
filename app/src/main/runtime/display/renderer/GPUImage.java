@@ -121,20 +121,9 @@ public class GPUImage extends Texture {
     }
 
     /**
-     * Raw {@code AHardwareBuffer*} pointer (a JNI-returned {@code long}). Used
-     * by the Direct Composition path to hand this image directly to a child
-     * {@code ASurfaceControl} via {@code ASurfaceTransaction_setBuffer},
-     * bypassing the VulkanRenderer's GPU compositing blit for fullscreen game
-     * frames — true zero-copy to the DPU overlay plane.
-     *
-     * <p>Returns {@code 0} if the buffer was never allocated / has been
-     * destroyed — callers MUST treat 0 as "no buffer available, fall back to
-     * VulkanRenderer composition".
-     *
-     * <p>The pointer remains valid only for the lifetime of this GPUImage.
-     * SurfaceFlinger takes its own reference when the AHB is set on a layer,
-     * so holding the pointer past {@link #destroy()} is illegal — release any
-     * DirectCompositionLayer reference first.
+     * Raw {@code AHardwareBuffer*} for the Direct Composition path. Returns 0
+     * once destroyed, which callers must treat as "fall back to compositing".
+     * Valid only for this GPUImage's lifetime.
      */
     public long getHardwareBufferPtr() {
         return ahbPtr;

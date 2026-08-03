@@ -116,11 +116,7 @@ public class FrameRating extends LinearLayout implements Runnable {
   private boolean enableGpu;
   private boolean enableGraph;
   private boolean enableRenderer;
-  // Direct Composition status — when true, " + DC" (green) is appended to the
-  // renderer label so the user can see at a glance whether zero-copy AHB →
-  // SurfaceControl + HWC overlay is active. Toggled from XServerDisplayActivity
-  // via setDirectCompositionActive(). Volatile because it's written from the
-  // render thread and read from the UI thread in updateRendererText().
+  // Volatile: written from the render thread, read on the UI thread.
   private volatile boolean directCompositionActive = false;
   private volatile FrameObserver frameObserver;
   private int gpuFailCount;
@@ -1137,12 +1133,7 @@ public class FrameRating extends LinearLayout implements Runnable {
     }
   }
 
-  /**
-   * Toggle the Direct Composition status indicator in the HUD. When true,
-   * " + DC" (green) is appended to the renderer label. Safe to call from any
-   * thread — the value is volatile and updateRendererText() is re-run on the
-   * next frame via post().
-   */
+  /** Toggles the HUD's "+ DC" badge. Safe to call from any thread. */
   public void setDirectCompositionActive(boolean active) {
     if (this.directCompositionActive == active) return;
     this.directCompositionActive = active;

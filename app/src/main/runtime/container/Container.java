@@ -34,23 +34,9 @@ public class Container {
     public static final String DEFAULT_DDRAWRAPPER = "none";
 
     /**
-     * extraData JSON key for the per-container "Direct Composition" toggle.
-     * Stored as a string ("1"/"0") for symmetry with the rest of extraData.
-     * The setting is read at activity startup and applies for the whole
-     * session — it controls whether fullscreen drawables are pushed to a
-     * sibling Android SurfaceControl layer (zero-copy DPU scanout) instead of
-     * being composited by the VulkanRenderer. Changing it mid-game is not
-     * supported.
-     *
-     * <p>When enabled AND the device supports ASurfaceControl (API 29+) AND
-     * the device is not on the soft-boot blocklist (see SurfaceCompositor),
-     * the VulkanRenderer's per-frame hook extracts the AHardwareBuffer from
-     * the fullscreen direct-scanout candidate and hands it directly to
-     * SurfaceFlinger via ASurfaceTransaction_setBuffer. HWC promotes the
-     * layer to a DPU overlay plane — zero GPU compositing cost, zero buffer
-     * copy. This is the true zero-copy path.
-     *
-     * <p>When disabled (default), zero behavior change vs. pre-DC.
+     * extraData key for the per-container Direct Composition toggle, stored as
+     * "1"/"0". Sampled at activity startup and held for the session; a shortcut
+     * may override it. Default off, in which case nothing changes.
      */
     public static final String EXTRA_DIRECT_COMPOSITION = "directComposition";
     public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,dinput8=1,vcrun2010=1";
