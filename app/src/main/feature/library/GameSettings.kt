@@ -1461,6 +1461,15 @@ private fun DisplaySection(
     callbacks: GameSettingsCallbacks
 ) {
 
+    // Direct Composition needs API 29+ and the ASurfaceControl symbols; the chip
+    // stays inert on devices without them rather than offering a toggle that
+    // could never engage.
+    val dcSupported = remember {
+        runCatching {
+            com.winlator.cmod.runtime.display.composition.SurfaceCompositor.isAvailable()
+        }.getOrDefault(false)
+    }
+
     SettingGroup {
         Row(horizontalArrangement = Arrangement.spacedBy(SettingItemGap)) {
             Box(Modifier.weight(1f)) {
@@ -1468,7 +1477,16 @@ private fun DisplaySection(
                     label = stringResource(R.string.container_graphics_driver),
                     entries = state.graphicsDriverEntries.value,
                     selectedIndex = state.selectedGraphicsDriver.intValue,
-                    onSelected = { state.selectedGraphicsDriver.intValue = it }
+                    onSelected = { state.selectedGraphicsDriver.intValue = it },
+                    labelTrailing = {
+                        DirectCompositionChip(
+                            supported = dcSupported,
+                            on = state.directComposition.value,
+                            onClick = {
+                                state.directComposition.value = !state.directComposition.value
+                            }
+                        )
+                    }
                 )
             }
             Box(Modifier.weight(1f)) {
@@ -4834,14 +4852,6 @@ private fun AdvancedSection(
             checked = state.fullscreenStretched.value,
             onCheckedChange = { state.fullscreenStretched.value = it }
         )
-
-        Spacer(Modifier.height(SettingItemGap))
-
-        SettingCheckbox(
-            label = stringResource(R.string.session_display_direct_composition),
-            checked = state.directComposition.value,
-            onCheckedChange = { state.directComposition.value = it }
-        )
     }
 
     Spacer(Modifier.height(SettingSectionGap))
@@ -5002,6 +5012,52 @@ private fun CpuChip(
             color = textColor,
             fontSize = SettingLabelSize,
             fontWeight = if (isChecked) FontWeight.SemiBold else FontWeight.Normal
+        )
+    }
+}
+
+/**
+ * Direct Composition toggle. Same geometry as [UnixLibsChip] so the two read as
+ * one family of controls; grayed and inert when the device can't do DC.
+ */
+@Composable
+private fun DirectCompositionChip(
+    supported: Boolean,
+    on: Boolean,
+    onClick: () -> Unit
+) {
+    val active = supported && on
+    val bgColor = if (active) AccentBlue.copy(alpha = 0.15f) else ChipSurface
+    val borderColor = if (active) AccentBlue.copy(alpha = 0.4f) else ChipBorder
+    val textColor = if (active) AccentBlue else TextDim
+
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(bgColor)
+            .border(1.dp, borderColor, RoundedCornerShape(6.dp))
+            .then(
+                if (supported) {
+                    Modifier
+                        .clickable(onClick = onClick)
+                        .paneNavItem(
+                            cornerRadius = 6.dp,
+                            onActivate = onClick,
+                            highlightColor = NavHighlight,
+                            tapToSelect = true,
+                        )
+                } else {
+                    Modifier
+                }
+            )
+            .padding(horizontal = 10.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "DC",
+            color = textColor,
+            fontSize = SettingLabelSize,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal
         )
     }
 }
