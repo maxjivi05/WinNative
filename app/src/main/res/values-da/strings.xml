@@ -2420,6 +2420,9 @@ Installeret sti:
 <string name="retro_netplay_user_disconnected">%1$s afbrudt</string>
 <string name="retro_netplay_waiting_players">Venter på spillere…</string>
 <string name="retro_ps2_coming_soon">PlayStation 2-understøttelse kommer snart</string>
+    <string name="retro_ps2_pad_autohide">Skjul når en controller er tilsluttet</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Slå fra for at beholde skærmknapperne, mens en controller er tilsluttet</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Skjult lige nu, fordi en controller er tilsluttet</string>
 <string name="retro_ps2_show_l3r3">Vis L3 / R3-knapper</string>
 <string name="retro_ps2_show_l3r3_subtitle">Når slået fra, dobbelttryk på et stik for at klikke L3 / R3</string>
 <string name="retro_ps2_turnip_flags">TURNIP-DRIVERFLAG</string>

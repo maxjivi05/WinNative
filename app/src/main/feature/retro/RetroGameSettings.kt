@@ -1230,6 +1230,12 @@ private fun RetroEngineRowSettings(state: RetroSettingsState) {
     RetroSettingNote(stringResource(R.string.retro_gs_engine_3d_note))
 }
 
+private fun anyGameControllerAttached(): Boolean =
+    android.view.InputDevice.getDeviceIds().any {
+        com.winlator.cmod.runtime.input.controls.ExternalController
+            .isGameController(android.view.InputDevice.getDevice(it))
+    }
+
 @Composable
 private fun RetroSettingNote(text: String) {
     Text(
@@ -2057,10 +2063,37 @@ private fun RetroInputSection(state: RetroSettingsState) {
     RetroSettingGroup {
         RetroGroupTitle(stringResource(R.string.retro_gs_group_input))
         if (ps2 && ps2Prefs != null) {
+            val padAutoHide = ps2Prefs.getBoolean(RetroShortcuts.PS2_PAD_AUTOHIDE, true)
+            val padOverride = ps2Prefs.getBoolean(RetroShortcuts.PS2_TOUCH_OVERRIDE, false)
+            val touchOn = ps2Prefs.getBoolean("wn.ps2.touchcontrols", true)
+            val hiddenByController = touchOn && padAutoHide && !padOverride && anyGameControllerAttached()
             RetroSettingSwitch(
                 label = stringResource(R.string.retro_gs_on_screen_controls),
-                checked = ps2Prefs.getBoolean("wn.ps2.touchcontrols", true),
-                onCheckedChange = { ps2Prefs.edit().putBoolean("wn.ps2.touchcontrols", it).apply(); ps2Ver++ },
+                checked = touchOn,
+                subtitle =
+                    if (hiddenByController) stringResource(R.string.retro_ps2_pad_hidden_by_controller) else null,
+                onCheckedChange = { wanted ->
+                    val override = wanted && anyGameControllerAttached()
+                    ps2Prefs.edit()
+                        .putBoolean("wn.ps2.touchcontrols", wanted)
+                        .putBoolean(RetroShortcuts.PS2_TOUCH_OVERRIDE, override)
+                        .apply()
+                    state.shortcut.putExtra(RetroShortcuts.KEY_TOUCH_OVERRIDE, if (override) "1" else "0")
+                    ps2Ver++
+                },
+            )
+            RetroSettingSwitch(
+                label = stringResource(R.string.retro_ps2_pad_autohide),
+                checked = padAutoHide,
+                subtitle = stringResource(R.string.retro_ps2_pad_autohide_subtitle),
+                onCheckedChange = { wanted ->
+                    ps2Prefs.edit()
+                        .putBoolean(RetroShortcuts.PS2_PAD_AUTOHIDE, wanted)
+                        .putBoolean(RetroShortcuts.PS2_TOUCH_OVERRIDE, if (wanted) padOverride else false)
+                        .apply()
+                    state.shortcut.putExtra(RetroShortcuts.KEY_PAD_AUTOHIDE, if (wanted) "1" else "0")
+                    ps2Ver++
+                },
             )
             RetroSettingSwitch(
                 label = stringResource(R.string.retro_gs_adaptive_sticks),

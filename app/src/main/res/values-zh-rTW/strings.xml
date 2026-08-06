@@ -2418,6 +2418,9 @@
 <string name="retro_netplay_user_disconnected">%1$s 已中斷連線</string>
 <string name="retro_netplay_waiting_players">等待玩家中…</string>
 <string name="retro_ps2_coming_soon">PlayStation 2 支援即將推出</string>
+    <string name="retro_ps2_pad_autohide">連接手把時隱藏</string>
+    <string name="retro_ps2_pad_autohide_subtitle">關閉後，連接手把時仍顯示螢幕按鍵</string>
+    <string name="retro_ps2_pad_hidden_by_controller">目前已隱藏，因為已連接手把</string>
 <string name="retro_ps2_show_l3r3">顯示 L3 / R3 按鈕</string>
 <string name="retro_ps2_show_l3r3_subtitle">關閉時，連點兩下搖桿即可點擊 L3 / R3</string>
 <string name="retro_ps2_turnip_flags">TURNIP 驅動程式旗標</string>

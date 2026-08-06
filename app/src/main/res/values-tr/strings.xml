@@ -2418,6 +2418,9 @@ Yüklü konum:
 <string name="retro_netplay_user_disconnected">%1$s bağlantısı kesildi</string>
 <string name="retro_netplay_waiting_players">Oyuncular bekleniyor…</string>
 <string name="retro_ps2_coming_soon">PlayStation 2 desteği yakında geliyor</string>
+    <string name="retro_ps2_pad_autohide">Kumanda bağlıyken gizle</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Kumanda bağlıyken ekran düğmelerini korumak için kapatın</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Kumanda bağlı olduğu için şu anda gizli</string>
 <string name="retro_ps2_show_l3r3">L3 / R3 Düğmelerini Göster</string>
 <string name="retro_ps2_show_l3r3_subtitle">Kapalıyken, L3 / R3\'e tıklamak için bir çubuğa çift dokunun</string>
 <string name="retro_ps2_turnip_flags">TURNIP SÜRÜCÜ BAYRAKLARI</string>

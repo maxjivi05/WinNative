@@ -2355,6 +2355,9 @@
     <string name="retro_netplay_user_disconnected">%1$s डिस्कनेक्ट हो गया</string>
     <string name="retro_netplay_waiting_players">खिलाड़ियों की प्रतीक्षा हो रही है…</string>
     <string name="retro_ps2_coming_soon">PlayStation 2 समर्थन जल्द ही आ रहा है</string>
+    <string name="retro_ps2_pad_autohide">कंट्रोलर कनेक्ट होने पर छिपाएँ</string>
+    <string name="retro_ps2_pad_autohide_subtitle">कंट्रोलर लगे होने पर भी ऑन-स्क्रीन पैड रखने के लिए इसे बंद करें</string>
+    <string name="retro_ps2_pad_hidden_by_controller">अभी छिपा है क्योंकि कंट्रोलर कनेक्ट है</string>
     <string name="retro_ps2_show_l3r3">L3 / R3 बटन दिखाएँ</string>
     <string name="retro_ps2_show_l3r3_subtitle">बंद होने पर, L3 / R3 क्लिक करने के लिए स्टिक को डबल-टैप करें</string>
     <string name="retro_ps2_turnip_flags">TURNIP ड्राइवर फ़्लैग</string>

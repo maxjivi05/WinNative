@@ -2418,6 +2418,9 @@
 <string name="retro_netplay_user_disconnected">%1$s ตัดการเชื่อมต่อแล้ว</string>
 <string name="retro_netplay_waiting_players">กำลังรอผู้เล่น…</string>
 <string name="retro_ps2_coming_soon">การรองรับ PlayStation 2 กำลังจะมาเร็วๆ นี้</string>
+    <string name="retro_ps2_pad_autohide">ซ่อนเมื่อเชื่อมต่อคอนโทรลเลอร์</string>
+    <string name="retro_ps2_pad_autohide_subtitle">ปิดเพื่อคงปุ่มบนหน้าจอไว้ขณะเชื่อมต่อคอนโทรลเลอร์</string>
+    <string name="retro_ps2_pad_hidden_by_controller">ซ่อนอยู่ตอนนี้เพราะเชื่อมต่อคอนโทรลเลอร์</string>
 <string name="retro_ps2_show_l3r3">แสดงปุ่ม L3 / R3</string>
 <string name="retro_ps2_show_l3r3_subtitle">เมื่อปิด ให้แตะอนาล็อกสองครั้งเพื่อคลิก L3 / R3</string>
 <string name="retro_ps2_turnip_flags">แฟล็กไดรเวอร์ TURNIP</string>

@@ -2418,6 +2418,9 @@ Caminho instalado:
     <string name="retro_netplay_user_disconnected">%1$s desligou-se</string>
     <string name="retro_netplay_waiting_players">A aguardar jogadores…</string>
     <string name="retro_ps2_coming_soon">O suporte para PlayStation 2 chegará em breve</string>
+    <string name="retro_ps2_pad_autohide">Ocultar quando um comando está ligado</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Desativa para manter os controlos no ecrã com um comando ligado</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Ocultos agora porque há um comando ligado</string>
     <string name="retro_ps2_show_l3r3">Mostrar Botões L3 / R3</string>
     <string name="retro_ps2_show_l3r3_subtitle">Quando desligado, toque duas vezes num stick para clicar em L3 / R3</string>
     <string name="retro_ps2_turnip_flags">FLAGS DO CONTROLADOR TURNIP</string>

@@ -2418,6 +2418,9 @@ Installerad sökväg:
 <string name="retro_netplay_user_disconnected">%1$s kopplade från</string>
 <string name="retro_netplay_waiting_players">Väntar på spelare…</string>
 <string name="retro_ps2_coming_soon">Stöd för PlayStation 2 kommer snart</string>
+    <string name="retro_ps2_pad_autohide">Dölj när en handkontroll är ansluten</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Stäng av för att behålla skärmkontrollerna när en handkontroll är ansluten</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Dolda just nu eftersom en handkontroll är ansluten</string>
 <string name="retro_ps2_show_l3r3">Visa L3-/R3-knappar</string>
 <string name="retro_ps2_show_l3r3_subtitle">När av, dubbeltryck på en spak för att klicka L3 / R3</string>
 <string name="retro_ps2_turnip_flags">TURNIP-DRIVRUTINSFLAGGOR</string>

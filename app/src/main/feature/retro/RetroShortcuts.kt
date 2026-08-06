@@ -29,6 +29,11 @@ object RetroShortcuts {
     const val EXTRA_PS2_CONTAINER_ID = "wn_ps2_container_id"
     const val VAR_PREFIX = "retro_var_"
 
+    const val KEY_TOUCH_OVERRIDE = "retro_touch_override"
+    const val KEY_PAD_AUTOHIDE = "retro_pad_autohide"
+    const val PS2_TOUCH_OVERRIDE = "wn.ps2.touchoverride"
+    const val PS2_PAD_AUTOHIDE = "wn.ps2.padautohide"
+
     fun coreVariables(shortcut: Shortcut): HashMap<String, String> {
         val vars = HashMap<String, String>()
         val extras = shortcut.extraData
@@ -252,6 +257,8 @@ object RetroShortcuts {
                 putBoolean("setupComplete", true)
                 putBoolean("wn.controls", true)
                 putBoolean("wn.ps2.touchcontrols", touchControls)
+                putBoolean(PS2_TOUCH_OVERRIDE, shortcut.getExtra(KEY_TOUCH_OVERRIDE) == "1")
+                putBoolean(PS2_PAD_AUTOHIDE, shortcut.getExtra(KEY_PAD_AUTOHIDE).ifEmpty { "1" } != "0")
                 putBoolean("wn.ps2.adaptivesticks", adaptiveSticks)
                 putString("wn.ps2.hddimage", shortcut.getExtra(KEY_HDD_IMAGE))
                 putBoolean("wn.ps2.hdd", shortcut.getExtra(KEY_HDD_ENABLE) == "1")

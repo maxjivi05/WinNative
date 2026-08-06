@@ -2425,6 +2425,9 @@ Zainstalowana ścieżka:
 <string name="retro_netplay_user_disconnected">%1$s rozłączony</string>
 <string name="retro_netplay_waiting_players">Oczekiwanie na graczy…</string>
 <string name="retro_ps2_coming_soon">Obsługa PlayStation 2 pojawi się wkrótce</string>
+    <string name="retro_ps2_pad_autohide">Ukryj, gdy kontroler jest podłączony</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Wyłącz, aby zachować panel ekranowy przy podłączonym kontrolerze</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Ukryte teraz, bo podłączony jest kontroler</string>
 <string name="retro_ps2_show_l3r3">Pokaż przyciski L3 / R3</string>
 <string name="retro_ps2_show_l3r3_subtitle">Gdy wyłączone, dwukrotnie naciśnij drążek, aby kliknąć L3 / R3</string>
 <string name="retro_ps2_turnip_flags">FLAGI STEROWNIKA TURNIP</string>

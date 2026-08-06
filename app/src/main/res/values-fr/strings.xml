@@ -2419,6 +2419,9 @@ Chemin installé :
 <string name="retro_netplay_user_disconnected">%1$s déconnecté</string>
 <string name="retro_netplay_waiting_players">En attente des joueurs…</string>
 <string name="retro_ps2_coming_soon">La prise en charge de la PlayStation 2 arrive bientôt</string>
+    <string name="retro_ps2_pad_autohide">Masquer quand une manette est connectée</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Désactivez pour garder les commandes à l\'écran avec une manette connectée</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Masquées actuellement car une manette est connectée</string>
 <string name="retro_ps2_show_l3r3">Afficher les boutons L3 / R3</string>
 <string name="retro_ps2_show_l3r3_subtitle">Lorsque désactivé, appuyez deux fois sur un stick pour cliquer L3 / R3</string>
 <string name="retro_ps2_turnip_flags">DRAPEAUX DU PILOTE TURNIP</string>

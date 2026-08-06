@@ -2420,6 +2420,9 @@
     <string name="retro_netplay_user_disconnected">%1$s 연결 끊김</string>
     <string name="retro_netplay_waiting_players">플레이어 대기 중…</string>
     <string name="retro_ps2_coming_soon">PlayStation 2 지원이 곧 제공됩니다</string>
+    <string name="retro_ps2_pad_autohide">컨트롤러 연결 시 숨기기</string>
+    <string name="retro_ps2_pad_autohide_subtitle">끄면 컨트롤러 연결 중에도 화면 패드를 유지합니다</string>
+    <string name="retro_ps2_pad_hidden_by_controller">컨트롤러가 연결되어 현재 숨겨져 있습니다</string>
     <string name="retro_ps2_show_l3r3">L3 / R3 버튼 표시</string>
     <string name="retro_ps2_show_l3r3_subtitle">꺼져 있으면 스틱을 두 번 눌러 L3 / R3를 클릭합니다</string>
     <string name="retro_ps2_turnip_flags">TURNIP 드라이버 플래그</string>

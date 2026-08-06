@@ -2325,6 +2325,9 @@
 <string name="retro_netplay_user_disconnected">%1$s отключился</string>
 <string name="retro_netplay_waiting_players">Ожидание игроков…</string>
 <string name="retro_ps2_coming_soon">Поддержка PlayStation 2 скоро появится</string>
+    <string name="retro_ps2_pad_autohide">Скрывать при подключённом контроллере</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Отключите, чтобы экранные кнопки оставались при подключённом контроллере</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Сейчас скрыты, так как подключён контроллер</string>
 <string name="retro_ps2_show_l3r3">Показать кнопки L3 / R3</string>
 <string name="retro_ps2_show_l3r3_subtitle">Когда выключено, дважды нажмите на стик для клика L3 / R3</string>
 <string name="retro_ps2_turnip_flags">ФЛАГИ ДРАЙВЕРА TURNIP</string>

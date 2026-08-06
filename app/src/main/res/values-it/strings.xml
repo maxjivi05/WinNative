@@ -2419,6 +2419,9 @@ Percorso installato:
     <string name="retro_netplay_user_disconnected">%1$s disconnesso</string>
     <string name="retro_netplay_waiting_players">In attesa di giocatori…</string>
     <string name="retro_ps2_coming_soon">Il supporto per PlayStation 2 è in arrivo</string>
+    <string name="retro_ps2_pad_autohide">Nascondi con un controller collegato</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Disattiva per mantenere i comandi a schermo con un controller collegato</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Nascosti ora perché è collegato un controller</string>
     <string name="retro_ps2_show_l3r3">Mostra pulsanti L3 / R3</string>
     <string name="retro_ps2_show_l3r3_subtitle">Quando disattivato, tocca due volte uno stick per premere L3 / R3</string>
     <string name="retro_ps2_turnip_flags">FLAG DRIVER TURNIP</string>

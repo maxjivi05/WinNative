@@ -12,6 +12,8 @@ import kr.co.iefriends.pcsx2.NativeApp
 class EmulationSurface(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
     private var viewWidth = 0
     private var viewHeight = 0
+    private var fixedWidth = 0
+    private var fixedHeight = 0
 
     init {
         holder.addCallback(this)
@@ -50,7 +52,17 @@ class EmulationSurface(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        NativeApp.onNativeSurfaceChanged(null, 0, 0)
+        val released = java.util.concurrent.CountDownLatch(1)
+        Thread({
+            runCatching { NativeApp.onNativeSurfaceChanged(null, 0, 0) }
+            released.countDown()
+        }, "ps2-surface-release").start()
+        if (!released.await(SURFACE_RELEASE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            android.util.Log.w(
+                "EmulationSurface",
+                "GS thread did not release the surface within ${SURFACE_RELEASE_TIMEOUT_MS}ms",
+            )
+        }
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
@@ -63,23 +75,29 @@ class EmulationSurface(context: Context) : SurfaceView(context), SurfaceHolder.C
     fun applyOutputScale() {
         val multiplier = MainActivityRuntime.prefs.getInt("ui.hwScaler", 0)
         if (viewWidth <= 0 || viewHeight <= 0) return
-        if (multiplier <= 0) {
-            holder.setSizeFromLayout()
-            return
-        }
 
         val shortSide = minOf(viewWidth, viewHeight)
         val targetShortSide = 448 * multiplier
-        if (targetShortSide >= shortSide) {
-            holder.setSizeFromLayout()
+        if (multiplier <= 0 || targetShortSide >= shortSide) {
+            if (fixedWidth != 0 || fixedHeight != 0) {
+                fixedWidth = 0
+                fixedHeight = 0
+                holder.setSizeFromLayout()
+            }
             return
         }
 
         val scale = targetShortSide.toFloat() / shortSide
-        holder.setFixedSize(
-            (viewWidth * scale).toInt().coerceAtLeast(1),
-            (viewHeight * scale).toInt().coerceAtLeast(1),
-        )
+        val width = (viewWidth * scale).toInt().coerceAtLeast(1)
+        val height = (viewHeight * scale).toInt().coerceAtLeast(1)
+        if (width == fixedWidth && height == fixedHeight) return
+        fixedWidth = width
+        fixedHeight = height
+        holder.setFixedSize(width, height)
+    }
+
+    private companion object {
+        const val SURFACE_RELEASE_TIMEOUT_MS = 2000L
     }
 
     private fun currentDisplayRefreshHz(): Float = runCatching {

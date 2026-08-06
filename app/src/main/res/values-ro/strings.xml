@@ -2418,6 +2418,9 @@ Cale instalata:
     <string name="retro_netplay_user_disconnected">%1$s deconectat</string>
     <string name="retro_netplay_waiting_players">Se așteaptă jucători…</string>
     <string name="retro_ps2_coming_soon">Suportul pentru PlayStation 2 va fi disponibil în curând</string>
+    <string name="retro_ps2_pad_autohide">Ascunde când un controler este conectat</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Dezactivează pentru a păstra comenzile pe ecran cu un controler conectat</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Ascunse acum deoarece un controler este conectat</string>
     <string name="retro_ps2_show_l3r3">Afișează butoanele L3 / R3</string>
     <string name="retro_ps2_show_l3r3_subtitle">Când este oprit, atinge de două ori un stick pentru a apăsa L3 / R3</string>
     <string name="retro_ps2_turnip_flags">INDICATOARE DRIVER TURNIP</string>

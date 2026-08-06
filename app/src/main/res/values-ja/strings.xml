@@ -2418,6 +2418,9 @@
     <string name="retro_netplay_user_disconnected">%1$s が切断しました</string>
     <string name="retro_netplay_waiting_players">プレイヤーを待っています…</string>
     <string name="retro_ps2_coming_soon">PlayStation 2 のサポートは近日公開予定です</string>
+    <string name="retro_ps2_pad_autohide">コントローラー接続時に非表示</string>
+    <string name="retro_ps2_pad_autohide_subtitle">オフにするとコントローラー接続中も画面パッドを表示します</string>
+    <string name="retro_ps2_pad_hidden_by_controller">コントローラー接続中のため現在非表示です</string>
     <string name="retro_ps2_show_l3r3">L3 / R3 ボタンを表示</string>
     <string name="retro_ps2_show_l3r3_subtitle">オフの場合、スティックをダブルタップすると L3 / R3 をクリックできます</string>
     <string name="retro_ps2_turnip_flags">TURNIP ドライバーフラグ</string>

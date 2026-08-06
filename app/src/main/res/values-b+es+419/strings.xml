@@ -2418,6 +2418,9 @@ Ruta instalada:
     <string name="retro_netplay_user_disconnected">%1$s se desconectó</string>
     <string name="retro_netplay_waiting_players">Esperando jugadores…</string>
     <string name="retro_ps2_coming_soon">La compatibilidad con PlayStation 2 llegará pronto</string>
+    <string name="retro_ps2_pad_autohide">Ocultar con un control conectado</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Desactívalo para mantener los controles en pantalla con un control conectado</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Ocultos ahora porque hay un control conectado</string>
     <string name="retro_ps2_show_l3r3">Mostrar botones L3 / R3</string>
     <string name="retro_ps2_show_l3r3_subtitle">Cuando está desactivado, toca dos veces una palanca para pulsar L3 / R3</string>
     <string name="retro_ps2_turnip_flags">INDICADORES DEL CONTROLADOR TURNIP</string>

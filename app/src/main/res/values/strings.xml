@@ -2181,6 +2181,9 @@ Installed path:
     <string name="retro_ps2_adaptive_sticks">Adaptive Sticks</string>
     <string name="retro_ps2_turnip_flags">TURNIP DRIVER FLAGS</string>
     <string name="retro_ps2_turnip_flags_note">Applied only when a custom GPU driver is selected above.</string>
+    <string name="retro_ps2_pad_autohide">Hide when a controller is connected</string>
+    <string name="retro_ps2_pad_autohide_subtitle">Turn this off to keep the on-screen pad while a controller is attached</string>
+    <string name="retro_ps2_pad_hidden_by_controller">Hidden right now because a controller is connected</string>
     <string name="retro_ps2_show_l3r3">Show L3 / R3 Buttons</string>
     <string name="retro_ps2_show_l3r3_subtitle">When off, double-tap a stick to click L3 / R3</string>
     <string name="retro_ps2_adaptive_sticks_subtitle">Sticks stay hidden until you touch their area, then appear where you press</string>

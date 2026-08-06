@@ -60,6 +60,13 @@ object Ps2GameOverlay {
         }.getOrNull()
     }
 
+    fun padVisibleNow(
+        editMode: Boolean,
+        controllerConnected: Boolean,
+        autoHide: Boolean,
+        manualOverride: Boolean,
+    ): Boolean = editMode || !controllerConnected || !autoHide || manualOverride
+
     private fun ps2Prefs(ctx: android.content.Context) =
         ctx.getSharedPreferences("ARMSX2", android.content.Context.MODE_PRIVATE)
 
@@ -229,7 +236,10 @@ object Ps2GameOverlay {
                 com.winlator.cmod.runtime.input.controls.ExternalController.isGameController(android.view.InputDevice.getDevice(it))
             }
         val controllerConnected = mutableStateOf(anyGameController())
-        val manualTouchOverride = mutableStateOf(false)
+        val manualTouchOverride =
+            mutableStateOf(ps2Prefs(activity).getBoolean(RetroShortcuts.PS2_TOUCH_OVERRIDE, false))
+        val padAutoHide =
+            mutableStateOf(ps2Prefs(activity).getBoolean(RetroShortcuts.PS2_PAD_AUTOHIDE, true))
         val launchRomPath = activity.intent?.getStringExtra(RetroShortcuts.EXTRA_PS2_ROM_PATH).orEmpty()
         val launchGameName = activity.intent?.getStringExtra(RetroShortcuts.EXTRA_PS2_GAME_NAME).orEmpty()
         val inputManager = activity.getSystemService(android.hardware.input.InputManager::class.java)
@@ -591,14 +601,38 @@ object Ps2GameOverlay {
                 add(
                     RetroMenuEntry.Toggle(activity.getString(R.string.retro_ps2_onscreen_controls), checked = touchVisible.value) { value ->
                         touchVisible.value = value
-                        if (controllerConnected.value) manualTouchOverride.value = true
-                        ps2Prefs(activity).edit().putBoolean("wn.ps2.touchcontrols", value).apply()
+                        manualTouchOverride.value = value && controllerConnected.value
+                        ps2Prefs(activity).edit()
+                            .putBoolean("wn.ps2.touchcontrols", value)
+                            .putBoolean(RetroShortcuts.PS2_TOUCH_OVERRIDE, manualTouchOverride.value)
+                            .apply()
                         persistExtra(RetroShortcuts.KEY_TOUCH_CONTROLS, if (value) "1" else "0")
-                        val showPad = value && (!controllerConnected.value || manualTouchOverride.value)
+                        persistExtra(
+                            RetroShortcuts.KEY_TOUCH_OVERRIDE,
+                            if (manualTouchOverride.value) "1" else "0",
+                        )
+                        val showPad =
+                            value && padVisibleNow(false, controllerConnected.value, padAutoHide.value, manualTouchOverride.value)
                         RetroAchievementOverlayState.syncPlacement(showPad, controllerConnected.value)
                         bg {
                             RetroPs2OsdPlacement.apply(showPad, controllerConnected.value)
                         }
+                        menu.rebuild()
+                    },
+                )
+                add(
+                    RetroMenuEntry.Toggle(
+                        activity.getString(R.string.retro_ps2_pad_autohide),
+                        subtitle = activity.getString(R.string.retro_ps2_pad_autohide_subtitle),
+                        checked = padAutoHide.value,
+                    ) { value ->
+                        padAutoHide.value = value
+                        if (!value) manualTouchOverride.value = false
+                        ps2Prefs(activity).edit()
+                            .putBoolean(RetroShortcuts.PS2_PAD_AUTOHIDE, value)
+                            .putBoolean(RetroShortcuts.PS2_TOUCH_OVERRIDE, manualTouchOverride.value)
+                            .apply()
+                        persistExtra(RetroShortcuts.KEY_PAD_AUTOHIDE, if (value) "1" else "0")
                         menu.rebuild()
                     },
                 )
@@ -1149,7 +1183,7 @@ object Ps2GameOverlay {
                                     items.filter { it.id in newly }.forEach { item ->
                                         val showPad =
                                             touchVisible.value &&
-                                                (pad?.editMode == true || (!controllerConnected.value || manualTouchOverride.value))
+                                                padVisibleNow(pad?.editMode == true, controllerConnected.value, padAutoHide.value, manualTouchOverride.value)
                                         RetroAchievementOverlayState.syncPlacement(showPad, controllerConnected.value)
                                         RetroAchievementOverlayState.show(item.title, item.points, item.description)
                                     }
@@ -1226,7 +1260,7 @@ object Ps2GameOverlay {
                             return@WinNativeTheme
                         }
                         val covered = WindowImpl.frontendCovers
-                        val showPad = touchVisible.value && (pad?.editMode == true || (!controllerConnected.value || manualTouchOverride.value))
+                        val showPad = touchVisible.value && padVisibleNow(pad?.editMode == true, controllerConnected.value, padAutoHide.value, manualTouchOverride.value)
                         if (!covered && showPad) {
                             AndroidView(
                                 modifier = Modifier.fillMaxSize(),
@@ -1258,7 +1292,7 @@ object Ps2GameOverlay {
                             )
                         }
                         if (!covered) {
-                            val showPadForHud = touchVisible.value && (pad?.editMode == true || (!controllerConnected.value || manualTouchOverride.value))
+                            val showPadForHud = touchVisible.value && padVisibleNow(pad?.editMode == true, controllerConnected.value, padAutoHide.value, manualTouchOverride.value)
                             RetroAchievementOverlayState.syncPlacement(showPadForHud, controllerConnected.value)
                             RetroAchievementOverlayBanner()
                             RetroDrawerMenu(menu)
