@@ -2544,6 +2544,8 @@ Ruta instalada:
     <string name="settings_frame_generation_not_owned">La generación de fotogramas usa sombreadores de Lossless Scaling. Cómpralo en Steam con la cuenta con la que has iniciado sesión para activarlo.</string>
     <string name="settings_frame_generation_locate">Seleccionar Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Vincular Steam</string>
     <string name="itch_store_downloads">Descargas de itch.io</string>
     <string name="itch_store_sign_in">Iniciar sesión en itch.io</string>
     <string name="itch_store_sign_in_short">Iniciar sesión</string>

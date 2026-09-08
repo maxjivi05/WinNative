@@ -40,6 +40,7 @@ public class XInput2Extension implements Extension {
     private static abstract class ClientOpcodes {
         private static final byte GET_CLIENT_POINTER = 45;
         private static final byte GET_EXTENSION_VERSION = 1;
+        private static final byte LIST_INPUT_DEVICES = 2;
         private static final byte QUERY_DEVICE = 48;
         private static final byte QUERY_VERSION = 47;
         private static final byte SELECT_EVENTS = 46;
@@ -122,6 +123,31 @@ public class XInput2Extension implements Extension {
             outputStream.writeShort((short) 0);
             outputStream.writeByte((byte) 1);
             outputStream.writePad(19);
+            if (lock != null) {
+                lock.close();
+            }
+        } catch (Throwable th) {
+            if (lock != null) {
+                try {
+                    lock.close();
+                } catch (Throwable th2) {
+                    th.addSuppressed(th2);
+                }
+            }
+            throw th;
+        }
+    }
+
+    private static void listInputDevices(XClient client, XInputStream inputStream, XOutputStream outputStream) throws IOException {
+        inputStream.skip(client.getRemainingRequestLength());
+        XStreamLock lock = outputStream.lock();
+        try {
+            outputStream.writeByte((byte) 1);
+            outputStream.writeByte((byte) 2);
+            outputStream.writeShort(client.getSequenceNumber());
+            outputStream.writeInt(0);
+            outputStream.writeByte((byte) 0);
+            outputStream.writePad(23);
             if (lock != null) {
                 lock.close();
             }
@@ -312,6 +338,9 @@ public class XInput2Extension implements Extension {
         switch (opcode) {
             case 1:
                 getExtensionVersion(client, inputStream, outputStream);
+                return;
+            case 2:
+                listInputDevices(client, inputStream, outputStream);
                 return;
             case 45:
                 getClientPointer(client, inputStream, outputStream);

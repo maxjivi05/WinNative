@@ -2543,6 +2543,8 @@
     <string name="settings_frame_generation_not_owned">การสร้างเฟรมใช้เชเดอร์จาก Lossless Scaling ซื้อบน Steam ด้วยบัญชีที่ลงชื่อเข้าใช้อยู่เพื่อเปิดใช้งาน</string>
     <string name="settings_frame_generation_locate">เลือก Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">เชื่อม Steam</string>
     <string name="itch_store_downloads">การดาวน์โหลด itch.io</string>
     <string name="itch_store_sign_in">ลงชื่อเข้าใช้ itch.io</string>
     <string name="itch_store_sign_in_short">ลงชื่อเข้าใช้</string>

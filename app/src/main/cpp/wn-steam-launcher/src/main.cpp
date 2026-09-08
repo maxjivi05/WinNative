@@ -1329,11 +1329,34 @@ static bool wait_for_game_process(const char* exeName, int maxSeconds, const cha
     return wn_launcher_count_game_processes() > 0;
 }
 
+static char g_gameArgsBuf[1024] = {0};
+static char g_postDispatchExe[MAX_PATH] = {0};
+static bool g_bypassRunningGuard = false;
+
+static bool process_named_running(const char* name) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32 pe;
+    pe.dwSize = sizeof(pe);
+    bool found = false;
+    if (Process32First(snap, &pe)) {
+        do {
+            if (_stricmp(pe.szExeFile, name) == 0) { found = true; break; }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
+}
+
 static bool create_process_game(const char* gameExe, const char* exeName) {
-    if (wn_launcher_count_game_processes() > 0) {
+    if (!g_bypassRunningGuard && !g_gameArgsBuf[0] && wn_launcher_count_game_processes() > 0) {
         log_line("[wn-launcher] CreateProcess fallback skipped — \"%s\" is already "
                  "running (Steam owns the launch)", exeName);
         return true;
+    }
+    if (g_gameArgsBuf[0]) {
+        log_line("[wn-launcher] launching \"%s\" with explicit args (shell-URL dispatch); "
+                 "the already-running check does not apply", exeName);
     }
 
     char cwd[MAX_PATH];
@@ -1341,8 +1364,12 @@ static bool create_process_game(const char* gameExe, const char* exeName) {
     char* slash = strrchr(cwd, '\\');
     if (slash) *slash = '\0'; else cwd[0] = '\0';
 
-    char cmd[MAX_PATH + 8];
-    snprintf(cmd, sizeof(cmd), "\"%s\"", gameExe);
+    char cmd[MAX_PATH + sizeof(g_gameArgsBuf) + 8];
+    if (g_gameArgsBuf[0]) {
+        snprintf(cmd, sizeof(cmd), "\"%s\" %s", gameExe, g_gameArgsBuf);
+    } else {
+        snprintf(cmd, sizeof(cmd), "\"%s\"", gameExe);
+    }
 
     STARTUPINFOA si;
     memset(&si, 0, sizeof(si));
@@ -2453,10 +2480,25 @@ int main(int argc, char** argv) {
                 uint32_t specAppId = (uint32_t) strtoul(specAppBuf, NULL, 10);
                 if (specAppId) appId = specAppId;
             }
+            if (specIsFile && fgets(g_gameArgsBuf, sizeof(g_gameArgsBuf), spec)) {
+                size_t an = strlen(g_gameArgsBuf);
+                while (an && (g_gameArgsBuf[an - 1] == '\n' || g_gameArgsBuf[an - 1] == '\r')) {
+                    g_gameArgsBuf[--an] = 0;
+                }
+            }
+            if (specIsFile && fgets(g_postDispatchExe, sizeof(g_postDispatchExe), spec)) {
+                size_t pn = strlen(g_postDispatchExe);
+                while (pn && (g_postDispatchExe[pn - 1] == '\n' || g_postDispatchExe[pn - 1] == '\r')) {
+                    g_postDispatchExe[--pn] = 0;
+                }
+                if (!is_windows_path(g_postDispatchExe)) g_postDispatchExe[0] = 0;
+            }
             fclose(spec);
             if (specIsFile) {
-                log_line("[wn-launcher] spec file %s -> exe=%s appId=%u",
-                         specSrc, gameExe, appId);
+                log_line("[wn-launcher] spec file %s -> exe=%s appId=%u args=%s post=%s",
+                         specSrc, gameExe, appId,
+                         g_gameArgsBuf[0] ? g_gameArgsBuf : "(none)",
+                         g_postDispatchExe[0] ? g_postDispatchExe : "(none)");
             }
         }
     }
@@ -3298,6 +3340,46 @@ int main(int argc, char** argv) {
                      exeName, launchFailureReason);
         }
         launchedViaFallback = create_process_game(gameExe, exeName);
+    }
+
+    if (launchedViaFallback && g_postDispatchExe[0]) {
+        const char* postName = strrchr(g_postDispatchExe, '\\');
+        postName = postName ? postName + 1 : g_postDispatchExe;
+        const int kEaWaitMs = env_int("WN_STEAM_EA_WAIT_MS", 120000);
+        const int kEaSettleMs = env_int("WN_STEAM_EA_SETTLE_MS", 20000);
+        int waited = 0;
+        bool eaUp = false;
+        while (waited < kEaWaitMs) {
+            if (process_named_running("EADesktop.exe")) { eaUp = true; break; }
+            Sleep(1000);
+            waited += 1000;
+        }
+        if (eaUp) {
+            log_line("[wn-launcher] post-dispatch: EADesktop.exe is up after %dms; "
+                     "settling %dms before starting \"%s\"", waited, kEaSettleMs, postName);
+            Sleep(kEaSettleMs);
+        } else {
+            log_line("[wn-launcher] post-dispatch: EADesktop.exe never appeared in %dms; "
+                     "starting \"%s\" anyway", waited, postName);
+        }
+        g_gameArgsBuf[0] = 0;
+        char postDir[MAX_PATH];
+        snprintf(postDir, sizeof(postDir), "%s", g_postDispatchExe);
+        char* postSlash = strrchr(postDir, '\\');
+        if (postSlash) *postSlash = 0; else postDir[0] = 0;
+        wn_launcher_set_game_exe(postName);
+        if (postDir[0]) wn_launcher_set_game_dir(postDir);
+        g_bypassRunningGuard = true;
+        bool postStarted = create_process_game(g_postDispatchExe, postName);
+        g_bypassRunningGuard = false;
+        if (postStarted) {
+            gameExe = g_postDispatchExe;
+            exeName = postName;
+            log_line("[wn-launcher] post-dispatch: \"%s\" started; watching it instead of the "
+                     "URI dispatcher", postName);
+        } else {
+            log_line("[wn-launcher] post-dispatch: failed to start \"%s\"", postName);
+        }
     }
 
     if (launchedViaApp || launchedViaFallback) {

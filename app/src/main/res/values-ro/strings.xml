@@ -2543,6 +2543,8 @@ Cale instalata:
     <string name="settings_frame_generation_not_owned">Generarea de cadre folosește shadere din Lossless Scaling. Cumpără-l pe Steam cu contul conectat pentru a activa acest lucru.</string>
     <string name="settings_frame_generation_locate">Selectează Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Conectează Steam</string>
     <string name="itch_store_downloads">Descărcări itch.io</string>
     <string name="itch_store_sign_in">Conectează-te la itch.io</string>
     <string name="itch_store_sign_in_short">Conectare</string>

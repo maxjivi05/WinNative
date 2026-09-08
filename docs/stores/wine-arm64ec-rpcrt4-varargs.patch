@@ -1,0 +1,53 @@
+Wine ARM64EC: fix the stubless-client varargs argument window in rpcrt4.
+
+The ARM64EC thunks for NdrClientCall2 / NdrClientCall3 / NdrAsyncClientCall built
+the NDR argument array from x4, assuming x4 points at the first stack argument.
+That is wrong in practice: only the two arguments the thunk spills itself (x2/x3)
+land in the right place, so any RPC procedure with three or more parameters reads
+the caller's frame instead of its arguments. The Service Control Manager client in
+sechost.dll hits this on every call -- ROpenSCManagerW's 4th parameter is an [out]
+context handle, so NdrContextHandleUnmarshall receives a garbage pointer (observed:
+0x10) and faults writing to it. That is the arm64ec-only "sc start fails / msiexec
+StopServices crashes / EABackgroundService dies" bug.
+
+ARM64EC mirrors the x64 stack layout: at entry sp points at the 32-byte home area,
+so the home slots for x2/x3 are at sp+0x10 / sp+0x18 and the first stack argument
+follows contiguously at sp+0x20. Spilling into the home slots and pointing the NDR
+stack there reproduces exactly what the x86_64 thunk does, and needs no x4.
+
+--- a/dlls/rpcrt4/ndr_stubless.c
++++ b/dlls/rpcrt4/ndr_stubless.c
+@@ NdrClientCall2 (arm64ec)
+-         "stp x2, x3, [x4, #-0x10]!\n\t"
+-         "mov x2, x4\n\t"          /* stack */
++         "stp x2, x3, [sp, #0x30]\n\t"
++         "add x2, sp, #0x30\n\t"   /* stack */
+@@ NdrAsyncClientCall (arm64ec)
+-         "stp x2, x3, [x4, #-0x10]!\n\t"
+-         "mov x2, x4\n\t"          /* stack */
++         "stp x2, x3, [sp, #0x30]\n\t"
++         "add x2, sp, #0x30\n\t"   /* stack */
+@@ NdrClientCall3 / Ndr64AsyncClientCall (arm64ec)
+-         "str x3, [x4, #-0x8]!\n\t"
+-         "mov x3, x4\n\t"          /* stack */
++         "str x3, [sp, #0x38]\n\t"
++         "add x3, sp, #0x38\n\t"   /* stack */
+
+(sp+0x30 / sp+0x38 account for the thunk's own "stp x29, x30, [sp, #-0x20]!"
+prologue: orig_sp = sp + 0x20, so orig_sp+0x10 = sp+0x30.)
+
+STATUS (2026-09-07)
+-------------------
+Verified on device: winecfg on arm64ec goes from 152 rpcrt4+0x64AA4 access
+violations to 0 with this patch, and EABackgroundService.exe no longer
+generates a crash report. Native ARM64EC RPC callers are fixed.
+
+KNOWN REMAINING GAP: emulated x64 callers (a Windows x64 exe running under FEX
+inside an arm64ec container) still get a wrong argument window - the block reads
+as all zeros, so an [out] IsSimpleRef parameter comes through NULL and
+client_do_args raises RPC_X_NULL_REF_POINTER, surfacing as error 487
+(ERROR_INVALID_ADDRESS). Neither x4 (pre-patch) nor sp+0x20 (this patch) locates
+the arguments for that caller. These entry points are declared "@ varargs" in
+rpcrt4.spec and are __attribute__((naked)) asm, so the x64 -> ARM64EC entry thunk
+is the suspect: it does not appear to marshal variadic stack arguments. That is
+the next thing to fix.

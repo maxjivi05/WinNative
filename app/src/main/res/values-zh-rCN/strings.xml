@@ -2544,6 +2544,8 @@
     <string name="settings_frame_generation_not_owned">帧生成使用 Lossless Scaling 的着色器。请使用当前登录的账号在 Steam 上购买以启用此功能。</string>
     <string name="settings_frame_generation_locate">选择 Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">关联 Steam</string>
     <string name="itch_store_downloads">itch.io 下载</string>
     <string name="itch_store_sign_in">登录 itch.io</string>
     <string name="itch_store_sign_in_short">登录</string>

@@ -2543,6 +2543,8 @@ Installerad sökväg:
     <string name="settings_frame_generation_not_owned">Bildgenerering använder shaders från Lossless Scaling. Köp det på Steam med det inloggade kontot för att aktivera detta.</string>
     <string name="settings_frame_generation_locate">Välj Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Länka Steam</string>
     <string name="itch_store_downloads">itch.io-nedladdningar</string>
     <string name="itch_store_sign_in">Logga in på itch.io</string>
     <string name="itch_store_sign_in_short">Logga in</string>

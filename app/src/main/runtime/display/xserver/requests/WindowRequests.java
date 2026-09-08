@@ -80,7 +80,7 @@ public abstract class WindowRequests {
       outputStream.writeByte((byte) 1);
       outputStream.writeByte((byte) window.getMapState().ordinal());
       outputStream.writeByte((byte) (window.attributes.isOverrideRedirect() ? 1 : 0));
-      outputStream.writeInt(0);
+      outputStream.writeInt(window.isInputOutput() ? window.attributes.getColormap() : 0);
       outputStream.writeInt((int) window.getAllEventMasks().getBits());
       outputStream.writeInt((int) client.getEventMaskForWindow(window).getBits());
       outputStream.writeShort((short) window.attributes.getDoNotPropagateMask().getBits());
@@ -126,7 +126,8 @@ public abstract class WindowRequests {
       XClient client, XInputStream inputStream, XOutputStream outputStream) throws XRequestError {
     int windowId = inputStream.readInt();
     int parentId = inputStream.readInt();
-    inputStream.skip(4);
+    short x = inputStream.readShort();
+    short y = inputStream.readShort();
 
     Window window = client.xServer.windowManager.getWindow(windowId);
     if (window == null) throw new BadWindow(windowId);
@@ -134,7 +135,7 @@ public abstract class WindowRequests {
     Window parent = client.xServer.windowManager.getWindow(parentId);
     if (parent == null) throw new BadWindow(parentId);
 
-    client.xServer.windowManager.reparentWindow(window, parent);
+    client.xServer.windowManager.reparentWindow(window, parent, x, y);
   }
 
   public static void mapWindow(XClient client, XInputStream inputStream, XOutputStream outputStream)

@@ -160,6 +160,59 @@ static int wn_real_ifaddrs_usable(struct ifaddrs *list) {
     return usable;
 }
 
+static int wn_iface_has_inet(struct ifaddrs *list, const char *name) {
+    for (struct ifaddrs *e = list; e; e = e->ifa_next) {
+        if (!e->ifa_addr || !e->ifa_name) continue;
+        if (e->ifa_addr->sa_family != AF_INET) continue;
+        if (e->ifa_flags & IFF_LOOPBACK) continue;
+        if (strcmp(e->ifa_name, name) == 0) return 1;
+    }
+    return 0;
+}
+
+#define WN_MAX_INET_NAMES 32
+
+static struct ifaddrs *wn_reorder_inet_first(struct ifaddrs *list) {
+    char names[WN_MAX_INET_NAMES][IFNAMSIZ];
+    int name_count = 0;
+    for (struct ifaddrs *e = list; e; e = e->ifa_next) {
+        if (!e->ifa_addr || !e->ifa_name) continue;
+        if (e->ifa_addr->sa_family != AF_INET) continue;
+        if (e->ifa_flags & IFF_LOOPBACK) continue;
+        int seen = 0;
+        for (int i = 0; i < name_count; i++)
+            if (strcmp(names[i], e->ifa_name) == 0) { seen = 1; break; }
+        if (!seen && name_count < WN_MAX_INET_NAMES)
+            snprintf(names[name_count++], IFNAMSIZ, "%s", e->ifa_name);
+    }
+    if (name_count == 0) return list;
+
+    struct ifaddrs *good = NULL, *good_tail = NULL, *rest = NULL, *rest_tail = NULL;
+    struct ifaddrs *e = list;
+    int moved = 0;
+    while (e) {
+        struct ifaddrs *next = e->ifa_next;
+        int is_good = 0;
+        if (e->ifa_name)
+            for (int i = 0; i < name_count; i++)
+                if (strcmp(names[i], e->ifa_name) == 0) { is_good = 1; break; }
+        e->ifa_next = NULL;
+        if (is_good) {
+            if (good_tail) good_tail->ifa_next = e; else good = e;
+            good_tail = e;
+        } else {
+            if (rest_tail) rest_tail->ifa_next = e; else rest = e;
+            rest_tail = e;
+            moved++;
+        }
+        e = next;
+    }
+    if (!good) return rest;
+    good_tail->ifa_next = rest;
+    wn_log("getifaddrs reordered: %d IPv4 iface(s) first, %d other entry(ies) after", name_count, moved);
+    return good;
+}
+
 int getifaddrs(struct ifaddrs **ifap) {
     static int (*real)(struct ifaddrs **);
     if (!real) real = (int (*)(struct ifaddrs **)) dlsym(RTLD_NEXT, "getifaddrs");
@@ -171,7 +224,7 @@ int getifaddrs(struct ifaddrs **ifap) {
         int usable = rc == 0 ? wn_real_ifaddrs_usable(probe) : -1;
         wn_log("getifaddrs real rc=%d usable_inet=%d", rc, usable);
         if (rc == 0 && usable > 0) {
-            *ifap = probe;
+            *ifap = wn_reorder_inet_first(probe);
             return 0;
         }
         if (rc == 0 && probe) {

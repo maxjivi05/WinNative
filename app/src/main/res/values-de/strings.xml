@@ -2545,6 +2545,8 @@ Installierter Pfad:
     <string name="settings_frame_generation_not_owned">Frame-Generierung nutzt Shader von Lossless Scaling. Kaufe es auf Steam mit dem angemeldeten Konto, um dies zu aktivieren.</string>
     <string name="settings_frame_generation_locate">Lossless.dll auswählen…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Steam verknüpfen</string>
     <string name="itch_store_downloads">itch.io-Downloads</string>
     <string name="itch_store_sign_in">Bei itch.io anmelden</string>
     <string name="itch_store_sign_in_short">Anmelden</string>

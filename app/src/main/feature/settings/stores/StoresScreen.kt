@@ -104,6 +104,8 @@ data class StoreState(
     val isGogLoggedIn: Boolean = false,
     val isItchLoggedIn: Boolean = false,
     val itchUserName: String = "",
+    val isEaLoggedIn: Boolean = false,
+    val eaUserName: String = "",
     val sharedFolder: Boolean = true,
     val downloadSpeed: Int = 24,
     val downloadServer: Int = 0,
@@ -129,6 +131,9 @@ fun StoresScreen(
     onGogSignOut: () -> Unit,
     onItchSignIn: () -> Unit,
     onItchSignOut: () -> Unit,
+    onEaSignIn: () -> Unit,
+    onEaSignOut: () -> Unit,
+    onEaLinkSteam: () -> Unit,
     onSharedFolderChanged: (Boolean) -> Unit,
     onDownloadSpeedChanged: (Int) -> Unit,
     onDownloadServerChanged: (Int) -> Unit,
@@ -201,6 +206,16 @@ fun StoresScreen(
                 isLoggedIn = state.isItchLoggedIn,
                 onSignIn = onItchSignIn,
                 onSignOut = onItchSignOut,
+            )
+            StoreCard(
+                name = stringResource(R.string.ea_store_title),
+                icon = Icons.Outlined.Gamepad,
+                accentColor = Color(0xFFFF4747),
+                isLoggedIn = state.isEaLoggedIn,
+                onSignIn = onEaSignIn,
+                onSignOut = onEaSignOut,
+                secondaryLabel = stringResource(R.string.ea_store_link_steam),
+                onSecondary = onEaLinkSteam,
             )
 
             SectionLabel(stringResource(R.string.stores_accounts_download_settings), modifier = Modifier.padding(top = 8.dp))
@@ -377,6 +392,8 @@ private fun StoreCard(
     isLoggedIn: Boolean,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null,
 ) {
     var showSignOutDialog by remember { mutableStateOf(false) }
     if (showSignOutDialog) {
@@ -491,6 +508,15 @@ private fun StoreCard(
                         fontSize = 12.sp,
                     )
                 }
+            }
+
+            if (isLoggedIn && secondaryLabel != null && onSecondary != null) {
+                ActionButton(
+                    label = secondaryLabel,
+                    textColor = accentColor,
+                    onClick = onSecondary,
+                )
+                Spacer(Modifier.width(8.dp))
             }
 
             ActionButton(

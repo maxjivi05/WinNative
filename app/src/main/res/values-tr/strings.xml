@@ -2543,6 +2543,8 @@ Yüklü konum:
     <string name="settings_frame_generation_not_owned">Kare üretimi Lossless Scaling gölgelendiricilerini kullanır. Bunu etkinleştirmek için oturum açmış hesapla Steam\'den satın alın.</string>
     <string name="settings_frame_generation_locate">Lossless.dll seç…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Steam\'i bağla</string>
     <string name="itch_store_downloads">itch.io İndirmeleri</string>
     <string name="itch_store_sign_in">itch.io hesabına giriş yap</string>
     <string name="itch_store_sign_in_short">Giriş yap</string>

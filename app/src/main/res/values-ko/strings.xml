@@ -2545,6 +2545,8 @@
     <string name="settings_frame_generation_not_owned">프레임 생성은 Lossless Scaling의 셰이더를 사용합니다. 사용하려면 로그인한 계정으로 Steam에서 구매하세요.</string>
     <string name="settings_frame_generation_locate">Lossless.dll 선택…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Steam 연결</string>
     <string name="itch_store_downloads">itch.io 다운로드</string>
     <string name="itch_store_sign_in">itch.io에 로그인</string>
     <string name="itch_store_sign_in_short">로그인</string>

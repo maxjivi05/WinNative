@@ -9586,7 +9586,24 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
     }
 
     // .msi and .bat/.cmd aren't PE images, so CreateProcess can't start them; run them through their interpreter.
+    private static final String[] SHELL_LAUNCH_PROTOCOLS = {
+        "link2ea:", "steam2ea:", "uplay:", "com.epicgames.launcher:",
+        "origin:", "origin2:", "ealink:", "eadesktop:", "epic2ea:", "luna2ea:"
+    };
+
+    private static boolean isShellLaunchUrl(String value) {
+        if (value == null) return false;
+        String lower = value.toLowerCase(java.util.Locale.ROOT);
+        for (String scheme : SHELL_LAUNCH_PROTOCOLS) {
+            if (lower.startsWith(scheme)) return true;
+        }
+        return false;
+    }
+
     private static String buildGuestProgramArgs(String windowsPath) {
+        if (isShellLaunchUrl(windowsPath)) {
+            return "\"C:\\windows\\system32\\start.exe\" \"" + windowsPath + "\"";
+        }
         String lower = windowsPath.toLowerCase(java.util.Locale.ROOT);
         if (lower.endsWith(".msi")) {
             return "\"C:\\windows\\system32\\msiexec.exe\" /i \"" + windowsPath + "\" /passive /norestart";
@@ -9612,12 +9629,27 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
     }
 
     private String writePlanWGameSpec(String gameExeWinPath, int appId) {
+        return writePlanWGameSpec(gameExeWinPath, appId, null);
+    }
+
+    private String writePlanWGameSpec(String gameExeWinPath, int appId, String gameArgs) {
+        return writePlanWGameSpec(gameExeWinPath, appId, gameArgs, null);
+    }
+
+    private String writePlanWGameSpec(String gameExeWinPath, int appId, String gameArgs,
+                                      String postDispatchExeWinPath) {
         if (gameExeWinPath == null || gameExeWinPath.isEmpty()) return null;
         File spec = new File(container.getRootDir(), ".wine/drive_c/wn-steam-game.spec");
         try {
             File parent = spec.getParentFile();
             if (parent != null) parent.mkdirs();
-            FileUtils.writeString(spec, gameExeWinPath + "\n" + appId + "\n");
+            String body = gameExeWinPath + "\n" + appId + "\n";
+            if (gameArgs != null && !gameArgs.isEmpty()) body += gameArgs + "\n";
+            if (postDispatchExeWinPath != null && !postDispatchExeWinPath.isEmpty()) {
+                if (gameArgs == null || gameArgs.isEmpty()) body += "\n";
+                body += postDispatchExeWinPath + "\n";
+            }
+            FileUtils.writeString(spec, body);
             Log.d("XServerDisplayActivity",
                     "Steam Launcher: wrote game spec " + spec.getAbsolutePath()
                     + " (appId=" + appId + ")");
@@ -9707,6 +9739,25 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                     String gameDirName = (canonicalDirName != null && !canonicalDirName.isEmpty())
                             ? canonicalDirName
                             : onDiskDirName;
+                    String steamLaunchUrl = null;
+                    try {
+                        java.util.List<?> exeInfos =
+                                com.winlator.cmod.feature.stores.steam.service.SteamService
+                                        .Companion.getWindowsLaunchInfos(appId);
+                        boolean hasExeEntry = exeInfos != null && !exeInfos.isEmpty();
+                        java.util.List<?> urlInfos =
+                                com.winlator.cmod.feature.stores.steam.service.SteamService
+                                        .Companion.getWindowsLaunchUrls(appId);
+                        if (!hasExeEntry && urlInfos != null && !urlInfos.isEmpty()) {
+                            java.lang.reflect.Method m =
+                                    urlInfos.get(0).getClass().getMethod("getExecutable");
+                            Object exe = m.invoke(urlInfos.get(0));
+                            if (exe != null) steamLaunchUrl = exe.toString();
+                        }
+                    } catch (Exception e) {
+                        Log.w("XServerDisplayActivity", "Steam launch-url lookup failed", e);
+                    }
+
                     String relativeExe = resolveRelativeGameExe(appId, gameInstPath);
                     // If the resolved exe isn't Steam's configured launch entry the user overrode it; tell the launcher to skip LaunchApp and start the selected exe directly.
                     wnSteamDirectExeOverride = isUserOverriddenSteamExe(appId, relativeExe);
@@ -9723,7 +9774,35 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                             "Steam Launcher: launch option for appId=" + appId + " exe='"
                             + relativeExe + "' -> " + wnSteamLaunchOption);
 
-                    if (!relativeExe.isEmpty() && !gameDirName.isEmpty()) {
+                    if (steamLaunchUrl != null && launchBionicSteam) {
+                        String shellExe = "C:\\windows\\system32\\start.exe";
+                        boolean planWUrl = com.winlator.cmod.feature.stores.steam.utils
+                                .PrefManager.INSTANCE.getWnPlanW();
+                        String wrapperExeUrl = planWUrl ? "steam.exe" : "wn-steam-helper.exe";
+                        String launchArgUrl = shellExe;
+                        if (planWUrl) {
+                            String postExe = "";
+                            if (!relativeExe.isEmpty() && !gameDirName.isEmpty()) {
+                                postExe = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\"
+                                        + gameDirName + "\\" + relativeExe.replace("/", "\\");
+                            }
+                            String specPath = writePlanWGameSpec(
+                                    shellExe, appId, "\"" + steamLaunchUrl + "\"", postExe);
+                            if (!postExe.isEmpty()) {
+                                Log.i("XServerDisplayActivity",
+                                        "Steam+EA: after EA authorises, the agent will start " + postExe);
+                            }
+                            if (specPath != null) {
+                                launchArgUrl = specPath;
+                                envVars.put("WN_STEAM_GAMEEXE_FILE", specPath);
+                            }
+                        }
+                        args = "\"C:\\Program Files (x86)\\Steam\\" + wrapperExeUrl
+                                + "\" \"" + launchArgUrl + "\"";
+                        Log.i("XServerDisplayActivity",
+                                "Steam+EA: no exe launch entry; starting the Steam agent then "
+                                + "dispatching " + steamLaunchUrl);
+                    } else if (!relativeExe.isEmpty() && !gameDirName.isEmpty()) {
                         String steamGameExe = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\"
                                 + gameDirName + "\\" + relativeExe.replace("/", "\\");
 
@@ -11657,6 +11736,13 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         return updated;
     }
 
+    private static boolean matchesRegistryKeyPrefix(String line, String prefix) {
+        if (!line.startsWith(prefix)) return false;
+        if (line.length() == prefix.length()) return true;
+        char next = line.charAt(prefix.length());
+        return next == ']' || next == '\\';
+    }
+
     private String extractRegistrySubtree(String registryContent, String key) {
         if (registryContent == null || registryContent.isEmpty() || key == null || key.isEmpty()) {
             return "";
@@ -11669,12 +11755,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         String[] lines = registryContent.split("\n", -1);
         for (String line : lines) {
             if (line.startsWith("[")) {
-                if (capturing && !line.startsWith(prefix)) {
-                    break;
-                }
-                if (!capturing && line.startsWith(prefix)) {
-                    capturing = true;
-                }
+                capturing = matchesRegistryKeyPrefix(line, prefix);
             }
             if (capturing) {
                 extracted.append(line).append('\n');
@@ -11695,12 +11776,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         String[] lines = registryContent.split("\n", -1);
         for (String line : lines) {
             if (line.startsWith("[")) {
-                if (capturing && !line.startsWith(prefix)) {
-                    capturing = false;
-                }
-                if (!capturing && line.startsWith(prefix)) {
-                    capturing = true;
-                }
+                capturing = matchesRegistryKeyPrefix(line, prefix);
             }
             if (!capturing) {
                 rebuilt.append(line).append('\n');

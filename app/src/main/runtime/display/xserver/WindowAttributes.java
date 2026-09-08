@@ -3,6 +3,7 @@ package com.winlator.cmod.runtime.display.xserver;
 import com.winlator.cmod.runtime.display.connector.XInputStream;
 
 public class WindowAttributes {
+  public static final int DEFAULT_COLORMAP = 0x20;
   public static final int FLAG_BACKGROUND_PIXMAP = 1 << 0;
   public static final int FLAG_BACKGROUND_PIXEL = 1 << 1;
   public static final int FLAG_BORDER_PIXMAP = 1 << 2;
@@ -60,6 +61,7 @@ public class WindowAttributes {
   }
 
   private int backingPixel = 0;
+  private int colormap = DEFAULT_COLORMAP;
   private int backingPlanes = 1;
   private BackingStore backingStore = BackingStore.NOT_USEFUL;
   private BitGravity bitGravity = BitGravity.CENTER;
@@ -76,6 +78,14 @@ public class WindowAttributes {
 
   public WindowAttributes(Window window) {
     this.window = window;
+  }
+
+  public int getColormap() {
+    return colormap;
+  }
+
+  public void setColormap(int colormap) {
+    this.colormap = colormap;
   }
 
   public int getBackingPixel() {
@@ -183,10 +193,15 @@ public class WindowAttributes {
         case FLAG_CURSOR:
           cursor = client.xServer.cursorManager.getCursor(inputStream.readInt());
           break;
+        case FLAG_COLORMAP:
+          {
+            int requested = inputStream.readInt();
+            colormap = requested != 0 ? requested : DEFAULT_COLORMAP;
+          }
+          break;
         case FLAG_BACKGROUND_PIXMAP:
         case FLAG_BORDER_PIXMAP:
         case FLAG_BORDER_PIXEL:
-        case FLAG_COLORMAP:
           inputStream.skip(4);
           break;
       }

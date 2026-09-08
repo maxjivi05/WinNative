@@ -82,7 +82,7 @@ public class XClientRequestHandler implements RequestHandler {
       Visual rootVisual = client.xServer.windowManager.rootWindow.getContent().visual;
 
       outputStream.writeInt(client.xServer.windowManager.rootWindow.id);
-      outputStream.writeInt(0);
+      outputStream.writeInt(WindowAttributes.DEFAULT_COLORMAP);
       outputStream.writeInt(0xffffff);
       outputStream.writeInt(0x000000);
       outputStream.writeInt((int) client.xServer.windowManager.rootWindow.getAllEventMasks().getBits());

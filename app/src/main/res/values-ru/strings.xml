@@ -2450,6 +2450,8 @@
     <string name="settings_frame_generation_not_owned">Генерация кадров использует шейдеры Lossless Scaling. Купите его в Steam под текущей учётной записью, чтобы включить эту функцию.</string>
     <string name="settings_frame_generation_locate">Выбрать Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Привязать Steam</string>
     <string name="itch_store_downloads">Загрузки itch.io</string>
     <string name="itch_store_sign_in">Войти в itch.io</string>
     <string name="itch_store_sign_in_short">Войти</string>

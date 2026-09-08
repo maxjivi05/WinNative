@@ -2480,6 +2480,8 @@
     <string name="settings_frame_generation_not_owned">फ़्रेम जनरेशन Lossless Scaling के शेडर उपयोग करता है। इसे सक्षम करने के लिए साइन-इन खाते से Steam पर इसे खरीदें।</string>
     <string name="settings_frame_generation_locate">Lossless.dll चुनें…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Steam लिंक करें</string>
     <string name="itch_store_downloads">itch.io डाउनलोड</string>
     <string name="itch_store_sign_in">itch.io में साइन इन करें</string>
     <string name="itch_store_sign_in_short">साइन इन</string>

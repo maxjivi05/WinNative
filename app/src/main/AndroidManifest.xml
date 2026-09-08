@@ -101,6 +101,20 @@
             android:exported="false" />
 
         <activity
+            android:name="com.winlator.cmod.feature.stores.ea.ui.auth.EaOAuthActivity"
+            android:theme="@style/AppTheme.Dark"
+            android:screenOrientation="fullUser"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation"
+            android:exported="false" />
+
+        <activity
+            android:name="com.winlator.cmod.feature.stores.ea.ui.auth.EaLinkActivity"
+            android:theme="@style/AppTheme.Dark"
+            android:screenOrientation="fullUser"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation"
+            android:exported="false" />
+
+        <activity
             android:name="com.winlator.cmod.feature.stores.itch.ui.auth.ItchLoginActivity"
             android:theme="@style/AppTheme.Dark"
             android:screenOrientation="fullUser"

@@ -2544,6 +2544,8 @@ Chemin installé :
     <string name="settings_frame_generation_not_owned">La génération d\'images utilise les shaders de Lossless Scaling. Achetez-le sur Steam avec le compte connecté pour l\'activer.</string>
     <string name="settings_frame_generation_locate">Sélectionner Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Lier Steam</string>
     <string name="itch_store_downloads">Téléchargements itch.io</string>
     <string name="itch_store_sign_in">Se connecter à itch.io</string>
     <string name="itch_store_sign_in_short">Se connecter</string>

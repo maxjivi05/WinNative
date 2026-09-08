@@ -258,6 +258,8 @@
 
     <!-- Stores &gt; itch.io -->
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Link Steam</string>
     <string name="itch_store_downloads">itch.io Downloads</string>
     <string name="itch_store_sign_in">Sign in to itch.io</string>
     <string name="itch_store_sign_in_short">Sign in</string>

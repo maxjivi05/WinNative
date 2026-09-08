@@ -24,6 +24,11 @@ import com.winlator.cmod.feature.stores.epic.ui.auth.EpicOAuthActivity
 import com.winlator.cmod.feature.stores.gog.service.GOGAuthManager
 import com.winlator.cmod.feature.stores.gog.service.GOGService
 import com.winlator.cmod.feature.stores.gog.ui.auth.GOGOAuthActivity
+import com.winlator.cmod.feature.stores.ea.service.EaAuthManager
+import timber.log.Timber
+import com.winlator.cmod.feature.stores.ea.service.EaLibraryClient
+import com.winlator.cmod.feature.stores.ea.ui.auth.EaLinkActivity
+import com.winlator.cmod.feature.stores.ea.ui.auth.EaOAuthActivity
 import com.winlator.cmod.feature.stores.itch.service.ItchAuthManager
 import com.winlator.cmod.feature.stores.itch.service.ItchService
 import com.winlator.cmod.feature.stores.itch.ui.auth.ItchLoginActivity
@@ -95,6 +100,13 @@ class StoresFragment : Fragment() {
             refresh()
         }
 
+    private val eaLoginLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult(),
+        ) {
+            refresh()
+        }
+
     // Lifecycle
     override fun onViewCreated(
         view: View,
@@ -136,6 +148,14 @@ class StoresFragment : Fragment() {
                         onEpicSignOut = {
                             EpicAuthManager.logoutSync(requireContext())
                             refresh()
+                        },
+                        onEaSignIn = { eaLoginLauncher.launch(Intent(requireContext(), EaOAuthActivity::class.java)) },
+                        onEaSignOut = {
+                            EaAuthManager.clearStoredCredentials(requireContext().applicationContext)
+                            refresh()
+                        },
+                        onEaLinkSteam = {
+                            eaLoginLauncher.launch(Intent(requireContext(), EaLinkActivity::class.java))
                         },
                         onItchSignIn = { itchLoginLauncher.launch(Intent(requireContext(), ItchLoginActivity::class.java)) },
                         onItchSignOut = {
@@ -198,6 +218,25 @@ class StoresFragment : Fragment() {
                 isGogLoggedIn = GOGAuthManager.isLoggedIn(ctx),
                 isItchLoggedIn = ItchAuthManager.isLoggedIn(ctx),
                 itchUserName = ItchAuthManager.userName(ctx),
+                isEaLoggedIn = EaAuthManager.isLoggedIn(ctx).also { loggedIn ->
+                    android.util.Log.i(
+                        "EAStore",
+                        "status=" + EaAuthManager.getAuthStatus(ctx) +
+                            " loggedIn=" + loggedIn +
+                            " hasCreds=" + EaAuthManager.hasStoredCredentials(ctx) +
+                            " cookies=" + EaAuthManager.sessionCookies().length,
+                    )
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val result = EaLibraryClient.fetchOwnedGames(ctx)
+                        result.onSuccess { games ->
+                            android.util.Log.i("EAStore", "EA library: " + games.size + " owned games")
+                            games.take(20).forEach {
+                                android.util.Log.i("EAStore", "  owned: " + it.name + " [" + it.gameType + "] " + it.offerId)
+                            }
+                        }.onFailure { android.util.Log.w("EAStore", "EA library fetch failed: " + it) }
+                    }
+                },
+                eaUserName = EaAuthManager.displayName(ctx),
                 sharedFolder = PrefManager.useSingleDownloadFolder,
                 downloadSpeed = PrefManager.downloadSpeed,
                 downloadServer = PrefManager.cellId,

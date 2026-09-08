@@ -1,0 +1,183 @@
+diff --git a/FEXCore/Source/Interface/Config/Config.json.in b/FEXCore/Source/Interface/Config/Config.json.in
+index b225b680a..f617101b1 100644
+--- a/FEXCore/Source/Interface/Config/Config.json.in
++++ b/FEXCore/Source/Interface/Config/Config.json.in
+@@ -1,6 +1,13 @@
+ {
+   "Options": {
+     "CPU": {
++      "CallRetStack": {
++        "Type": "bool",
++        "Default": "true",
++        "Desc": [
++          "Uses a shadow stack of guest return addresses to predict return targets in the JIT"
++        ]
++      },
+       "Multiblock": {
+         "Type": "bool",
+         "Default": "true",
+diff --git a/FEXCore/Source/Interface/Context/Context.h b/FEXCore/Source/Interface/Context/Context.h
+index 58807e898..8ad626637 100644
+--- a/FEXCore/Source/Interface/Context/Context.h
++++ b/FEXCore/Source/Interface/Context/Context.h
+@@ -346,6 +346,7 @@ public:
+     bool NeedsPendingInterruptFaultCheck {false};
+ 
+     FEX_CONFIG_OPT(Multiblock, MULTIBLOCK);
++    FEX_CONFIG_OPT(CallRetStack, CALLRETSTACK);
+     FEX_CONFIG_OPT(SingleStepConfig, SINGLESTEP);
+     FEX_CONFIG_OPT(GdbServer, GDBSERVER);
+     FEX_CONFIG_OPT(Is64BitMode, IS64BIT_MODE);
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index b174dab3c..2ddb09aa6 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -125,14 +125,18 @@ void Dispatcher::EmitDispatcher() {
+ 
+   // As ARM64EC uses this as an entrypoint for both guest calls and host returns, opportunistically try to return
+   // using the call-ret stack to avoid unbalancing it.
+-  ldp<ARMEmitter::IndexType::OFFSET>(TMP1, TMP2, REG_CALLRET_SP);
+-  // EC_CALL_CHECKER_PC_REG is REG_PF which isn't touched by any of the above
+-  sub(ARMEmitter::Size::i64Bit, TMP1, EC_CALL_CHECKER_PC_REG, TMP1);
+-  (void)cbnz(ARMEmitter::Size::i64Bit, TMP1, &LoopTop);
+-
+-  // If the entry at the TOS is for the target address, pop it and return to the JIT code
+-  add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x10);
+-  ret(TMP2);
++  if (CTX->Config.CallRetStack) {
++    ldp<ARMEmitter::IndexType::OFFSET>(TMP1, TMP2, REG_CALLRET_SP);
++    // EC_CALL_CHECKER_PC_REG is REG_PF which isn't touched by any of the above
++    sub(ARMEmitter::Size::i64Bit, TMP1, EC_CALL_CHECKER_PC_REG, TMP1);
++    (void)cbnz(ARMEmitter::Size::i64Bit, TMP1, &LoopTop);
++
++    // If the entry at the TOS is for the target address, pop it and return to the JIT code
++    add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x10);
++    ret(TMP2);
++  } else {
++    (void)b(&LoopTop);
++  }
+ 
+   // Enter JIT
+ #endif
+@@ -501,7 +505,9 @@ void Dispatcher::EmitDispatcher() {
+ 
+     // load static regs
+     FillStaticRegs();
+-    stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
++    if (CTX->Config.CallRetStack) {
++      stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
++    }
+ 
+     // Now go back to the regular dispatcher loop
+     (void)b(&LoopTop);
+diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+index d555e0648..c30e10fd0 100644
+--- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+@@ -164,9 +164,11 @@ DEF_OP(ExitFunction) {
+         if (!Op->CallReturnBlock.IsInvalid()) {
+           auto CallReturnAddressReg = GetReg(Op->CallReturnAddress).X();
+           PendingCallReturnTargetLabel = &CallReturnTargets.try_emplace(Op->CallReturnBlock.ID()).first->second;
+-          (void)adr(TMP1, &l_CallReturn);
+-          stp<ARMEmitter::IndexType::PRE>(CallReturnAddressReg, TMP1, REG_CALLRET_SP, -0x10);
+-        } else {
++          if (CTX->Config.CallRetStack) {
++            (void)adr(TMP1, &l_CallReturn);
++            stp<ARMEmitter::IndexType::PRE>(CallReturnAddressReg, TMP1, REG_CALLRET_SP, -0x10);
++          }
++        } else if (CTX->Config.CallRetStack) {
+           stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
+         }
+       } else if (Op->Hint == IR::BranchHint::CheckTF) {
+@@ -189,7 +191,9 @@ DEF_OP(ExitFunction) {
+     ARMEmitter::ForwardLabel SkipFullLookup;
+     auto RipReg = GetReg(Op->NewRIP);
+ 
+-    if (Op->Hint == IR::BranchHint::Return) {
++    if (Op->Hint == IR::BranchHint::Return && CTX->Config.CallRetStack) {
++      // Keep the guest RIP in the thread state so the frontend can recover from a stale shadow-stack target
++      str(RipReg.X(), STATE, offsetof(FEXCore::Core::CpuStateFrame, State.rip));
+       // First try to pop from the call-ret stack, otherwise follow the normal path (but ending in a ret)
+       ldp<ARMEmitter::IndexType::POST>(TMP1, TMP2, REG_CALLRET_SP, 0x10);
+       sub(TMP1, TMP1, RipReg.X());
+@@ -218,9 +222,11 @@ DEF_OP(ExitFunction) {
+       if (!Op->CallReturnBlock.IsInvalid()) {
+         auto CallReturnAddressReg = GetReg(Op->CallReturnAddress).X();
+         PendingCallReturnTargetLabel = &CallReturnTargets.try_emplace(Op->CallReturnBlock.ID()).first->second;
+-        (void)adr(TMP1, &l_CallReturn);
+-        stp<ARMEmitter::IndexType::PRE>(CallReturnAddressReg, TMP1, REG_CALLRET_SP, -0x10);
+-      } else {
++        if (CTX->Config.CallRetStack) {
++          (void)adr(TMP1, &l_CallReturn);
++          stp<ARMEmitter::IndexType::PRE>(CallReturnAddressReg, TMP1, REG_CALLRET_SP, -0x10);
++        }
++      } else if (CTX->Config.CallRetStack) {
+         stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
+       }
+       blr(TMP2);
+diff --git a/Source/Common/Config.cpp b/Source/Common/Config.cpp
+index 5d9d2ef98..7cc755fd6 100644
+--- a/Source/Common/Config.cpp
++++ b/Source/Common/Config.cpp
+@@ -36,11 +36,27 @@ namespace JSON {
+       return;
+     }
+ 
++    // A zero-length read is indistinguishable from "no config" as far as this layer is
++    // concerned, and it is not always a regular file that was opened -- treat it the same
++    // as a missing file rather than handing an empty buffer to the JSON parser.
++    if (Data.empty()) {
++      return;
++    }
++
+     FEX::JSON::JsonAllocator Pool {};
+     const json_t* json = FEX::JSON::CreateJSON(Data, Pool);
+ 
+     if (!json) {
+-      ERROR_AND_DIE_FMT("Failed to parse JSON from file '{}' - invalid JSON format", Config);
++      // Every caller of this treats the config file as optional -- a file that is simply
++      // absent returns quietly above. Killing the guest process because an optional file
++      // failed to parse is a far worse outcome than ignoring it, especially since the
++      // path can be picked up unintentionally: GetApplicationConfig() falls back to a
++      // *cwd-relative* "./<program>.json" whenever the FEX config directory cannot be
++      // created, so whatever happens to sit next to the guest program can end up here.
++      // Log it at error level (so the offending path is visible) and carry on with no
++      // overrides from this layer.
++      LogMan::Msg::EFmt("Failed to parse JSON from file '{}' - invalid JSON format, ignoring it", Config);
++      return;
+     }
+ 
+     const json_t* ConfigList = json_getProperty(json, "Config");
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index 2061bf061..2dc961a75 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -915,6 +915,28 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+     }
+   }
+ 
++  if (Thread && Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && Exception->ExceptionInformation[0] == 8 &&
++      !IsAddressInJit(Context->Pc) && Context->X28 == reinterpret_cast<uint64_t>(Thread->CurrentFrame)) {
++    // A ret through the call-ret shadow stack branched to host code that has since been invalidated.
++    // The JIT stored the guest RIP before popping, so spill the SRA state and re-enter the dispatcher there.
++    const auto& Config = SignalDelegator->GetConfig();
++    auto& State = Thread->CurrentFrame->State;
++    for (size_t i = 0; i < Config.SRAGPRCount; i++) {
++      State.gregs[i] = Context->X[Config.SRAGPRMapping[i]];
++    }
++    for (size_t i = 0; i < Config.SRAFPRCount; i++) {
++      memcpy(State.xmm.sse.data[i], &Context->V[Config.SRAFPRMapping[i]], sizeof(__uint128_t));
++    }
++    uint32_t EFlags = CTX->ReconstructCompactedEFLAGS(Thread, true, Context->X, Context->Cpsr);
++    CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags);
++    LogMan::Msg::DFmt("Recovered stale call-ret target: pc {:X} rip {:X}", Context->Pc, State.rip);
++    Context->X25 = FEX::Windows::CallRetStack::GetInfoThread(Thread).DefaultLocation;
++    State.callret_sp = Context->X25;
++    Context->Pc = Config.AbsoluteLoopTopAddressFillSRA;
++    Context->X1 = 0;
++    return true;
++  }
++
+   if (!Thread || !IsAddressInJit(Context->Pc)) {
+     return false;
+   }

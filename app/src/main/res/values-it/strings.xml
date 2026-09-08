@@ -2544,6 +2544,8 @@ Percorso installato:
     <string name="settings_frame_generation_not_owned">La generazione fotogrammi usa gli shader di Lossless Scaling. Acquistalo su Steam con l\'account connesso per abilitarla.</string>
     <string name="settings_frame_generation_locate">Seleziona Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Collega Steam</string>
     <string name="itch_store_downloads">Download di itch.io</string>
     <string name="itch_store_sign_in">Accedi a itch.io</string>
     <string name="itch_store_sign_in_short">Accedi</string>

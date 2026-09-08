@@ -2543,6 +2543,8 @@
     <string name="settings_frame_generation_not_owned">影格生成使用 Lossless Scaling 的著色器。請使用目前登入的帳號在 Steam 上購買以啟用此功能。</string>
     <string name="settings_frame_generation_locate">選擇 Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">連結 Steam</string>
     <string name="itch_store_downloads">itch.io 下載</string>
     <string name="itch_store_sign_in">登入 itch.io</string>
     <string name="itch_store_sign_in_short">登入</string>

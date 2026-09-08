@@ -1,0 +1,42 @@
+diff --git a/dlls/netprofm/list.c b/dlls/netprofm/list.c
+index af40dc0ac91..33a6d2f52c3 100644
+--- a/dlls/netprofm/list.c
++++ b/dlls/netprofm/list.c
+@@ -547,6 +547,13 @@ static const struct INetworkVtbl network_vtbl =
+     network_SetCategory
+ };
+ 
++static void init_networks( struct list_manager *mgr );
++
++static void refresh_networks( struct list_manager *mgr )
++{
++    if (list_empty( &mgr->networks )) init_networks( mgr );
++}
++
+ static struct network *create_network( const GUID *id )
+ {
+     struct network *ret;
+@@ -1317,6 +1324,7 @@ static HRESULT WINAPI list_manager_IsConnectedToInternet(
+     struct list_manager *mgr = impl_from_INetworkListManager( iface );
+     struct network *network;
+ 
++    refresh_networks( mgr );
+     TRACE( "%p, %p\n", iface, pbIsConnected );
+ 
+     LIST_FOR_EACH_ENTRY( network, &mgr->networks, struct network, entry )
+@@ -1339,6 +1347,7 @@ static HRESULT WINAPI list_manager_IsConnected(
+     struct list_manager *mgr = impl_from_INetworkListManager( iface );
+     struct network *network;
+ 
++    refresh_networks( mgr );
+     TRACE( "%p, %p\n", iface, pbIsConnected );
+ 
+     LIST_FOR_EACH_ENTRY( network, &mgr->networks, struct network, entry )
+@@ -1361,6 +1370,7 @@ static HRESULT WINAPI list_manager_GetConnectivity(
+     struct list_manager *mgr = impl_from_INetworkListManager( iface );
+     struct network *network;
+ 
++    refresh_networks( mgr );
+     FIXME( "%p, %p\n", iface, pConnectivity );
+ 
+     *pConnectivity = NLM_CONNECTIVITY_DISCONNECTED;

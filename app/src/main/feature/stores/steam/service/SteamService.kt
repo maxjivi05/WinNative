@@ -1479,7 +1479,9 @@ class SteamService : Service() {
         /** Resolves the executable for an installed Steam app from its appinfo `config.launch` entries — depot manifests store filenames AES-encrypted and are never decrypted, so scanning them is useless. */
         // Invoked by name via reflection from SteamBridge — keep in the companion; do not move to an extension file.
         fun getInstalledExe(appId: Int): String =
-            getWindowsLaunchInfos(appId).firstOrNull()?.executable ?: ""
+            getWindowsLaunchInfos(appId).firstOrNull()?.executable
+                ?: getWindowsLaunchUrls(appId).firstOrNull()?.executable
+                ?: ""
 
         fun getLaunchExecutable(
             appId: String,
@@ -1830,12 +1832,39 @@ class SteamService : Service() {
             }
         }
 
+        private val SHELL_LAUNCH_SCHEMES =
+            listOf(
+                "link2ea:",
+                "steam2ea:",
+                "origin:",
+                "origin2:",
+                "ealink:",
+                "eadesktop:",
+                "uplay:",
+                "epic2ea:",
+                "luna2ea:",
+                "com.epicgames.launcher:",
+            )
+
+        fun isShellLaunchUrl(value: String): Boolean {
+            val lower = value.lowercase()
+            return SHELL_LAUNCH_SCHEMES.any { lower.startsWith(it) }
+        }
+
         fun getWindowsLaunchInfos(appId: Int): List<LaunchInfo> =
             getAppInfoOf(appId)
                 ?.let { appInfo ->
                     appInfo.config.launch.filter { launchInfo ->
                         // since configOS was unreliable and configArch was even more unreliable
                         launchInfo.executable.endsWith(".exe")
+                    }
+                }.orEmpty()
+
+        fun getWindowsLaunchUrls(appId: Int): List<LaunchInfo> =
+            getAppInfoOf(appId)
+                ?.let { appInfo ->
+                    appInfo.config.launch.filter { launchInfo ->
+                        isShellLaunchUrl(launchInfo.executable)
                     }
                 }.orEmpty()
 

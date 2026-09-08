@@ -2550,6 +2550,8 @@ Zainstalowana ścieżka:
     <string name="settings_frame_generation_not_owned">Generowanie klatek korzysta z shaderów Lossless Scaling. Kup je na Steam na zalogowanym koncie, aby to włączyć.</string>
     <string name="settings_frame_generation_locate">Wybierz Lossless.dll…</string>
     <string name="itch_store_title">itch.io</string>
+    <string name="ea_store_title">EA</string>
+    <string name="ea_store_link_steam">Połącz Steam</string>
     <string name="itch_store_downloads">Pobierania itch.io</string>
     <string name="itch_store_sign_in">Zaloguj się w itch.io</string>
     <string name="itch_store_sign_in_short">Zaloguj się</string>

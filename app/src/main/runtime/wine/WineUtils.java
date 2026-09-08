@@ -9,6 +9,7 @@ import com.winlator.cmod.runtime.display.environment.ImageFs;
 import com.winlator.cmod.runtime.system.GPUInformation;
 import com.winlator.cmod.shared.android.StoragePathUtils;
 import com.winlator.cmod.shared.io.FileUtils;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -760,6 +761,40 @@ public abstract class WineUtils {
         && isRegistryFileValid(userRegFile);
   }
 
+  private static final String[] EMBEDDED_BROWSER_HELPER_EXES = {
+    "upc.exe",
+    "UbisoftConnect.exe",
+    "UbisoftGameLauncher.exe",
+    "UbisoftGameLauncher64.exe",
+    "UplayWebCore.exe",
+    "UplayService.exe",
+    "SocialClubHelper.exe",
+    "EADesktop.exe",
+    "EALauncher.exe",
+    "EALaunchHelper.exe",
+    "EABackgroundService.exe",
+    "EALocalHostSvc.exe",
+    "Link2EA.exe",
+    "QtWebEngineProcess.exe"
+  };
+
+  private static final String[] EMBEDDED_BROWSER_HELPER_LIBS = {
+    "dxgi", "d3d9", "d3d10", "d3d10_1", "d3d10core", "d3d11"
+  };
+
+  private static final String[] EMBEDDED_BROWSER_HELPER_DISABLED_LIBS = {"wintab32"};
+
+  private static void applyEmbeddedBrowserHelperOverrides(WineRegistryEditor registryEditor) {
+    for (String exe : EMBEDDED_BROWSER_HELPER_EXES) {
+      String key = "Software\\Wine\\AppDefaults\\" + exe + "\\DllOverrides";
+      for (String lib : EMBEDDED_BROWSER_HELPER_LIBS)
+        registryEditor.setStringValue(key, lib, "builtin");
+      for (String lib : EMBEDDED_BROWSER_HELPER_DISABLED_LIBS)
+        registryEditor.setStringValue(key, lib, "");
+      registryEditor.removeValue("Software\\Wine\\AppDefaults\\" + exe + "\\Direct3D", "renderer");
+    }
+  }
+
   private static void setWindowMetrics(WineRegistryEditor registryEditor) {
     byte[] fontNormalData = (new MSLogFont()).toByteArray();
     byte[] fontBoldData = (new MSLogFont()).setWeight(700).toByteArray();
@@ -824,6 +859,7 @@ public abstract class WineUtils {
           && !GPUInformation.getRenderer(null, null).contains("Mali")) {
         registryEditor.setStringValue(dllOverridesKey, "opengl32", "native,builtin");
       }
+      applyEmbeddedBrowserHelperOverrides(registryEditor);
       setWindowMetrics(registryEditor);
     }
 
@@ -1407,7 +1443,7 @@ public abstract class WineUtils {
     }
   }
 
-  private static final int LAUNCH_REGISTRY_POLICY_VERSION = 2;
+  private static final int LAUNCH_REGISTRY_POLICY_VERSION = 3;
 
   private static final String LAUNCH_REGISTRY_POLICY_EXTRA = "launchRegistryPolicy";
 
@@ -1428,6 +1464,10 @@ public abstract class WineUtils {
             + "|"
             + (exclusiveXInput ? 1 : 0);
 
+    ensureEmbeddedBrowserAppDefaults(container);
+    ensureEaBackgroundService(container);
+    ensureEaProtocolHandlers(container);
+
     if (!force && stamp.equals(container.getExtra(LAUNCH_REGISTRY_POLICY_EXTRA))) {
       Log.d("ContainerLaunch", "applyLaunchRegistryPolicy: unchanged (" + stamp + "), skipping");
       return false;
@@ -1435,10 +1475,241 @@ public abstract class WineUtils {
 
     setJoystickRegistryKeys(container, dinputEnabled, exclusiveXInput);
     ensureWinebusConfig(container);
+    ensureNetworkDriverServices(container);
     changeServicesStatus(container, startupSelection);
+    ensureTaskSchedulerService(container);
     container.putExtra(LAUNCH_REGISTRY_POLICY_EXTRA, stamp);
     Log.d("ContainerLaunch", "applyLaunchRegistryPolicy: applied (" + stamp + " force=" + force + ")");
     return true;
+  }
+
+  private static final String[][] NETWORK_DRIVER_SERVICES = {
+    {"nsiproxy", "NSI Proxy", "nsiproxy.sys"},
+    {"Ndis", "NDIS", "ndis.sys"}
+  };
+
+  public static void ensureNetworkDriverServices(Container container) {
+    File systemRegFile = new File(container.getRootDir(), ".wine/system.reg");
+    if (!systemRegFile.isFile()) return;
+    try (WineRegistryEditor registryEditor = new WineRegistryEditor(systemRegFile)) {
+      for (String[] driver : NETWORK_DRIVER_SERVICES) {
+        for (String controlSet : new String[] {"ControlSet001", "CurrentControlSet"}) {
+          String key = "System\\" + controlSet + "\\Services\\" + driver[0];
+          if (registryEditor.getStringValue(key, "ImagePath", null) != null) continue;
+          registryEditor.setStringValue(
+              key, "ImagePath", "C:\\windows\\system32\\drivers\\" + driver[2]);
+          registryEditor.setStringValue(key, "DisplayName", driver[1]);
+          registryEditor.setStringValue(key, "Group", "System Bus Extender");
+          registryEditor.setDwordValue(key, "Type", 1);
+          registryEditor.setDwordValue(key, "Start", 2);
+          registryEditor.setDwordValue(key, "ErrorControl", 1);
+          registryEditor.setDwordValue(key, "Tag", 1);
+        }
+      }
+    } catch (Exception e) {
+      Log.w("WineUtils", "ensureNetworkDriverServices failed", e);
+    }
+  }
+
+  public static void ensureEmbeddedBrowserAppDefaults(Container container) {
+    File userRegFile = new File(container.getRootDir(), ".wine/user.reg");
+    if (!userRegFile.isFile()) return;
+    try (WineRegistryEditor registryEditor = new WineRegistryEditor(userRegFile)) {
+      applyEmbeddedBrowserHelperOverrides(registryEditor);
+    } catch (Exception e) {
+      Log.w("WineUtils", "ensureEmbeddedBrowserAppDefaults failed", e);
+    }
+  }
+
+  private static final String EA_BACKGROUND_SERVICE = "EABackgroundService";
+  private static final String EA_DESKTOP_RELATIVE_ROOT =
+      ".wine/drive_c/Program Files/Electronic Arts/EA Desktop";
+
+  public static void ensureEaBackgroundService(Container container) {
+    File eaRoot = new File(container.getRootDir(), EA_DESKTOP_RELATIVE_ROOT);
+    if (!eaRoot.isDirectory()) return;
+    File systemRegFile = new File(container.getRootDir(), ".wine/system.reg");
+    if (!systemRegFile.isFile()) return;
+    File serviceExe = resolveEaServiceExe(eaRoot, readEaInstalledVersion(systemRegFile));
+    if (serviceExe == null) return;
+    String relative;
+    try {
+      relative = eaRoot.toPath().relativize(serviceExe.toPath()).toString().replace('/', '\\');
+    } catch (Exception e) {
+      Log.w("WineUtils", "ensureEaBackgroundService: cannot relativize service path", e);
+      return;
+    }
+    String imagePath = "C:\\Program Files\\Electronic Arts\\EA Desktop\\" + relative;
+    try (WineRegistryEditor registryEditor = new WineRegistryEditor(systemRegFile)) {
+      for (String controlSet : new String[] {"ControlSet001", "CurrentControlSet"}) {
+        String key = "System\\" + controlSet + "\\Services\\" + EA_BACKGROUND_SERVICE;
+        registryEditor.setStringValue(key, "ImagePath", imagePath);
+        registryEditor.setStringValue(key, "DisplayName", "EA Background Service");
+        registryEditor.setStringValue(key, "ObjectName", "LocalSystem");
+        registryEditor.setDwordValue(key, "Type", 16);
+        registryEditor.setDwordValue(key, "Start", 2);
+        registryEditor.setDwordValue(key, "ErrorControl", 1);
+      }
+    } catch (Exception e) {
+      Log.w("WineUtils", "ensureEaBackgroundService failed", e);
+    }
+  }
+
+  private static final String[] EA_URL_SCHEMES = {"origin", "origin2", "eadesktop", "link2ea"};
+
+  private static final int EA_SERVICE_SETTLE_SECONDS = 20;
+
+  private static String eaServiceSettleCommand(String link2eaExe) {
+    return "\"C:\\windows\\system32\\cmd.exe\" /d /s /c "
+        + "\"\"C:\\windows\\system32\\sc.exe\" start EABackgroundService >nul 2>&1 & "
+        + "\"C:\\windows\\system32\\timeout.exe\" /t " + EA_SERVICE_SETTLE_SECONDS
+        + " /nobreak >nul 2>&1 & "
+        + "\"" + link2eaExe + "\" \"%1\"\"";
+  }
+
+  public static void ensureEaProtocolHandlers(Container container) {
+    File eaRoot = new File(container.getRootDir(), EA_DESKTOP_RELATIVE_ROOT);
+    if (!eaRoot.isDirectory()) return;
+    File systemRegFile = new File(container.getRootDir(), ".wine/system.reg");
+    if (!systemRegFile.isFile()) return;
+    File installed = resolveEaInstallDir(eaRoot, readEaInstalledVersion(systemRegFile));
+    String eaBase = "C:\\Program Files\\Electronic Arts\\EA Desktop\\";
+    String stableDir = eaBase + "EA Desktop\\";
+    String appDir =
+        new File(eaRoot, "EA Desktop/EALauncher.exe").isFile()
+            ? stableDir
+            : (installed != null ? eaBase + installed.getName() + "\\EA Desktop\\" : null);
+    if (appDir == null) return;
+    String launcher = appDir + "EALauncher.exe";
+    String desktop = appDir + "EADesktop.exe";
+    String errorReporter = appDir + "ErrorReporter.exe";
+    try (WineRegistryEditor registryEditor = new WineRegistryEditor(systemRegFile)) {
+      for (String node : new String[] {"Software", "Software\\Wow6432Node"}) {
+        String key = node + "\\Electronic Arts\\EA Desktop";
+        if (registryEditor.getStringValue(key, "ClientPath", null) == null) continue;
+        if (isBlankRegistryPath(registryEditor.getStringValue(key, "LauncherAppPath", null))) {
+          registryEditor.setStringValue(key, "LauncherAppPath", launcher);
+        }
+        if (isBlankRegistryPath(registryEditor.getStringValue(key, "DesktopAppPath", null))) {
+          registryEditor.setStringValue(key, "DesktopAppPath", desktop);
+        }
+        if (isBlankRegistryPath(registryEditor.getStringValue(key, "ErrorReporterPath", null))) {
+          registryEditor.setStringValue(key, "ErrorReporterPath", errorReporter);
+        }
+      }
+      for (String scheme : EA_URL_SCHEMES) {
+        String schemeKey = "Software\\Classes\\" + scheme;
+        String commandKey = schemeKey + "\\shell\\open\\command";
+        String existing = registryEditor.getStringValue(commandKey, null, null);
+        if ("link2ea".equals(scheme)) {
+          String link2ea = appDir + "Link2EA.exe";
+          if (existing == null && !new File(eaRoot, "EA Desktop/Link2EA.exe").isFile()) continue;
+          registryEditor.setStringValue(schemeKey, null, "URL:EA Link Protocol");
+          registryEditor.setStringValue(schemeKey, "URL Protocol", "");
+          registryEditor.setStringValue(commandKey, null, eaServiceSettleCommand(link2ea));
+          continue;
+        }
+        if (existing != null && !hasEmptyProgramPart(existing)) continue;
+        if (existing == null && !"origin".equals(scheme) && !"origin2".equals(scheme)) continue;
+        registryEditor.setStringValue(schemeKey, null, "URL:ORIGIN Protocol");
+        registryEditor.setStringValue(schemeKey, "URL Protocol", "");
+        registryEditor.setStringValue(commandKey, null, launcher + " \"%1\"");
+      }
+    } catch (Exception e) {
+      Log.w("WineUtils", "ensureEaProtocolHandlers failed", e);
+    }
+  }
+
+  private static boolean isBlankRegistryPath(String value) {
+    return value == null || value.trim().isEmpty();
+  }
+
+  private static boolean hasEmptyProgramPart(String command) {
+    String trimmed = command == null ? "" : command.trim();
+    if (trimmed.isEmpty()) return true;
+    if (trimmed.startsWith("\"%1\"") || trimmed.startsWith("%1")) return true;
+    return false;
+  }
+
+  private static final String EA_SERVICE_RELATIVE_EXE = "EA Desktop/EABackgroundService.exe";
+
+  private static File resolveEaServiceExe(File eaRoot, String registryVersion) {
+    File flat = new File(eaRoot, EA_SERVICE_RELATIVE_EXE);
+    if (flat.isFile()) return flat;
+    if (registryVersion != null && !registryVersion.equals("EA Desktop")) {
+      File candidate = new File(new File(eaRoot, registryVersion), EA_SERVICE_RELATIVE_EXE);
+      if (candidate.isFile()) return candidate;
+    }
+    File[] versionDirs = eaRoot.listFiles();
+    if (versionDirs == null) return null;
+    File newestDir = null;
+    File newestExe = null;
+    for (File versionDir : versionDirs) {
+      if (!versionDir.isDirectory()) continue;
+      File candidate = new File(versionDir, EA_SERVICE_RELATIVE_EXE);
+      if (!candidate.isFile()) continue;
+      if (newestDir == null || versionDir.lastModified() > newestDir.lastModified()) {
+        newestDir = versionDir;
+        newestExe = candidate;
+      }
+    }
+    return newestExe;
+  }
+
+  private static File resolveEaInstallDir(File eaRoot, String registryVersion) {
+    if (registryVersion != null) {
+      File candidate = new File(eaRoot, registryVersion);
+      if (new File(candidate, "EA Desktop/EABackgroundService.exe").isFile()) return candidate;
+    }
+    File[] versionDirs = eaRoot.listFiles();
+    if (versionDirs == null) return null;
+    File newest = null;
+    for (File versionDir : versionDirs) {
+      if (!versionDir.isDirectory()) continue;
+      if (!new File(versionDir, "EA Desktop/EABackgroundService.exe").isFile()) continue;
+      if (newest == null || versionDir.lastModified() > newest.lastModified()) newest = versionDir;
+    }
+    return newest;
+  }
+
+  private static String readEaInstalledVersion(File systemRegFile) {
+    final String marker = "Electronic Arts\\\\EA Desktop\\\\";
+    try (BufferedReader reader =
+        Files.newBufferedReader(systemRegFile.toPath(), StandardCharsets.ISO_8859_1)) {
+      String line;
+      while ((line = reader.readLine()) != null) {
+        if (!line.contains("Link2EA.exe")) continue;
+        int start = line.indexOf(marker);
+        if (start < 0) continue;
+        start += marker.length();
+        int end = line.indexOf("\\\\", start);
+        if (end <= start) continue;
+        return line.substring(start, end);
+      }
+    } catch (Exception e) {
+      Log.w("WineUtils", "readEaInstalledVersion failed", e);
+    }
+    return null;
+  }
+
+  private static final String TASK_SCHEDULER_SERVICE = "Schedule";
+  private static final String UBISOFT_LAUNCHER_RELATIVE_ROOT =
+      ".wine/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher";
+
+  public static void ensureTaskSchedulerService(Container container) {
+    if (!new File(container.getRootDir(), UBISOFT_LAUNCHER_RELATIVE_ROOT).isDirectory()
+        && !new File(container.getRootDir(), EA_DESKTOP_RELATIVE_ROOT).isDirectory()) return;
+    File systemRegFile = new File(container.getRootDir(), ".wine/system.reg");
+    if (!systemRegFile.isFile()) return;
+    try (WineRegistryEditor registryEditor = new WineRegistryEditor(systemRegFile)) {
+      for (String controlSet : new String[] {"ControlSet001", "CurrentControlSet"}) {
+        String key = "System\\" + controlSet + "\\Services\\" + TASK_SCHEDULER_SERVICE;
+        if (registryEditor.getStringValue(key, "ImagePath", null) == null) continue;
+        registryEditor.setDwordValue(key, "Start", 2);
+      }
+    } catch (Exception e) {
+      Log.w("WineUtils", "ensureTaskSchedulerService failed", e);
+    }
   }
 
   public static void changeServicesStatus(Container container, String startupSelection) {

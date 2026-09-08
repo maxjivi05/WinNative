@@ -40,6 +40,7 @@ import timber.log.Timber
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AuthWebViewDialog(
+    acceptThirdPartyCookies: Boolean = false,
     isVisible: Boolean,
     url: String,
     onDismissRequest: () -> Unit,
@@ -117,6 +118,11 @@ fun AuthWebViewDialog(
                                     allowFileAccess = false
                                     allowContentAccess = false
                                     mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                }
+
+                                if (acceptThirdPartyCookies) {
+                                    android.webkit.CookieManager.getInstance()
+                                        .setAcceptThirdPartyCookies(this, true)
                                 }
 
                                 webViewClient = customWebViewClient ?: object : WebViewClient() {

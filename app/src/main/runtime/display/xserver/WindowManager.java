@@ -417,8 +417,14 @@ public class WindowManager extends XResourceManager {
   }
 
   public void reparentWindow(Window window, Window newParent) {
+    reparentWindow(window, newParent, window.getX(), window.getY());
+  }
+
+  public void reparentWindow(Window window, Window newParent, short x, short y) {
     Window oldParent = window.getParent();
     if (oldParent != null) oldParent.removeChild(window);
+    window.setX(x);
+    window.setY(y);
     newParent.addChild(window);
   }
 
