@@ -307,9 +307,24 @@ be delivered to it, whichever way we start it. It may still work for `Link2EA.ex
 our arguments arriving intact, but Link2EA only matters on the Steam path — which the H4 account link
 is designed to make silent anyway.
 
-Also checked and NOT true: Wine has no per-exe Chromium-switch injection table. The only exe-name-keyed
-hook in the tree is `thickframe_managed()` in `dlls/winex11.drv/window.c:437`, a window-management hack
-for `SocialClubHelper.exe`, which injects nothing.
+**CORRECTION (2026-09-08, found while preparing the commits): a per-exe Chromium-switch table DOES
+exist.** `hack_append_command_line()` in `dlls/kernelbase/process.c:610-629` appends switches by
+executable name at `CreateProcess` time, and this tree already carries a WinNative entry in it:
+
+    {L"UplayWebCore.exe", L" --use-angle=swiftshader"},
+
+alongside upstream entries for `UnrealCEFSubProcess.exe`, EverQuest and others (some gated on a
+SteamGameId).
+
+This matters: because the table matches on the executable being started, a switch added for
+`EACefSubProcess.exe` or `EADesktop.exe` **would survive EA Desktop's self re-exec**, which is the very
+thing H8 concluded made switches unreachable. H8's measurement stands — a switch appended to the
+*launch command* is discarded — but its conclusion that no switch can reach EA was wrong, and the
+`--disable-gpu` / `--in-process-gpu` levers listed in H6/H7 are back on the table via this route.
+
+Not attempted yet. Note H16 measured that CEF is healthiest when left entirely alone on this stack, so
+any entry here needs the same before/after counts (`Exiting GPU process`, `eglInitialize`,
+`SPA load success`) rather than being assumed to help.
 
 ### H16. SOLVED: the CEF instability was MY overrides. H2 is retracted and reverted.
 
