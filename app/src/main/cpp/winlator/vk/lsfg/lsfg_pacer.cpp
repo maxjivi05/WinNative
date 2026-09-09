@@ -116,7 +116,7 @@ void LsfgPacer::TrackLoopRate(float interval_seconds) {
 }
 
 void LsfgPacer::TrackUnloadedRate(float interval) {
-    if (interval <= 0.0f || previous_generations != 0) return;
+    if (interval <= 0.0f || previous_generations != 0 || limit != 0) return;
     const float measured = 1.0f / interval;
     unloaded_base_rate =
         unloaded_base_rate > 0.0f
@@ -126,11 +126,6 @@ void LsfgPacer::TrackUnloadedRate(float interval) {
 
 bool LsfgPacer::RatesSettled() const {
     return source_samples >= MIN_RATE_SAMPLES && loop_samples >= MIN_RATE_SAMPLES;
-}
-
-float LsfgPacer::SourceInterval() const {
-    if (source_samples >= MIN_RATE_SAMPLES && source_interval > 0.0f) return source_interval;
-    return config.source_rate > 0.0f ? 1.0f / config.source_rate : 0.0f;
 }
 
 size_t LsfgPacer::SlotLimit() const {
@@ -154,6 +149,16 @@ void LsfgPacer::Stabilize(Clock::time_point now) {
 void LsfgPacer::UpdateLimit(Clock::time_point now, float base_rate, float target_rate,
                             size_t ceiling) {
     limit = std::min(limit, ceiling);
+
+    if (limit > 0 && !probe_until && unloaded_base_rate > 0.0f &&
+        base_rate < unloaded_base_rate * UNLOADED_BASE_RETENTION) {
+        --limit;
+        probe_failures = std::min(probe_failures + 1, MAX_PROBE_FAILURES);
+        next_probe = now + ProbeBackoff(probe_failures);
+        deficit_since.reset();
+        output_credit = 0.0f;
+        return;
+    }
 
     if (probe_until) {
         if (now < *probe_until) return;
@@ -230,9 +235,7 @@ LsfgPlan LsfgPacer::Plan(size_t capacity, uint64_t source_frames) {
     }
 
     TrackLoopRate(interval_seconds);
-
-    const float interval = SourceInterval();
-    TrackUnloadedRate(interval);
+    TrackUnloadedRate(loop_interval);
 
     if (stable_until) {
         if (now < *stable_until) return {};
@@ -251,15 +254,15 @@ LsfgPlan LsfgPacer::Plan(size_t capacity, uint64_t source_frames) {
         return LsfgPlan{limit, limit > 0};
     }
 
-    if (interval <= 0.0f) {
+    if (loop_interval <= 0.0f) {
         output_credit = 0.0f;
         return {};
     }
 
-    UpdateLimit(now, 1.0f / interval, target_rate, ceiling);
+    UpdateLimit(now, 1.0f / loop_interval, target_rate, ceiling);
 
     const size_t allowed = std::min(limit, ceiling);
-    const float desired_outputs = interval * target_rate;
+    const float desired_outputs = loop_interval * target_rate;
     if (allowed == 0 || desired_outputs <= 1.0f) {
         output_credit = 0.0f;
         return {};

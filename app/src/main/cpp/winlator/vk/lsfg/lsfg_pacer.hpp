@@ -63,7 +63,6 @@ private:
     void TrackLoopRate(float interval_seconds);
     void TrackUnloadedRate(float interval);
     [[nodiscard]] bool RatesSettled() const;
-    [[nodiscard]] float SourceInterval() const;
     [[nodiscard]] size_t SlotLimit() const;
     void Stabilize(Clock::time_point now);
     void UpdateLimit(Clock::time_point now, float base_rate, float target_rate, size_t ceiling);
