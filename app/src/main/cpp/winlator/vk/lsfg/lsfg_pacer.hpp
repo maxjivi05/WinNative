@@ -42,6 +42,11 @@ class LsfgPacer {
 public:
     void SetConfig(const LsfgPacerConfig& config_) {
         config = config_;
+        probe_until.reset();
+        next_probe.reset();
+        deficit_since.reset();
+        retention_since.reset();
+        probe_failures = 0;
     }
 
     [[nodiscard]] const LsfgPacerConfig& Config() const {
@@ -75,6 +80,7 @@ private:
     std::optional<Clock::time_point> probe_until;
     std::optional<Clock::time_point> next_probe;
     std::optional<Clock::time_point> deficit_since;
+    std::optional<Clock::time_point> retention_since;
     uint64_t last_source_frames{};
     float source_interval{};
     float source_frame_accum{};

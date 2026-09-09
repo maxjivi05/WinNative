@@ -31,11 +31,14 @@ constexpr float PROBE_MARGINAL_GAIN = 1.15f;
 constexpr float TARGET_SATISFIED_RATIO = 0.95f;
 constexpr float UNLOADED_BASE_RETENTION = 0.75f;
 constexpr uint32_t MAX_PROBE_FAILURES = 4;
+constexpr float INTERVAL_SPIKE_CLAMP = 2.0f;
+constexpr float MEASURED_SLOT_TOLERANCE = 0.9f;
 
 constexpr auto STABILIZATION_DURATION = std::chrono::seconds(1);
 constexpr auto PROBE_DURATION = std::chrono::seconds(1);
 constexpr auto DEFICIT_DURATION = std::chrono::seconds(1);
 constexpr auto PROBE_STEP_DELAY = std::chrono::milliseconds(250);
+constexpr auto RETENTION_DURATION = std::chrono::milliseconds(500);
 
 [[nodiscard]] Clock::duration ProbeBackoff(uint32_t failures) {
     switch (failures) {
@@ -46,7 +49,7 @@ constexpr auto PROBE_STEP_DELAY = std::chrono::milliseconds(250);
     case 3:
         return std::chrono::seconds(30);
     default:
-        return std::chrono::seconds(60);
+        return std::chrono::seconds(10);
     }
 }
 
@@ -109,6 +112,9 @@ void LsfgPacer::TrackSourceRate(Clock::time_point now, uint64_t source_frames) {
 }
 
 void LsfgPacer::TrackLoopRate(float interval_seconds) {
+    if (loop_interval > 0.0f && interval_seconds > loop_interval * INTERVAL_SPIKE_CLAMP) {
+        interval_seconds = loop_interval * INTERVAL_SPIKE_CLAMP;
+    }
     loop_interval = loop_interval > 0.0f
                         ? loop_interval + (interval_seconds - loop_interval) * INTERVAL_SMOOTHING
                         : interval_seconds;
@@ -141,6 +147,7 @@ void LsfgPacer::Stabilize(Clock::time_point now) {
     stable_until = now + STABILIZATION_DURATION;
     probe_until.reset();
     deficit_since.reset();
+    retention_since.reset();
     loop_interval = 0.0f;
     loop_samples = 0;
     output_credit = 0.0f;
@@ -150,8 +157,20 @@ void LsfgPacer::UpdateLimit(Clock::time_point now, float base_rate, float target
                             size_t ceiling) {
     limit = std::min(limit, ceiling);
 
-    if (limit > 0 && !probe_until && unloaded_base_rate > 0.0f &&
-        base_rate < unloaded_base_rate * UNLOADED_BASE_RETENTION) {
+    if (unloaded_base_rate > 0.0f && base_rate > unloaded_base_rate) {
+        unloaded_base_rate += (base_rate - unloaded_base_rate) * SOURCE_SMOOTHING;
+    }
+
+    const bool below_retention = limit > 0 && !probe_until && unloaded_base_rate > 0.0f &&
+                                 base_rate < unloaded_base_rate * UNLOADED_BASE_RETENTION;
+    if (!below_retention) {
+        retention_since.reset();
+    } else if (!retention_since) {
+        retention_since = now;
+    }
+
+    if (below_retention && now - *retention_since >= RETENTION_DURATION) {
+        retention_since.reset();
         --limit;
         probe_failures = std::min(probe_failures + 1, MAX_PROBE_FAILURES);
         next_probe = now + ProbeBackoff(probe_failures);
@@ -259,9 +278,17 @@ LsfgPlan LsfgPacer::Plan(size_t capacity, uint64_t source_frames) {
         return {};
     }
 
-    UpdateLimit(now, 1.0f / loop_interval, target_rate, ceiling);
+    size_t measured_ceiling = ceiling;
+    if (config.source_rate <= 0.0f && config.refresh_rate > 0.0f && unloaded_base_rate > 0.0f) {
+        const float slots =
+            std::floor(config.refresh_rate / (unloaded_base_rate * MEASURED_SLOT_TOLERANCE));
+        measured_ceiling =
+            std::min(measured_ceiling, slots < 2.0f ? size_t{0} : static_cast<size_t>(slots) - 1);
+    }
 
-    const size_t allowed = std::min(limit, ceiling);
+    UpdateLimit(now, 1.0f / loop_interval, target_rate, measured_ceiling);
+
+    const size_t allowed = std::min(limit, measured_ceiling);
     const float desired_outputs = loop_interval * target_rate;
     if (allowed == 0 || desired_outputs <= 1.0f) {
         output_credit = 0.0f;
@@ -307,6 +334,7 @@ void LsfgPacer::Reset() {
     probe_until.reset();
     next_probe.reset();
     deficit_since.reset();
+    retention_since.reset();
     last_source_frames = 0;
     source_interval = 0.0f;
     source_frame_accum = 0.0f;
