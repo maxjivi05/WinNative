@@ -426,6 +426,61 @@ same way I over-read `renderer=no3d`'s effect earlier.
 they OR in `NLM_CONNECTIVITY_IPV4_LOCALNETWORK` alongside wlan0's INTERNET bit. Real Windows would not
 set both; whether EA minds is untested.)
 
+### H26. Self-sufficiency achieved, verified on a clean device (2026-09-08)
+
+Tested on a second device (OnePlus CPH2749, Android 16, `com.winnative.cmod`) that had only the APK and
+the `versionCode 3` Proton layers installed — no hand-built EA client, nothing carried over from the
+tablet.
+
+| step | result |
+|------|--------|
+| EA client present beforehand | no |
+| `EaClientInstaller` staged the MSI from the game's own `__Installer` | yes |
+| EA client installed into the prefix | yes — `Program Files\Electronic Arts\EA Desktop\EA Desktop\EADesktop.exe` |
+| Steam -> EA authentication | `{"flow":"ExternalAuthCode","status":"success","user_input":"none"}` |
+| EA background service | `online=1`, `entfail=0`, `AuthToken set to [value]` x4 |
+| `EALaunchHelper` | no crash, clean `goodbye` |
+| The Sims 4 | starts (`game process started pid=1032`) |
+
+So **app + Proton layers + press Play** is now enough on a fresh device: the EA client installs itself
+from the shared depot Steam already delivered, and the Steam->EA hand-off authenticates silently with
+no sign-in and no UI. Nothing is downloaded from us and nothing of EA's is redistributed.
+
+Two fixes were needed to get there, both found on this device:
+
+**H26a. The installscript root was wrong.** `resolve_game_root_dir` derived the root from the launch
+target, which in the Steam+EA path is `start.exe`, so the agent scanned `C:\windows\system32` and
+logged `installscript: none found`. It now derives the root from the post-dispatch executable when one
+is set, so the game's own install scripts and redistributables are actually seen.
+
+**H26b. That fix then exposed the EA bootstrapper deadlock.** With the correct root, the redist scan
+found `__Installer/Origin/redist/internal/EAappInstaller.exe` and ran it — and it hangs exactly as
+recorded months ago, sitting in its WiX Burn clean-room copy under `C:\windows\Temp\{GUID}\.cr\`
+for minutes while the launch splash reads "Installing EAappInstaller". `scan_and_install_redists` now
+skips that one executable by name, because the EA client is installed from the extracted MSI instead.
+
+### H27. The one remaining defect: `EALaunchHelper` never sees the session
+
+Same on both devices and both containers, and now measurable with everything else healthy:
+
+    EABackgroundService.log:  "AuthToken set to [value]"  x4     "authenticated":true
+    EALaunchHelper.log:       "authenticated":false       x14    (never true)
+
+The game starts, performs its DRM callback correctly — `origin2://game/launch/?offerIds=1011164,...`
+reaches `EALaunchHelper`, which logs `game.launch.strt` — and then the helper exits and the game exits
+with it, ~12s after starting. On the phone the helper exits cleanly (`goodbye`, no crash report); on
+the tablet it null-dereferenced, which H25 fixed.
+
+Crucially the game does **not** crash: a `-all,err+seh` capture of the whole launch contains zero
+unhandled exceptions, zero missing-module errors. TS4 decides to quit.
+
+So the background service holds an authenticated session and the launch helper, which connects to it
+over IPC, does not inherit one. That is the single thing left between here and the game running.
+
+Measurement note: do not enable the `module` debug channel on a real launch — one run produced a
+**5.5 GB** `wine_tail` log, which is both useless and slow enough to distort the run. `err` on `seh`
+alone gives a 54 KB capture with the same diagnostic value.
+
 ### H25. SOLVED: `netprofm` caches a failed adapter enumeration forever
 
 Bisected it properly instead of guessing. Added a temporary `ERR` to

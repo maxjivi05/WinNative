@@ -9775,6 +9775,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                             + relativeExe + "' -> " + wnSteamLaunchOption);
 
                     if (steamLaunchUrl != null && launchBionicSteam) {
+                        if (gameInstPath != null && !gameInstPath.isEmpty()) {
+                            com.winlator.cmod.runtime.wine.EaClientInstaller.stage(
+                                    this, container, new File(gameInstPath));
+                        }
                         String shellExe = "C:\\windows\\system32\\start.exe";
                         boolean planWUrl = com.winlator.cmod.feature.stores.steam.utils
                                 .PrefManager.INSTANCE.getWnPlanW();

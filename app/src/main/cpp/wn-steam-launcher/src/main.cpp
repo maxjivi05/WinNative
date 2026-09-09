@@ -2228,6 +2228,39 @@ static int claim_entry_dirs(const VdfNode& entry, const std::string& scriptInsta
     return claimed;
 }
 
+static void install_ea_client_if_staged(void) {
+    const char* script = "C:\\wn-ea-install.cmd";
+    if (GetFileAttributesA(script) == INVALID_FILE_ATTRIBUTES) return;
+    if (GetFileAttributesA("C:\\Program Files\\Electronic Arts\\EA Desktop\\EA Desktop\\EADesktop.exe")
+        != INVALID_FILE_ATTRIBUTES) return;
+
+    char cmd[MAX_PATH * 2];
+    snprintf(cmd, sizeof(cmd), "\"C:\\windows\\system32\\cmd.exe\" /d /s /c \"%s\"", script);
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+    log_line("[wn-launcher] EA client not present — running the staged installer; "
+             "this takes several minutes on a cold prefix");
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        log_line("[wn-launcher] EA client install: CreateProcess failed GLE=%lu", GetLastError());
+        return;
+    }
+    const int waitMs = env_int("WN_STEAM_EA_INSTALL_WAIT_MS", 900000);
+    DWORD rc = WaitForSingleObject(pi.hProcess, (DWORD) waitMs);
+    DWORD exitCode = (DWORD) -1;
+    if (rc == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &exitCode);
+    else TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    bool present = GetFileAttributesA(
+        "C:\\Program Files\\Electronic Arts\\EA Desktop\\EA Desktop\\EADesktop.exe")
+        != INVALID_FILE_ATTRIBUTES;
+    log_line("[wn-launcher] EA client install finished rc=%lu exit=%lu present=%d",
+             rc, exitCode, present ? 1 : 0);
+}
+
 static void run_install_scripts(const char* gameRootDir, std::vector<std::string>& handledDirs) {
     if (!gameRootDir || !*gameRootDir) return;
     std::filesystem::path installDir(gameRootDir);
@@ -2374,6 +2407,14 @@ static void scan_and_install_redists(const char* gameRootDir,
     for (const auto& installer : installers) {
         std::string abs = installer.string();
         if (marker_contains(marker, abs)) {
+            skipped++;
+            continue;
+        }
+        std::string leaf = installer.filename().string();
+        if (_stricmp(leaf.c_str(), "EAappInstaller.exe") == 0) {
+            log_line("[wn-launcher] redist scan: skipping \"%s\" — its Burn bootstrapper "
+                     "deadlocks under Wine; the EA client is installed from the extracted MSI instead",
+                     leaf.c_str());
             skipped++;
             continue;
         }
@@ -2528,7 +2569,8 @@ int main(int argc, char** argv) {
     exeName = exeName ? exeName + 1 : gameExe;
 
     static char gameRootDir[MAX_PATH];
-    resolve_game_root_dir(gameExe, gameRootDir, sizeof(gameRootDir));
+    resolve_game_root_dir(g_postDispatchExe[0] ? g_postDispatchExe : gameExe,
+                          gameRootDir, sizeof(gameRootDir));
     wn_launcher_set_game_exe(exeName);
     wn_launcher_set_game_dir(gameRootDir);
     {
@@ -2956,6 +2998,8 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    install_ea_client_if_staged();
 
     std::vector<std::string> installScriptDirs;
     run_install_scripts(gameRootDir, installScriptDirs);
