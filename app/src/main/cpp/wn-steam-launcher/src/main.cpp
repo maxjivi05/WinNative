@@ -3386,7 +3386,7 @@ int main(int argc, char** argv) {
         launchedViaFallback = create_process_game(gameExe, exeName);
     }
 
-    if (launchedViaFallback && g_postDispatchExe[0] && env_int("WN_STEAM_POST_DISPATCH", 1) != 0) {
+    if (launchedViaFallback && g_postDispatchExe[0] && env_int_signed("WN_STEAM_POST_DISPATCH", 1) != 0) {
         const char* postName = strrchr(g_postDispatchExe, '\\');
         postName = postName ? postName + 1 : g_postDispatchExe;
         const int kEaWaitMs = env_int("WN_STEAM_EA_WAIT_MS", 120000);
@@ -3406,6 +3406,23 @@ int main(int argc, char** argv) {
             log_line("[wn-launcher] post-dispatch: EADesktop.exe never appeared in %dms; "
                      "starting \"%s\" anyway", waited, postName);
         }
+        const int kGameWaitMs = env_int_signed("WN_STEAM_EA_GAME_WAIT_MS", 0);
+        int gameWaited = 0;
+        bool eaStartedIt = false;
+        while (gameWaited < kGameWaitMs) {
+            if (process_named_running(postName)) { eaStartedIt = true; break; }
+            Sleep(1000);
+            gameWaited += 1000;
+        }
+        if (eaStartedIt) {
+            log_line("[wn-launcher] post-dispatch: EA started \"%s\" itself after %dms; "
+                     "watching it instead of starting a second copy", postName, gameWaited);
+            wn_launcher_set_game_exe(postName);
+            gameExe = g_postDispatchExe;
+            exeName = postName;
+            launchedViaFallback = true;
+        } else {
+
         g_gameArgsBuf[0] = 0;
         char postDir[MAX_PATH];
         snprintf(postDir, sizeof(postDir), "%s", g_postDispatchExe);
@@ -3423,6 +3440,7 @@ int main(int argc, char** argv) {
                      "URI dispatcher", postName);
         } else {
             log_line("[wn-launcher] post-dispatch: failed to start \"%s\"", postName);
+        }
         }
     }
 

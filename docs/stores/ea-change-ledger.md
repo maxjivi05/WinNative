@@ -502,6 +502,26 @@ launches The Sims 4 itself once it is authorised and its entitlements load. **Th
 set on the phone** — with it at 0 nothing starts the game, so it must be removed or set to 1 before
 normal use.
 
+### H30. Measured: EA never launches the title itself, so our post-dispatch launch is required
+
+Tested directly. Two traps had to be cleared first:
+
+**`env_int` cannot express zero.** `env_int()` ends with `return (n > 0) ? (int) n : fallback;`, so any
+flag set to `0` silently reverts to its default — the first run of this experiment "disabled" the
+post-dispatch launch and it ran anyway. `env_int_signed()` is the one to use for on/off flags. Every
+existing `env_int` toggle in the agent has this trap.
+
+**Disabling the post-dispatch launch outright also kills the session.** With it off, the agent watches
+`start.exe`, which exits the moment it has ShellExecuted the URI, so the agent tears down and takes the
+Steam client with it at ~5s — long before EA is ready. Nothing launched, nothing could have.
+
+So the agent now waits for the game to appear before starting it itself
+(`WN_STEAM_EA_GAME_WAIT_MS`), which keeps the session alive while giving EA first refusal. Result: the
+full 60s elapsed, EA started nothing, and the fallback launched the game as before. **EA does not
+launch the title in this flow**, even with entitlements loaded and authentication succeeding. The
+ordering theory in H29 is therefore not the fix, and the wait now defaults to **0** so it costs no
+time; the capability stays for future testing.
+
 ### H27. The one remaining defect: `EALaunchHelper` never sees the session
 
 Same on both devices and both containers, and now measurable with everything else healthy:
