@@ -46,6 +46,8 @@ public:
         next_probe.reset();
         deficit_since.reset();
         retention_since.reset();
+        rejected_limit = 0;
+        rejected_base_rate = 0.0f;
         probe_failures = 0;
     }
 
@@ -97,6 +99,10 @@ private:
     size_t issued_generations{};
     size_t previous_generations{};
     size_t probe_previous_limit{};
+    size_t rejected_limit{};
+    float rejected_base_rate{};
+    bool probe_spiked{};
+    bool probe_extended{};
     size_t limit{};
     uint32_t probe_failures{};
 };

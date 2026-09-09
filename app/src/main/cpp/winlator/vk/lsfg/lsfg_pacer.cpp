@@ -29,7 +29,9 @@ constexpr float PROBE_THROUGHPUT_TOLERANCE = 0.95f;
 constexpr float PROBE_BASE_COLLAPSE_RATIO = 0.70f;
 constexpr float PROBE_MARGINAL_GAIN = 1.15f;
 constexpr float TARGET_SATISFIED_RATIO = 0.95f;
-constexpr float UNLOADED_BASE_RETENTION = 0.75f;
+constexpr float UNLOADED_BASE_RETENTION = 0.9f;
+constexpr float PROBE_BASE_RETENTION = 0.9f;
+constexpr float REJECTED_STEP_BAND = 0.05f;
 constexpr uint32_t MAX_PROBE_FAILURES = 4;
 constexpr float INTERVAL_SPIKE_CLAMP = 2.0f;
 constexpr float MEASURED_SLOT_TOLERANCE = 0.9f;
@@ -39,6 +41,7 @@ constexpr auto PROBE_DURATION = std::chrono::seconds(1);
 constexpr auto DEFICIT_DURATION = std::chrono::seconds(1);
 constexpr auto PROBE_STEP_DELAY = std::chrono::milliseconds(250);
 constexpr auto RETENTION_DURATION = std::chrono::milliseconds(500);
+constexpr auto RETENTION_BACKOFF = std::chrono::seconds(5);
 
 [[nodiscard]] Clock::duration ProbeBackoff(uint32_t failures) {
     switch (failures) {
@@ -49,7 +52,7 @@ constexpr auto RETENTION_DURATION = std::chrono::milliseconds(500);
     case 3:
         return std::chrono::seconds(30);
     default:
-        return std::chrono::seconds(10);
+        return std::chrono::seconds(60);
     }
 }
 
@@ -114,6 +117,7 @@ void LsfgPacer::TrackSourceRate(Clock::time_point now, uint64_t source_frames) {
 void LsfgPacer::TrackLoopRate(float interval_seconds) {
     if (loop_interval > 0.0f && interval_seconds > loop_interval * INTERVAL_SPIKE_CLAMP) {
         interval_seconds = loop_interval * INTERVAL_SPIKE_CLAMP;
+        probe_spiked = true;
     }
     loop_interval = loop_interval > 0.0f
                         ? loop_interval + (interval_seconds - loop_interval) * INTERVAL_SMOOTHING
@@ -172,8 +176,7 @@ void LsfgPacer::UpdateLimit(Clock::time_point now, float base_rate, float target
     if (below_retention && now - *retention_since >= RETENTION_DURATION) {
         retention_since.reset();
         --limit;
-        probe_failures = std::min(probe_failures + 1, MAX_PROBE_FAILURES);
-        next_probe = now + ProbeBackoff(probe_failures);
+        next_probe = now + RETENTION_BACKOFF;
         deficit_since.reset();
         output_credit = 0.0f;
         return;
@@ -181,6 +184,12 @@ void LsfgPacer::UpdateLimit(Clock::time_point now, float base_rate, float target
 
     if (probe_until) {
         if (now < *probe_until) return;
+        if (probe_spiked && !probe_extended) {
+            probe_spiked = false;
+            probe_extended = true;
+            probe_until = now + PROBE_DURATION;
+            return;
+        }
         probe_until.reset();
         output_credit = 0.0f;
 
@@ -196,8 +205,12 @@ void LsfgPacer::UpdateLimit(Clock::time_point now, float base_rate, float target
             current_output < previous_output * PROBE_MARGINAL_GAIN;
         const bool source_slowed = unloaded_base_rate > 0.0f &&
                                    base_rate < unloaded_base_rate * UNLOADED_BASE_RETENTION;
+        const bool step_too_costly = base_rate < probe_base_rate * PROBE_BASE_RETENTION;
 
-        if (throughput_regressed || collapsed_for_marginal_gain || source_slowed) {
+        if (throughput_regressed || collapsed_for_marginal_gain || source_slowed ||
+            step_too_costly) {
+            rejected_limit = limit;
+            rejected_base_rate = probe_base_rate;
             limit = probe_previous_limit;
             probe_failures = std::min(probe_failures + 1, MAX_PROBE_FAILURES);
             next_probe = now + ProbeBackoff(probe_failures);
@@ -221,9 +234,15 @@ void LsfgPacer::UpdateLimit(Clock::time_point now, float base_rate, float target
     }
     if (now - *deficit_since < DEFICIT_DURATION) return;
     if (next_probe && now < *next_probe) return;
+    if (rejected_limit == limit + 1 && rejected_base_rate > 0.0f &&
+        std::abs(base_rate - rejected_base_rate) < rejected_base_rate * REJECTED_STEP_BAND) {
+        return;
+    }
 
     probe_previous_limit = limit;
     probe_base_rate = base_rate;
+    probe_spiked = false;
+    probe_extended = false;
     ++limit;
     probe_until = now + PROBE_DURATION;
     deficit_since.reset();
@@ -351,6 +370,10 @@ void LsfgPacer::Reset() {
     issued_generations = 0;
     previous_generations = 0;
     probe_previous_limit = 0;
+    rejected_limit = 0;
+    rejected_base_rate = 0.0f;
+    probe_spiked = false;
+    probe_extended = false;
     limit = 0;
     probe_failures = 0;
 }
