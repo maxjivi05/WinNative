@@ -61,16 +61,21 @@ private:
 
     void TrackSourceRate(Clock::time_point now, uint64_t source_frames);
     void TrackLoopRate(float interval_seconds);
+    void TrackUnloadedRate(float interval);
     [[nodiscard]] bool RatesSettled() const;
     [[nodiscard]] float SourceInterval() const;
-    [[nodiscard]] size_t HeadroomLimit() const;
     [[nodiscard]] size_t SlotLimit() const;
-    void TrackCost(Clock::time_point now, size_t ceiling);
+    void Stabilize(Clock::time_point now);
+    void UpdateLimit(Clock::time_point now, float base_rate, float target_rate, size_t ceiling);
 
     LsfgPacerConfig config;
 
     std::optional<Clock::time_point> last_frame;
     std::optional<Clock::time_point> last_source_sample;
+    std::optional<Clock::time_point> stable_until;
+    std::optional<Clock::time_point> probe_until;
+    std::optional<Clock::time_point> next_probe;
+    std::optional<Clock::time_point> deficit_since;
     uint64_t last_source_frames{};
     float source_interval{};
     float source_frame_accum{};
@@ -82,14 +87,13 @@ private:
     uint64_t last_drawn{};
     float last_elapsed{};
     float output_credit{};
+    float unloaded_base_rate{};
+    float probe_base_rate{};
+    size_t issued_generations{};
+    size_t previous_generations{};
+    size_t probe_previous_limit{};
     size_t limit{};
-    size_t cost_limit{};
-    size_t probe_from{};
-    float raise_delay{0.25f};
-    float rate_at_raise{};
-    float rate_before_probe{};
-    bool probing{};
-    std::optional<Clock::time_point> last_cost_change;
+    uint32_t probe_failures{};
 };
 
 }
