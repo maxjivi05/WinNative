@@ -459,6 +459,49 @@ recorded months ago, sitting in its WiX Burn clean-room copy under `C:\windows\T
 for minutes while the launch splash reads "Installing EAappInstaller". `scan_and_install_redists` now
 skips that one executable by name, because the EA client is installed from the extracted MSI instead.
 
+### H28. The EA-reinstall-every-launch regression, and its fix
+
+Reported from the phone as "it installs EA every time". It was real, it was **mine**, and it came from
+H26a: once the install-script root resolved correctly, `scan_and_install_redists` found
+`__Installer/Origin/redist/internal/EAappInstaller.exe` and ran it on **every** launch. EA's WiX Burn
+bootstrapper re-extracts itself into `C:\windows\Temp\{GUID}\.cr\` and then deadlocks — exactly the
+hang recorded months ago — so each launch sat for minutes with the splash reading
+"Installing EAappInstaller" (the text `WnLauncherStatusTailer` derives from the agent's
+`installscript: running "..."` line).
+
+Fixed by skipping that one executable by name in the redist scan. Verified on device: the agent log
+from the `Sep 8 2026 22:39:09` build contains **zero** `installscript` / `redist` lines, and no
+`EAappInstaller.exe` process appears. The EA client is installed once, from the extracted MSI.
+
+Watch for this if the root resolution is ever touched again — a correct game root means the redist
+scanner sees everything the title ships, including installers that must not be run.
+
+### H29. Where `EALaunchHelper` actually gives up
+
+`EALaunchHelperVerbose.log`, the last 0.2s of its life:
+
+    Mailbox [LaunchHelperComponent Inbox] ... [CheckAuthV...]
+    Mailbox [LaunchHelperComponent Inbox] ... [ExternalAction]
+    MainFlow::Impl::rtpLaunchPending        LaunchHelper flow: rtpLaunchPending = true
+    MainFlow::Impl::onEnterWaitingForRtpLaunch  RTP launch timer, not active. Starting now.
+    MainFlow::Impl::startRtpLaunchTimer
+    Mailbox ... [ChangeSplashV...]
+    MainFlow::Impl::onTerm                  LaunchHelper flow: terminating      <-- 0.17s later
+    AppMain                                 Closing app, starting teardown
+
+It is **not** timing out. It enters `WaitingForRtpLaunch`, starts the timer, and is terminated almost
+immediately. RTP is EA's run-time protection hand-off, and the flow is built around EA being the party
+that launches the title. We start the game ourselves (H20) and the game then calls back into EA — so
+EA is asked to wait for a launch that has already happened. That ordering is now the leading suspect,
+ahead of the session-propagation theory in H27.
+
+**Experiment set up but not completed** (the phone dropped off the network mid-run): the agent gained
+`WN_STEAM_POST_DISPATCH` (default 1) so the post-dispatch launch can be turned off from the container
+environment, and the phone's container 1 was set to `WN_STEAM_POST_DISPATCH=0` to see whether EA
+launches The Sims 4 itself once it is authorised and its entitlements load. **That variable is still
+set on the phone** — with it at 0 nothing starts the game, so it must be removed or set to 1 before
+normal use.
+
 ### H27. The one remaining defect: `EALaunchHelper` never sees the session
 
 Same on both devices and both containers, and now measurable with everything else healthy:

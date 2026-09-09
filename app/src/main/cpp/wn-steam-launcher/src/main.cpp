@@ -3386,7 +3386,7 @@ int main(int argc, char** argv) {
         launchedViaFallback = create_process_game(gameExe, exeName);
     }
 
-    if (launchedViaFallback && g_postDispatchExe[0]) {
+    if (launchedViaFallback && g_postDispatchExe[0] && env_int("WN_STEAM_POST_DISPATCH", 1) != 0) {
         const char* postName = strrchr(g_postDispatchExe, '\\');
         postName = postName ? postName + 1 : g_postDispatchExe;
         const int kEaWaitMs = env_int("WN_STEAM_EA_WAIT_MS", 120000);
