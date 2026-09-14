@@ -403,11 +403,13 @@ class ShortcutSettingsComposeDialog private constructor(
         state.shortcutExclusiveXInput.value = shortcut.getExtra("exclusiveXInput", "").let {
             if (it.isEmpty()) container.isExclusiveXInput() else it == "1"
         }
-        state.simTouchScreen.value = shortcut.getExtra("simTouchScreen", "0") == "1"
-        state.screenTouchMode.intValue = shortcut.getExtra(
-            "screenTouchMode",
-            if (shortcut.getExtra("simTouchScreen", "0") == "1") "1" else "0"
-        ).toIntOrNull() ?: 0
+        val touchModeFallback = containerScreenTouchMode(container)
+        state.screenTouchMode.intValue =
+            getShortcutSetting("screenTouchMode", touchModeFallback)
+                .toIntOrNull()
+                ?.takeIf { it in 0..3 }
+                ?: touchModeFallback.toIntOrNull() ?: 0
+        state.simTouchScreen.value = state.screenTouchMode.intValue == 1
         val gestureProfiles = gestureProfileManager.profiles
         state.gestureProfileEntries.value =
             listOf(context.getString(R.string.common_ui_none)) + gestureProfiles.map { it.name }
@@ -1325,10 +1327,18 @@ class ShortcutSettingsComposeDialog private constructor(
                 ),
             )
 
-            // Touchscreen mode
             val mode = state.screenTouchMode.intValue
-            shortcut.putExtra("simTouchScreen", if (mode == 1) "1" else "0")
-            shortcut.putExtra("screenTouchMode", mode.toString())
+            val containerTouchMode = containerScreenTouchMode(container)
+            hasContainerOverride = hasContainerOverride or saveOverride(
+                "screenTouchMode",
+                mode.toString(),
+                containerTouchMode,
+            )
+            saveOverride(
+                "simTouchScreen",
+                if (mode == 1) "1" else "0",
+                if (containerTouchMode == "1") "1" else "0",
+            )
             if (state.gestureProfileIds.value.isNotEmpty()) {
                 val gpid = state.gestureProfileIds.value.getOrNull(state.selectedGestureProfile.intValue) ?: 0
                 shortcut.putExtra("gestureProfileId", if (gpid > 0) gpid.toString() else null)
@@ -1942,6 +1952,11 @@ class ShortcutSettingsComposeDialog private constructor(
         return shortcut.getSettingExtra(key, containerValue)
     }
 
+    private fun containerScreenTouchMode(container: Container): String {
+        val simTouch = container.getExtra("simTouchScreen", "0") == "1"
+        return container.getExtra("screenTouchMode", if (simTouch) "1" else "0")
+    }
+
     private fun seedAudioDriver(container: Container, resolved: String, wineVersion: String) {
         val entries =
             context.resources.getStringArray(R.array.audio_driver_entries).toList()
@@ -2457,6 +2472,9 @@ class ShortcutSettingsComposeDialog private constructor(
                 InputControlsView.EXTRA_ADAPTIVE_JOYSTICKS,
                 DeviceProfileSettings.adaptiveJoysticksDefaultExtra(context),
             ) == "1"
+        state.screenTouchMode.intValue =
+            containerScreenTouchMode(container).toIntOrNull()?.takeIf { it in 0..3 } ?: 0
+        state.simTouchScreen.value = state.screenTouchMode.intValue == 1
         if (!state.shortcutExclusiveXInput.value) {
             state.enableXInput.value = true
             state.enableDInput.value = true

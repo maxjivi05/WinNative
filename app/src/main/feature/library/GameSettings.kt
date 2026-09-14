@@ -5027,39 +5027,40 @@ private fun InputSection(state: GameSettingsStateHolder) {
                 checked = state.disableXInput.value,
                 onCheckedChange = { state.disableXInput.value = it }
             )
+        }
 
-            Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(4.dp))
 
-            // Touch input mode (Trackpad / Touchscreen / Map to Right Stick)
-            val gesturesOff = state.selectedGestureProfile.intValue == 0
-            val onSelectMode: (Int) -> Unit = { mode ->
-                state.screenTouchMode.intValue = mode
-                state.simTouchScreen.value = (mode == 1)
-                state.selectedGestureProfile.intValue = 0
+        val gesturesOff = state.selectedGestureProfile.intValue == 0
+        val onSelectMode: (Int) -> Unit = { mode ->
+            state.screenTouchMode.intValue = mode
+            state.simTouchScreen.value = (mode == 1)
+            state.selectedGestureProfile.intValue = 0
+        }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) {
+                SettingCheckbox(
+                    label = stringResource(R.string.session_drawer_touch_trackpad),
+                    checked = state.screenTouchMode.intValue == 0 && gesturesOff,
+                    onCheckedChange = { onSelectMode(if (it) 0 else 3) }
+                )
             }
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    SettingCheckbox(
-                        label = stringResource(R.string.session_drawer_touch_trackpad),
-                        checked = state.screenTouchMode.intValue == 0 && gesturesOff,
-                        onCheckedChange = { if (it) onSelectMode(0) }
-                    )
-                }
-                Box(Modifier.weight(1f)) {
-                    SettingCheckbox(
-                        label = stringResource(R.string.session_drawer_touch_touchscreen),
-                        checked = state.screenTouchMode.intValue == 1 && gesturesOff,
-                        onCheckedChange = { onSelectMode(if (it) 1 else 0) }
-                    )
-                }
+            Box(Modifier.weight(1f)) {
+                SettingCheckbox(
+                    label = stringResource(R.string.session_drawer_touch_touchscreen),
+                    checked = state.screenTouchMode.intValue == 1 && gesturesOff,
+                    onCheckedChange = { onSelectMode(if (it) 1 else 0) }
+                )
             }
-            Spacer(Modifier.height(4.dp))
-            SettingCheckbox(
-                label = stringResource(R.string.session_drawer_touch_map_right_stick),
-                checked = state.screenTouchMode.intValue == 2 && gesturesOff,
-                onCheckedChange = { onSelectMode(if (it) 2 else 0) }
-            )
+        }
+        Spacer(Modifier.height(4.dp))
+        SettingCheckbox(
+            label = stringResource(R.string.session_drawer_touch_map_right_stick),
+            checked = state.screenTouchMode.intValue == 2 && gesturesOff,
+            onCheckedChange = { onSelectMode(if (it) 2 else 0) }
+        )
 
+        if (!isContainer) {
             if (state.gestureProfileEntries.value.isNotEmpty()) {
                 Spacer(Modifier.height(SettingItemGap))
                 SettingDropdown(

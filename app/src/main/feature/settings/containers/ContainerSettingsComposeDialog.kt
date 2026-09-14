@@ -447,6 +447,14 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 DeviceProfileSettings.adaptiveJoysticksDefaultExtra(context),
             ).let { it ?: DeviceProfileSettings.adaptiveJoysticksDefaultExtra(context) } == "1"
 
+        val containerSimTouchScreen = c?.getExtra("simTouchScreen", "0") == "1"
+        state.simTouchScreen.value = containerSimTouchScreen
+        state.screenTouchMode.intValue =
+            c?.getExtra("screenTouchMode", if (containerSimTouchScreen) "1" else "0")
+                ?.toIntOrNull()
+                ?.takeIf { it in 0..3 }
+                ?: if (containerSimTouchScreen) 1 else 0
+
         state.fullscreenStretched.value = c?.isFullscreenStretched() ?: false
         state.useUnixLibs.value = c?.isUseUnixLibs() ?: true
 
@@ -910,6 +918,8 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 InputControlsView.EXTRA_ADAPTIVE_JOYSTICKS,
                 if (state.adaptiveJoysticks.value) "1" else "0"
             )
+            c.putExtra("screenTouchMode", state.screenTouchMode.intValue.toString())
+            c.putExtra("simTouchScreen", if (state.screenTouchMode.intValue == 1) "1" else "0")
             c.setEmulator(emulator)
             c.setEmulator64(emulator64)
             c.setWinComponents(wincomponents)
@@ -996,6 +1006,14 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                         newContainer.putExtra(
                             InputControlsView.EXTRA_ADAPTIVE_JOYSTICKS,
                             if (state.adaptiveJoysticks.value) "1" else "0"
+                        )
+                        newContainer.putExtra(
+                            "screenTouchMode",
+                            state.screenTouchMode.intValue.toString()
+                        )
+                        newContainer.putExtra(
+                            "simTouchScreen",
+                            if (state.screenTouchMode.intValue == 1) "1" else "0"
                         )
                         writeFrameGenExtras(newContainer)
                         writeNetworkingExtras(newContainer)

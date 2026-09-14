@@ -808,6 +808,33 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         }
     }
 
+    private String containerScreenTouchMode() {
+        Container base = shortcut != null ? shortcut.container : container;
+        if (base == null) return "0";
+        return base.getExtra("screenTouchMode", base.getExtra("simTouchScreen", "0").equals("1") ? "1" : "0");
+    }
+
+    private void saveScreenTouchMode(int mode) {
+        String value = String.valueOf(mode);
+        String simTouch = mode == 1 ? "1" : "0";
+        if (shortcut != null) {
+            if (value.equals(containerScreenTouchMode())) {
+                shortcut.putExtra("screenTouchMode", null);
+                shortcut.putExtra("simTouchScreen", null);
+            } else {
+                shortcut.putExtra("screenTouchMode", value);
+                shortcut.putExtra("simTouchScreen", simTouch);
+                shortcut.putExtra("use_container_defaults", "0");
+            }
+            shortcut.putExtra("rtsGestures", "0");
+            shortcut.saveData();
+        } else if (container != null) {
+            container.putExtra("screenTouchMode", value);
+            container.putExtra("simTouchScreen", simTouch);
+            container.saveData();
+        }
+    }
+
     private String getFrameGenSetting(String key, String containerValue) {
         if (shortcut == null) return containerValue;
         return shortcut.getSettingExtra(key, containerValue);
@@ -6148,12 +6175,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                             touchpadView.setRtsGesturesEnabled(false);
                         }
                         if (winHandler != null) winHandler.setScreenTouchStickActive(mode == 2);
-                        if (shortcut != null) {
-                            shortcut.putExtra("screenTouchMode", String.valueOf(mode));
-                            shortcut.putExtra("simTouchScreen", mode == 1 ? "1" : "0");
-                            shortcut.putExtra("rtsGestures", "0");
-                            shortcut.saveData();
-                        }
+                        saveScreenTouchMode(mode);
                         renderDrawerMenu();
                     }
 
@@ -6169,10 +6191,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                         if (enabled) pushSelectedGestureConfig();
                         if (shortcut != null) {
                             shortcut.putExtra("rtsGestures", enabled ? "1" : "0");
-                            shortcut.putExtra("screenTouchMode", "0");
-                            shortcut.putExtra("simTouchScreen", "0");
                             shortcut.saveData();
                         }
+                        saveScreenTouchMode(0);
                         renderDrawerMenu();
                     }
 
@@ -8716,15 +8737,19 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                 ControlsProfile profile = inputControlsManager.getProfile(Integer.parseInt(controlsProfile));
                 if (profile != null) showInputControls(profile);
             }
+        }
 
-            String simTouchScreen = shortcut.getExtra("simTouchScreen");
-            int touchModeFallback = simTouchScreen.equals("1") ? 1 : 0;
-            screenTouchMode = parseSettingInt(
-                    shortcut.getExtra("screenTouchMode", String.valueOf(touchModeFallback)),
-                    touchModeFallback);
-            if (screenTouchMode < 0 || screenTouchMode > 2) screenTouchMode = touchModeFallback;
-            touchpadView.setScreenTouchMode(screenTouchMode);
-            if (winHandler != null) winHandler.setScreenTouchStickActive(screenTouchMode == 2);
+        int touchModeFallback = parseSettingInt(containerScreenTouchMode(), 0);
+        screenTouchMode = parseSettingInt(
+                getShortcutSetting("screenTouchMode", String.valueOf(touchModeFallback)),
+                touchModeFallback);
+        if (screenTouchMode < 0 || screenTouchMode > TouchpadView.MODE_OFF) {
+            screenTouchMode = touchModeFallback;
+        }
+        touchpadView.setScreenTouchMode(screenTouchMode);
+        if (winHandler != null) winHandler.setScreenTouchStickActive(screenTouchMode == 2);
+
+        if (shortcut != null) {
             rtsGesturesEnabled = shortcut.getExtra("rtsGestures", "0").equals("1");
             touchpadView.setRtsGesturesEnabled(rtsGesturesEnabled);
         }

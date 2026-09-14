@@ -238,11 +238,12 @@ internal fun TouchPaneContent(
                         onCheckedChange = { listener.onActionSelected(R.id.main_menu_relative_mouse_movement) },
                     )
                 }
-                Box(Modifier.fillMaxWidth().paneNavItem(cornerRadius = (12f * paneScale).dp, onActivate = { listener.onScreenTouchModeChanged(0) })) {
+                val trackpadEnabled = state.screenTouchMode == 0 && !state.rtsGesturesEnabled
+                Box(Modifier.fillMaxWidth().paneNavItem(cornerRadius = (12f * paneScale).dp, onActivate = { listener.onScreenTouchModeChanged(if (trackpadEnabled) 3 else 0) })) {
                     DrawerBooleanRow(
                         title = stringResource(R.string.session_drawer_touch_trackpad),
-                        checked = state.screenTouchMode == 0 && !state.rtsGesturesEnabled,
-                        onCheckedChange = { if (it) listener.onScreenTouchModeChanged(0) },
+                        checked = trackpadEnabled,
+                        onCheckedChange = { listener.onScreenTouchModeChanged(if (it) 0 else 3) },
                     )
                 }
                 Box(Modifier.fillMaxWidth().paneNavItem(cornerRadius = (12f * paneScale).dp, onActivate = { listener.onScreenTouchModeChanged(1) })) {

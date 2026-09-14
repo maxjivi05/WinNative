@@ -40,6 +40,7 @@ class TouchpadView(
         const val MODE_TRACKPAD = 0
         const val MODE_TOUCHSCREEN = 1
         const val MODE_MAP_TO_RIGHT_STICK = 2
+        const val MODE_OFF = 3
         private const val TOUCHSCREEN_DOUBLE_TAP_MS = 500L
         private const val TOUCHSCREEN_DOUBLE_TAP_DISTANCE = 100f
     }
@@ -189,10 +190,13 @@ class TouchpadView(
 
     private fun selectTouchHandler(): (MotionEvent) -> Boolean = when {
         rtsGesturesEnabled -> rtsGestureEngine::onTouch
+        screenTouchMode == MODE_OFF -> ::ignoreTouchEvent
         screenTouchMode == MODE_MAP_TO_RIGHT_STICK && xServer.winHandler.canUseScreenTouchStick() -> screenTouchStick::onTouch
         screenTouchMode == MODE_TOUCHSCREEN -> ::handleTouchscreenEvent
         else -> ::handleTouchpadEvent
     }
+
+    private fun ignoreTouchEvent(event: MotionEvent): Boolean = true
 
     private fun resetTouchscreenTimeout() {
         xServer.renderer?.setCursorVisible(true)
