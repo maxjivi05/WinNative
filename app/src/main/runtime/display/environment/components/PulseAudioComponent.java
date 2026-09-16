@@ -292,6 +292,8 @@ public class PulseAudioComponent extends EnvironmentComponent {
 
     ArrayList<String> envVars = new ArrayList<>();
     envVars.add("LD_LIBRARY_PATH=/system/lib64:" + nativeLibraryDir + ":" + modulesDir);
+    envVars.add("LD_PRELOAD=" + nativeLibraryDir + "/libwaudio.so");
+    envVars.add("WN_AUDIO_SYSTEM_NAMESPACE=1");
     envVars.add("HOME=" + workingDir);
     envVars.add("TMPDIR=" + environment.getTmpDir());
 

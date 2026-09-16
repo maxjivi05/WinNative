@@ -150,6 +150,7 @@ add_custom_target(winlator_shaders DEPENDS ${SHADER_HEADERS})
 # ----------------------------------------------------------------------------
 
 add_library(winlator SHARED
+        wnaudiohook/recording_receiver.c
         winlator/drawable.c
         winlator/native_content_io.cpp
         winlator/gpu_image.c
@@ -224,6 +225,7 @@ target_link_libraries(fakeinput log dl)
 
 add_library(waudio SHARED
         wnaudiohook/wn_aaudio_shim.c
+        wnaudiohook/recording_stream.c
 )
 target_compile_options(waudio PRIVATE -Wall -Wextra -fvisibility=hidden)
 target_link_libraries(waudio log dl)

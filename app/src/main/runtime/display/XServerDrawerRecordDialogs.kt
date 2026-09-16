@@ -191,7 +191,7 @@ import kotlin.math.roundToInt
 internal fun RecordSettingsDialog(
     config: RecordUiConfig,
     onDismiss: () -> Unit,
-    onRecordNow: (fpsIndex: Int, resolutionIndex: Int, quality: Int, recordUI: Boolean) -> Unit,
+    onRecordNow: (Int, Int, Int, Boolean, Boolean, Int, Int, Boolean) -> Unit,
 ) {
     val fpsOptions = config.fpsOptions.ifEmpty { listOf(60) }
     val resOptions = config.resolutionLabels.ifEmpty { listOf("Native") }
@@ -200,9 +200,15 @@ internal fun RecordSettingsDialog(
     var resIndex by remember { mutableStateOf(config.resolutionIndex.coerceIn(0, resOptions.lastIndex)) }
     var quality by remember { mutableStateOf(config.quality.coerceIn(0, RECORD_QUALITY_LABELS.lastIndex)) }
     var recordUI by remember { mutableStateOf(config.recordUI) }
+    var microphone by remember { mutableStateOf(config.microphone) }
+    var cameraMode by remember { mutableStateOf(config.cameraMode.coerceIn(0, 2)) }
+    var cameraCorner by remember { mutableStateOf(config.cameraCorner.coerceIn(0, 3)) }
+    var cameraCircle by remember { mutableStateOf(config.cameraCircle) }
+    val cameraModes = listOf(stringResource(R.string.record_camera_off), stringResource(R.string.record_camera_overlay), stringResource(R.string.record_camera_separate))
+    val corners = listOf(stringResource(R.string.record_top_left), stringResource(R.string.record_top_right), stringResource(R.string.record_bottom_left), stringResource(R.string.record_bottom_right))
 
     val recordNav = remember { SharedPaneNavRegistry() }
-    val doRecord = { onRecordNow(fpsIndex, resIndex, quality, recordUI) }
+    val doRecord = { onRecordNow(fpsIndex, resIndex, quality, recordUI, microphone, cameraMode, cameraCorner, cameraCircle) }
 
     val shape = RoundedCornerShape(16.dp)
     // Cap card height (landscape is short); settings scroll, the Record Now button stays pinned.
@@ -295,6 +301,40 @@ internal fun RecordSettingsDialog(
                             steps = (RECORD_QUALITY_LABELS.size - 2).coerceAtLeast(0),
                             onValueChange = { quality = it.roundToInt().coerceIn(0, RECORD_QUALITY_LABELS.lastIndex) },
                         )
+                    }
+
+                    Box(Modifier.fillMaxWidth().sharedPaneNavItem(onActivate = { microphone = !microphone })) {
+                        DrawerBooleanRow(
+                            title = stringResource(R.string.record_microphone),
+                            checked = microphone,
+                            onCheckedChange = { microphone = it },
+                            subtitle = stringResource(R.string.record_microphone_hint),
+                        )
+                    }
+                    Box(Modifier.fillMaxWidth().sharedPaneNavItem(onAdjust = { cameraMode = (cameraMode + it).coerceIn(0, 2) })) {
+                        DrawerSliderRow(
+                            label = stringResource(R.string.record_front_camera),
+                            valueText = cameraModes[cameraMode], value = cameraMode.toFloat(),
+                            valueRange = 0f..2f, steps = 1,
+                            onValueChange = { cameraMode = it.roundToInt().coerceIn(0, 2) },
+                        )
+                    }
+                    if (cameraMode == 1) {
+                        Box(Modifier.fillMaxWidth().sharedPaneNavItem(onAdjust = { cameraCorner = (cameraCorner + it).coerceIn(0, 3) })) {
+                            DrawerSliderRow(
+                                label = stringResource(R.string.record_camera_corner),
+                                valueText = corners[cameraCorner], value = cameraCorner.toFloat(),
+                                valueRange = 0f..3f, steps = 2,
+                                onValueChange = { cameraCorner = it.roundToInt().coerceIn(0, 3) },
+                            )
+                        }
+                        Box(Modifier.fillMaxWidth().sharedPaneNavItem(onActivate = { cameraCircle = !cameraCircle })) {
+                            DrawerBooleanRow(
+                                title = stringResource(R.string.record_camera_circle),
+                                checked = cameraCircle, onCheckedChange = { cameraCircle = it },
+                                subtitle = stringResource(R.string.record_camera_circle_hint),
+                            )
+                        }
                     }
 
                     Box(

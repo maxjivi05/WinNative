@@ -570,7 +570,19 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
     private XServerDrawerActionListener drawerActionListener;
     private ExternalDisplayController externalDisplayController;
     private com.winlator.cmod.runtime.display.recording.GameRecorder screenRecorder;
-    private int savedRenderMode = XServerSurfaceView.RENDERMODE_WHEN_DIRTY;
+    private final java.util.concurrent.ExecutorService recordingExecutor = java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(r, "RecordingControl"));
+    private final java.util.concurrent.atomic.AtomicInteger recordingGeneration = new java.util.concurrent.atomic.AtomicInteger();
+    private boolean recordingBusy;
+    private com.winlator.cmod.runtime.display.recording.RecordingCamera recordingCamera;
+    private VulkanRenderer recordingRenderer;
+    private boolean recordingIncludeUi;
+    private int recordingCameraCorner;
+    private boolean recordingCameraCircle;
+    private boolean recordingOverlayBusy;
+    private final android.os.Handler recordingMonitor = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable pendingRecordingPermission;
+    private static final int RECORDING_PERMISSIONS = 7314;
+
     private Timer taskManagerTimer;
     private final ArrayList<TaskManagerProcess> taskManagerAccum = new ArrayList<>();
     private boolean taskManagerCpuExpanded = false;
@@ -4990,9 +5002,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         }
         com.winlator.cmod.feature.stores.steam.service.GameSessionState.setInGame(this, false);
         // Finalize any in-progress recording before the renderer tears down.
-        if (screenRecorder != null && screenRecorder.isRecording()) {
-            stopScreenRecording();
-        }
+        stopScreenRecording();
+        pendingRecordingPermission = null;
+        recordingExecutor.shutdown();
         if (hudControllerListener != null) {
             android.hardware.input.InputManager im =
                     (android.hardware.input.InputManager) getSystemService(Context.INPUT_SERVICE);
@@ -5131,6 +5143,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
     @Override
     protected void onStop() {
         super.onStop();
+        if (!isInPictureInPictureMode()) stopScreenRecording();
         savePlaytimeData();
         handler.removeCallbacks(savePlaytimeRunnable);
         if (!sessionCleanupStarted.get() && isFinishing() && !isChangingConfigurations()) {
@@ -5310,7 +5323,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                 xServerView != null && xServerView.getRenderer() != null && xServerView.getRenderer().isFullscreen(),
                 RefreshRateUtils.getMaxSupportedRefreshRate(this),
                 isRefactorSizeEnabled,
-                screenRecorder != null && screenRecorder.isRecording(),
+                screenRecorder != null || recordingBusy,
                 buildRecordConfig(),
                 screenTouchMode,
                 rtsGesturesEnabled,
@@ -6303,8 +6316,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                     }
 
                     @Override
-                    public void onRecordStart(int fpsIndex, int resolutionIndex, int quality, boolean recordUI) {
-                        startRecordingWithSettings(fpsIndex, resolutionIndex, quality, recordUI);
+                    public void onRecordStart(int fpsIndex, int resolutionIndex, int quality, boolean recordUI, boolean microphone, int cameraMode, int cameraCorner, boolean cameraCircle) {
+                        requestRecordingWithSettings(fpsIndex, resolutionIndex, quality, recordUI, microphone, cameraMode, cameraCorner, cameraCircle);
                     }
                 };
         }
@@ -6927,7 +6940,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                 break;
             case R.id.main_menu_record:
                 // Starting is handled by the popup (onRecordStart); reaching here means stop.
-                if (screenRecorder != null && screenRecorder.isRecording()) stopScreenRecording();
+                if (screenRecorder != null || recordingBusy) stopScreenRecording();
                 renderDrawerMenu();
                 break;
             case R.id.main_menu_exit:
@@ -6943,7 +6956,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
 
     /** FPS options the panel supports (ascending), e.g. a 120Hz panel → [30,60,90,120]. */
     private java.util.List<Integer> recordFpsOptions() {
-        int max = Math.max(30, RefreshRateUtils.getMaxSupportedRefreshRate(this));
+        android.view.Display display = xServerView != null ? xServerView.getDisplay() : null;
+        int max = display != null ? Math.max(30, Math.round(display.getRefreshRate())) : 60;
         java.util.List<Integer> out = new java.util.ArrayList<>();
         for (int f : RECORD_FPS_TIERS) if (f <= max + 1) out.add(f);
         if (out.isEmpty()) out.add(60);
@@ -6981,7 +6995,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         int nativeShort = recordNativeShortSide();
         java.util.List<String> res = recordResolutionLabels(nativeShort);
 
-        int savedFps = preferences.getInt("record_fps", 60);
+        int savedFps = preferences.getInt("record_fps", 30);
         int fpsIndex = fps.indexOf(savedFps);
         if (fpsIndex < 0) { // nearest supported
             fpsIndex = 0;
@@ -6991,16 +7005,60 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                 if (d < best) { best = d; fpsIndex = i; }
             }
         }
-        int resIndex = preferences.getInt("record_res_index", 0);
-        if (resIndex < 0 || resIndex >= res.size()) resIndex = 0;
-        int quality = preferences.getInt("record_quality", 2);
+        int defaultResolution = 0;
+        for (int i = 1; nativeShort > 1080 && i < res.size(); i++) {
+            if (tierShortForLabel(res.get(i)) <= 1080) { defaultResolution = i; break; }
+        }
+        int resIndex = preferences.getInt("record_res_index", defaultResolution);
+        if (preferences.contains("record_short_side")) {
+            int shortSide = preferences.getInt("record_short_side", 0);
+            resIndex = 0;
+            if (shortSide > 0 && shortSide < nativeShort) {
+                for (int i = 1; i < res.size(); i++) {
+                    resIndex = i;
+                    if (tierShortForLabel(res.get(i)) <= shortSide) break;
+                }
+            }
+        }
+        if (resIndex < 0 || resIndex >= res.size()) resIndex = defaultResolution;
+        int quality = preferences.getInt("record_quality", 1);
         boolean recordUI = preferences.getBoolean("record_ui", false);
-        return new RecordUiConfig(fps, res, fpsIndex, resIndex, quality, recordUI);
+        return new RecordUiConfig(fps, res, fpsIndex, resIndex, quality, recordUI,
+                preferences.getBoolean("record_microphone", false), preferences.getInt("record_camera_mode", 0),
+                preferences.getInt("record_camera_corner", 1), preferences.getBoolean("record_camera_circle", false));
     }
 
-    // Start recording with the popup's chosen settings, persisting them for next time.
-    private void startRecordingWithSettings(int fpsIndex, int resolutionIndex, int quality, boolean recordUI) {
-        if (screenRecorder != null && screenRecorder.isRecording()) return;
+    private void requestRecordingWithSettings(int fpsIndex, int resolutionIndex, int quality, boolean recordUI,
+                                              boolean microphone, int cameraMode, int cameraCorner, boolean cameraCircle) {
+        if (recordingBusy || screenRecorder != null || pendingRecordingPermission != null) return;
+        java.util.List<String> permissions = new java.util.ArrayList<>();
+        if (microphone && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            permissions.add(android.Manifest.permission.RECORD_AUDIO);
+        if (cameraMode != 0 && checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            permissions.add(android.Manifest.permission.CAMERA);
+        Runnable start = () -> startRecordingWithSettings(fpsIndex, resolutionIndex, quality, recordUI, microphone, cameraMode, cameraCorner, cameraCircle);
+        if (permissions.isEmpty()) start.run();
+        else {
+            pendingRecordingPermission = start;
+            requestPermissions(permissions.toArray(new String[0]), RECORDING_PERMISSIONS);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != RECORDING_PERMISSIONS) return;
+        Runnable start = pendingRecordingPermission;
+        pendingRecordingPermission = null;
+        boolean granted = results.length > 0;
+        for (int result : results) granted &= result == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (granted && start != null && !isFinishing() && !isDestroyed()) start.run();
+        else android.widget.Toast.makeText(this, R.string.record_permission_required, android.widget.Toast.LENGTH_LONG).show();
+    }
+
+    private void startRecordingWithSettings(int fpsIndex, int resolutionIndex, int quality, boolean recordUI,
+                                           boolean microphone, int cameraMode, int cameraCorner, boolean cameraCircle) {
+        if (recordingBusy || screenRecorder != null || isFinishing() || isDestroyed()) return;
         VulkanRenderer renderer = xServerView != null ? xServerView.getRenderer() : null;
         if (renderer == null || xServerView == null) {
             android.widget.Toast.makeText(this, R.string.session_record_failed, android.widget.Toast.LENGTH_SHORT).show();
@@ -7046,24 +7104,108 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         preferences.edit()
                 .putInt("record_fps", fps)
                 .putInt("record_res_index", resolutionIndex)
+                .putInt("record_short_side", resolutionIndex == 0 ? 0 : tierShortForLabel(resLabels.get(resolutionIndex)))
                 .putInt("record_quality", quality)
                 .putBoolean("record_ui", recordUI)
+                .putBoolean("record_microphone", microphone)
+                .putInt("record_camera_mode", cameraMode)
+                .putInt("record_camera_corner", cameraCorner)
+                .putBoolean("record_camera_circle", cameraCircle)
                 .apply();
 
-        screenRecorder = new com.winlator.cmod.runtime.display.recording.GameRecorder(this);
-        android.view.Surface encoderSurface = screenRecorder.start(encW, encH, fps, orientationHint, bitRate);
-        if (encoderSurface == null || !renderer.startRecording(encoderSurface, fps, recordUI)) {
-            screenRecorder.stop();
-            screenRecorder = null;
-            android.widget.Toast.makeText(this, R.string.session_record_failed, android.widget.Toast.LENGTH_SHORT).show();
-            return;
-        }
-        // Force continuous frames while recording (renderer is otherwise on-demand).
-        savedRenderMode = xServerView.getRenderMode();
-        xServerView.setRenderMode(XServerSurfaceView.RENDERMODE_CONTINUOUSLY);
-        if (recordUI) startRecordUiCapture(encW, encH, orientationHint);
+        recordingBusy = true;
         renderDrawerMenu();
-        android.widget.Toast.makeText(this, R.string.session_record_started, android.widget.Toast.LENGTH_SHORT).show();
+        int generation = recordingGeneration.incrementAndGet();
+        int requestedWidth = encW, requestedHeight = encH;
+        int sourceWidth = nativeW, sourceHeight = nativeH;
+        android.view.Display cameraDisplay = getWindowManager().getDefaultDisplay();
+        int cameraRotation = cameraDisplay.getRotation() * 90;
+        recordingExecutor.execute(() -> {
+            com.winlator.cmod.runtime.display.recording.GameRecorder recorder = new com.winlator.cmod.runtime.display.recording.GameRecorder(this);
+            com.winlator.cmod.runtime.display.recording.RecordingCamera camera = null;
+            String error = null;
+            boolean attached = false;
+            try {
+                android.view.Surface surface = recorder.start(requestedWidth, requestedHeight, fps, orientationHint, bitRate, microphone);
+                if (surface == null) throw new IllegalStateException(recorder.getFailure());
+                if (cameraMode != 0) {
+                    camera = new com.winlator.cmod.runtime.display.recording.RecordingCamera(this);
+                    camera.start(cameraMode == 2, recorder.cameraFile(), cameraRotation);
+                }
+                if (recordingGeneration.get() != generation) throw new IllegalStateException("Recording cancelled");
+                recorder.begin();
+                attached = renderer.startRecording(surface, recorder.getFps(), recordUI || cameraMode == 1, sourceWidth, sourceHeight, orientationHint);
+                if (!attached) throw new IllegalStateException("Display capture unavailable");
+                if (!recorder.isRecording()) throw new IllegalStateException(recorder.getFailure());
+            } catch (Exception e) { error = e.getMessage(); }
+            final String problem = error;
+            final com.winlator.cmod.runtime.display.recording.RecordingCamera readyCamera = camera;
+            if (problem != null || recordingGeneration.get() != generation) {
+                if (attached) renderer.stopRecording();
+                if (camera != null) camera.stop();
+                recorder.stop();
+                runOnUiThread(() -> {
+                    recordingBusy = false;
+                    if (!isDestroyed() && !isFinishing()) {
+                        if (recordingGeneration.get() == generation)
+                            android.widget.Toast.makeText(this, getString(R.string.record_error_detail, problem), android.widget.Toast.LENGTH_LONG).show();
+                        renderDrawerMenu();
+                    }
+                });
+                return;
+            }
+            runOnUiThread(() -> {
+                if (recordingGeneration.get() != generation || isDestroyed() || isFinishing()) {
+                    Runnable cleanup = () -> {
+                        renderer.stopRecording();
+                        if (readyCamera != null) readyCamera.stop();
+                        recorder.stop();
+                        runOnUiThread(() -> {
+                            recordingBusy = false;
+                            if (!isDestroyed() && !isFinishing()) renderDrawerMenu();
+                        });
+                    };
+                    if (recordingExecutor.isShutdown()) new Thread(cleanup, "RecordingCleanup").start();
+                    else recordingExecutor.execute(cleanup);
+                    return;
+                }
+                screenRecorder = recorder;
+                recordingCamera = readyCamera;
+                recordingRenderer = renderer;
+                recordingIncludeUi = recordUI;
+                recordingCameraCorner = Math.max(0, Math.min(3, cameraCorner));
+                recordingCameraCircle = cameraCircle;
+                recordingBusy = false;
+                if (recordUI || cameraMode == 1) startRecordUiCapture(recorder.getWidth(), recorder.getHeight(), orientationHint);
+                if (screenRecorder != recorder) return;
+                monitorRecording(generation);
+                renderDrawerMenu();
+                android.widget.Toast.makeText(this, getString(R.string.record_actual_settings, recorder.getWidth(), recorder.getHeight(), recorder.getFps()), android.widget.Toast.LENGTH_LONG).show();
+            });
+        });
+    }
+
+    private void monitorRecording(int generation) {
+        recordingMonitor.postDelayed(() -> {
+            if (recordingGeneration.get() != generation || screenRecorder == null) return;
+            com.winlator.cmod.runtime.display.recording.GameRecorder recorder = screenRecorder;
+            com.winlator.cmod.runtime.display.recording.RecordingCamera camera = recordingCamera;
+            VulkanRenderer renderer = recordingRenderer;
+            recordingExecutor.execute(() -> {
+                String error = recorder.getFailure();
+                if (camera != null && camera.getFailure() != null) error = camera.getFailure();
+                if (error == null && !renderer.isRecordingCaptureActive()) error = getString(R.string.record_display_changed);
+                String problem = error;
+                runOnUiThread(() -> {
+                    if (recordingGeneration.get() != generation) return;
+                    if (problem != null || !recorder.isRecording()) {
+                        if (problem != null) android.widget.Toast.makeText(this, getString(R.string.record_error_detail, problem), android.widget.Toast.LENGTH_LONG).show();
+                        stopScreenRecording();
+                        renderDrawerMenu();
+                    } else monitorRecording(generation);
+                });
+            });
+        }, 500);
     }
 
     // Record UI: snapshot the overlay views and feed them to the native composite.
@@ -7076,6 +7218,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
 
     private void startRecordUiCapture(int w, int h, int orientationHint) {
         stopRecordUiCapture();
+        double scale = Math.min(1.0, 1280.0 / Math.max(w, h));
+        w = Math.max(2, (int) (w * scale));
+        h = Math.max(2, (int) (h * scale));
         recordUiW = w;
         recordUiH = h;
         // Pre-rotate the upright screen-space UI into the recording's frame to match the game.
@@ -7086,6 +7231,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
             recordUiBuffer = java.nio.ByteBuffer.allocateDirect(w * h * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
         } catch (Throwable t) {
             Log.e("XServerDisplayActivity", "Record UI buffer alloc failed", t);
+            stopScreenRecording();
+            android.widget.Toast.makeText(this, R.string.session_record_failed, android.widget.Toast.LENGTH_LONG).show();
             return;
         }
         recordUiHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -7102,9 +7249,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
 
     private void snapshotRecordUi() {
         try {
-            VulkanRenderer renderer = xServerView != null ? xServerView.getRenderer() : null;
-            View root = xServerView != null ? xServerView.getRootView() : null;
-            if (renderer == null || root == null || recordUiBitmap == null) return;
+            VulkanRenderer renderer = recordingRenderer;
+            View root = displayHostComposeView;
+            if (renderer == null || root == null || recordUiBitmap == null || recordingOverlayBusy) return;
             int sw = root.getWidth();
             int sh = root.getHeight();
             if (sw <= 0 || sh <= 0) return;
@@ -7119,15 +7266,36 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
             float s = Math.min(recordUiW / r.width(), recordUiH / r.height());
             m.postScale(s, s);
             c.setMatrix(m);
-            root.draw(c);
+            if (recordingIncludeUi) root.draw(c);
+            if (recordingCamera != null) {
+                int uprightW = recordUiRotation % 180 == 0 ? recordUiW : recordUiH;
+                int uprightH = recordUiRotation % 180 == 0 ? recordUiH : recordUiW;
+                android.graphics.Matrix cameraMatrix = new android.graphics.Matrix();
+                cameraMatrix.setRotate(recordUiRotation, uprightW / 2f, uprightH / 2f);
+                android.graphics.RectF bounds = new android.graphics.RectF(0, 0, uprightW, uprightH);
+                cameraMatrix.mapRect(bounds);
+                cameraMatrix.postTranslate(-bounds.left, -bounds.top);
+                c.setMatrix(cameraMatrix);
+                recordingCamera.draw(c, uprightW, uprightH, recordingCameraCorner, recordingCameraCircle);
+            }
 
             recordUiBitmap.getPixels(recordUiPixels, 0, recordUiW, 0, 0, recordUiW, recordUiH);
             recordUiBuffer.clear();
             recordUiBuffer.asIntBuffer().put(recordUiPixels); // little-endian int → BGRA bytes
             recordUiBuffer.position(0);
-            renderer.updateRecordUITexture(recordUiBuffer, recordUiW, recordUiH);
+            java.nio.ByteBuffer buffer = recordUiBuffer;
+            int width = recordUiW, height = recordUiH;
+            int generation = recordingGeneration.get();
+            recordingOverlayBusy = true;
+            recordingExecutor.execute(() -> {
+                try {
+                    if (recordingGeneration.get() == generation) renderer.updateRecordUITexture(buffer, width, height);
+                } finally { runOnUiThread(() -> recordingOverlayBusy = false); }
+            });
         } catch (Throwable t) {
             Log.e("XServerDisplayActivity", "Record UI snapshot failed", t);
+            stopScreenRecording();
+            android.widget.Toast.makeText(this, R.string.session_record_failed, android.widget.Toast.LENGTH_LONG).show();
         }
     }
 
@@ -7146,14 +7314,33 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
     }
 
     private void stopScreenRecording() {
-        if (screenRecorder == null) return;
+        recordingGeneration.incrementAndGet();
+        recordingMonitor.removeCallbacksAndMessages(null);
         stopRecordUiCapture();
-        if (xServerView != null) xServerView.setRenderMode(savedRenderMode);
-        VulkanRenderer renderer = xServerView != null ? xServerView.getRenderer() : null;
-        if (renderer != null) renderer.stopRecording();
-        screenRecorder.stop();
+        com.winlator.cmod.runtime.display.recording.GameRecorder recorder = screenRecorder;
+        com.winlator.cmod.runtime.display.recording.RecordingCamera camera = recordingCamera;
+        VulkanRenderer renderer = recordingRenderer;
         screenRecorder = null;
-        android.widget.Toast.makeText(this, R.string.session_record_saved, android.widget.Toast.LENGTH_SHORT).show();
+        recordingCamera = null;
+        recordingRenderer = null;
+        if (recorder == null) return;
+        recordingBusy = true;
+        recordingExecutor.execute(() -> {
+            if (renderer != null) renderer.stopRecording();
+            if (camera != null) camera.stop();
+            recorder.stop();
+            runOnUiThread(() -> {
+                recordingBusy = false;
+                if (isDestroyed() || isFinishing()) return;
+                String error = recorder.getFailure();
+                if (camera != null && camera.getFailure() != null) error = camera.getFailure();
+                String message = error != null ? getString(R.string.record_error_detail, error)
+                        : recorder.getSavedFile() != null ? getString(R.string.record_saved_path, recorder.getSavedFile().getPath())
+                        : getString(R.string.session_record_failed);
+                android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show();
+                renderDrawerMenu();
+            });
+        });
     }
 
     private void applyRefactorSize(boolean enabled) {

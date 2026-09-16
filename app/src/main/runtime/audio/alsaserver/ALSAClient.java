@@ -256,7 +256,7 @@ public class ALSAClient {
         tee.order(data.order());
         tee.position(0);
         tee.limit(data.limit());
-        recorder.onPcm(tee, sampleRate, channelCount, getPCMEncoding(dataType));
+        recorder.onPcm(this, tee, sampleRate, channelCount, getPCMEncoding(dataType));
       }
 
       while (data.position() != data.limit()) {

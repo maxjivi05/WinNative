@@ -246,6 +246,8 @@ typedef struct VkRecordSwap {
     VkSwapchainKHR   swapchain;
     VkFormat         format;
     VkExtent2D       extent;
+    VkExtent2D       source_extent;
+    VkSurfaceTransformFlagBitsKHR source_transform;
     uint32_t         image_count;
     VkImage          images[VK_MAX_RECORD_IMAGES];
     VkSemaphore      acquire[VK_FRAMES_IN_FLIGHT];
@@ -398,6 +400,8 @@ typedef struct VkRenderer {
     VkSurfaceTransformFlagBitsKHR swapchain_transform;
     VkExtent2D       surface_extent;
     VkExtent2D       swapchain_extent;
+    uint64_t         record_source_size;
+    uint32_t         record_source_transform;
     uint32_t         swapchain_image_count;
     VkImage          swapchain_images[VK_MAX_SWAPCHAIN_IMAGES];
     VkImageView      swapchain_views[VK_MAX_SWAPCHAIN_IMAGES];

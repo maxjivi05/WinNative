@@ -593,6 +593,10 @@ data class RecordUiConfig(
     val resolutionIndex: Int = 0,
     val quality: Int = 2,
     val recordUI: Boolean = false,
+    val microphone: Boolean = false,
+    val cameraMode: Int = 0,
+    val cameraCorner: Int = 1,
+    val cameraCircle: Boolean = false,
 )
 
 data class XServerDrawerState(
@@ -1181,7 +1185,7 @@ interface XServerDrawerActionListener {
 
     fun onLogsShare()
 
-    fun onRecordStart(fpsIndex: Int, resolutionIndex: Int, quality: Int, recordUI: Boolean)
+    fun onRecordStart(fpsIndex: Int, resolutionIndex: Int, quality: Int, recordUI: Boolean, microphone: Boolean, cameraMode: Int, cameraCorner: Int, cameraCircle: Boolean)
 }
 
 fun buildXServerDrawerState(
@@ -2172,9 +2176,9 @@ private fun ActionCardGrid(
         RecordSettingsDialog(
             config = state.recordConfig,
             onDismiss = { showRecordSettings = false },
-            onRecordNow = { fpsIndex, resIndex, quality, recordUI ->
+            onRecordNow = { fpsIndex, resIndex, quality, recordUI, microphone, cameraMode, cameraCorner, cameraCircle ->
                 showRecordSettings = false
-                listener.onRecordStart(fpsIndex, resIndex, quality, recordUI)
+                listener.onRecordStart(fpsIndex, resIndex, quality, recordUI, microphone, cameraMode, cameraCorner, cameraCircle)
             },
         )
     }

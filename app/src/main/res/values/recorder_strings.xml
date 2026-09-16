@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="record_microphone">Microphone</string>
+    <string name="record_microphone_hint">Mix your voice with game audio. Headphones reduce echo.</string>
+    <string name="record_front_camera">Front camera</string>
+    <string name="record_camera_off">Off</string>
+    <string name="record_camera_overlay">Overlay</string>
+    <string name="record_camera_separate">Separate video</string>
+    <string name="record_camera_corner">Camera position</string>
+    <string name="record_top_left">Top left</string>
+    <string name="record_top_right">Top right</string>
+    <string name="record_bottom_left">Bottom left</string>
+    <string name="record_bottom_right">Bottom right</string>
+    <string name="record_camera_circle">Circular camera</string>
+    <string name="record_camera_circle_hint">Turn off for a square overlay.</string>
+    <string name="record_permission_required">Recording requires the selected microphone and camera permissions.</string>
+    <string name="record_actual_settings">Recording %1$d × %2$d at %3$d fps</string>
+    <string name="record_saved_path">Recording saved: %1$s</string>
+    <string name="record_error_detail">Recording stopped: %1$s</string>
+    <string name="record_display_changed">Display capture changed or became unavailable. Start a new recording for this display.</string>
+</resources>

@@ -1,506 +1,483 @@
 package com.winlator.cmod.runtime.display.recording;
 
 import android.content.Context;
-import android.media.AudioFormat;
-import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
-import android.media.MediaFormat;
-import android.media.MediaMuxer;
-import android.media.MediaScannerConnection;
+import android.media.*;
 import android.os.Build;
 import android.os.Environment;
-import android.util.Log;
 import android.view.Surface;
-
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import timber.log.Timber;
 
-/** Records the game's composited output to MP4 (H.264 + AAC). Video frames mirror-present into {@link #getInputSurface()}; audio is teed in via {@link #onPcm}. A background thread drains both encoders into the muxer. */
 public final class GameRecorder {
-    private static final String TAG = "GameRecorder";
+  private static final String TAG = "GameRecorder";
+  private static volatile GameRecorder activeRecorder;
 
-    private static final String VIDEO_MIME = MediaFormat.MIMETYPE_VIDEO_AVC;
-    private static final String AUDIO_MIME = MediaFormat.MIMETYPE_AUDIO_AAC;
-    private static final int AUDIO_BITRATE = 128_000;
-    private static final long DEQUEUE_TIMEOUT_US = 10_000;
+  public static GameRecorder active() {
+    return activeRecorder;
+  }
 
-    // The active recorder the audio bridge tees PCM into (one recording session at a time).
-    private static volatile GameRecorder activeRecorder;
+  private final Context context;
+  private final ArrayBlockingQueue<Pcm> pcmQueue = new ArrayBlockingQueue<>(32);
+  private final RecordingAudioMixer mixer = new RecordingAudioMixer();
+  private final AtomicBoolean stopping = new AtomicBoolean();
+  private volatile boolean recording;
+  private volatile String failure;
+  private volatile File savedFile;
+  private MediaCodec video, audio;
+  private Surface surface;
+  private MediaMuxer muxer;
+  private AudioRecord microphone;
+  private Thread worker;
+  private long baseNs;
+  private int nativeAudio = -1;
+  private int width, height, fps;
+  private int videoTrack = -1, audioTrack = -1;
+  private boolean muxerStarted, videoWritten;
+  private File output;
+  private final List<Sample> pending = new ArrayList<>();
+  private int pendingBytes;
 
-    public static GameRecorder active() {
-        return activeRecorder;
+  private static final class Pcm {
+    final Object source;
+    final ByteBuffer data;
+    final int rate, channels, encoding;
+    final long time;
+
+    Pcm(Object source, ByteBuffer data, int rate, int channels, int encoding, long time) {
+      this.source = source;
+      this.data = data;
+      this.rate = rate;
+      this.channels = channels;
+      this.encoding = encoding;
+      this.time = time;
     }
+  }
 
-    private final Context appContext;
+  private static final class Sample {
+    final boolean video;
+    final ByteBuffer data;
+    final MediaCodec.BufferInfo info;
 
-    // Video
-    private MediaCodec videoCodec;
-    private Surface inputSurface;
-    private int videoTrackIndex = -1;
-
-    // Audio (lazily configured from the first PCM buffer so we match the game's real format)
-    private MediaCodec audioCodec;
-    private int audioTrackIndex = -1;
-    private int audioSampleRate;
-    private int audioChannelCount;
-    private long audioFramesSubmitted; // advances the audio sample clock
-    private long audioBasePtsUs = -1;  // wall-clock anchor of the first PCM, shared with video base
-
-    private MediaMuxer muxer;
-    private boolean muxerStarted;
-    private File outputFile;
-    private int orientationHint; // clockwise degrees players rotate playback to upright
-
-    private Thread drainThread;
-    private final AtomicBoolean recording = new AtomicBoolean(false);
-    private final AtomicBoolean stopRequested = new AtomicBoolean(false);
-    private long baseTimeNs;
-    // If no game audio has appeared by this deadline, start the muxer video-only rather than stall.
-    private long audioGraceDeadlineNs;
-    private static final long AUDIO_GRACE_NS = 1_000_000_000L;
-
-    // Samples that arrive before both tracks are added + muxer is started.
-    private final List<PendingSample> pending = new ArrayList<>();
-
-    private static final class PendingSample {
-        final boolean video;
-        final ByteBuffer data;
-        final MediaCodec.BufferInfo info;
-
-        PendingSample(boolean video, ByteBuffer data, MediaCodec.BufferInfo info) {
-            this.video = video;
-            this.data = data;
-            this.info = info;
-        }
+    Sample(boolean video, ByteBuffer data, MediaCodec.BufferInfo info) {
+      this.video = video;
+      this.data = data;
+      this.info = info;
     }
+  }
 
-    public GameRecorder(Context context) {
-        this.appContext = context.getApplicationContext();
+  public GameRecorder(Context context) {
+    this.context = context.getApplicationContext();
+  }
+
+  public boolean isRecording() {
+    return recording;
+  }
+
+  public String getFailure() {
+    return failure;
+  }
+
+  public File getSavedFile() {
+    return savedFile;
+  }
+
+  public int getWidth() {
+    return width;
+  }
+
+  public int getHeight() {
+    return height;
+  }
+
+  public int getFps() {
+    return fps;
+  }
+
+  public File cameraFile() {
+    return new File(output.getParentFile(), output.getName().replace(".mp4", "_camera.mp4"));
+  }
+
+  public Surface start(
+      int requestedWidth,
+      int requestedHeight,
+      int requestedFps,
+      int orientation,
+      int bitrate,
+      boolean mic) {
+    if (worker != null || surface != null || output != null || stopping.get())
+      throw new IllegalStateException("Recorder is single-use");
+    try {
+      if (requestedWidth < 2 || requestedHeight < 2)
+        throw new IllegalArgumentException("Invalid capture size");
+      configureVideo(requestedWidth, requestedHeight, requestedFps, bitrate);
+      MediaFormat format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 48000, 2);
+      format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+      format.setInteger(MediaFormat.KEY_BIT_RATE, 160000);
+      audio = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
+      audio.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+      audio.start();
+      File dir = new File(Environment.getExternalStorageDirectory(), "WinNative/Recordings");
+      if ((!dir.isDirectory() && !dir.mkdirs()) || !dir.canWrite()) {
+        dir =
+            new File(
+                context.getExternalFilesDir(null) != null
+                    ? context.getExternalFilesDir(null)
+                    : context.getFilesDir(),
+                "Recordings");
+        if (!dir.isDirectory() && !dir.mkdirs())
+          throw new IllegalStateException("Recording storage unavailable");
+      }
+      output = File.createTempFile("WinNative_" + System.currentTimeMillis() + "_", ".mp4", dir);
+      muxer = new MediaMuxer(output.getPath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+      muxer.setOrientationHint(orientation);
+      if (mic) {
+        int size =
+            AudioRecord.getMinBufferSize(
+                48000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        if (size <= 0) throw new IllegalStateException("Microphone format unavailable");
+        microphone =
+            new AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                48000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                Math.max(size * 2, 9600));
+      }
+      return surface;
+    } catch (Exception e) {
+      failure = e.getMessage();
+      Timber.tag(TAG).e(e, "Recording setup failed");
+      release();
+      return null;
     }
+  }
 
-    public boolean isRecording() {
-        return recording.get();
+  public void begin() {
+    if (worker != null || surface == null || stopping.get())
+      throw new IllegalStateException("Recorder cannot start");
+    if (microphone != null) {
+      microphone.startRecording();
+      if (microphone.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
+        throw new IllegalStateException("Microphone unavailable");
     }
+    nativeAudio = NativeRecordingAudio.open();
+    if (nativeAudio < 0) throw new IllegalStateException("Game audio capture unavailable");
+    baseNs = System.nanoTime();
+    recording = true;
+    activeRecorder = this;
+    worker = new Thread(this::run, "GameRecorder");
+    worker.start();
+  }
 
-    /** Configure the encoder + muxer and start draining. Returns the input Surface, or null on failure. */
-    public synchronized Surface start(int width, int height, int fps, int orientationHint, int bitRate) {
-        if (recording.get()) return inputSurface;
-        width &= ~1; // encoders want even dimensions
-        height &= ~1;
-        if (width <= 0 || height <= 0) {
-            Log.e(TAG, "Refusing to record invalid size " + width + "x" + height);
-            return null;
-        }
-        if (fps <= 0 || fps > 240) fps = 60;
-        if (bitRate <= 0) bitRate = estimateVideoBitrate(width, height, fps);
-        this.orientationHint = ((orientationHint % 360) + 360) % 360;
-
-        try {
-            if (!openOutput()) {
-                abortOutput();
-                return null;
-            }
-
-            MediaFormat fmt = MediaFormat.createVideoFormat(VIDEO_MIME, width, height);
-            fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-            fmt.setInteger(MediaFormat.KEY_BIT_RATE, bitRate);
-            fmt.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
-            fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                fmt.setInteger(MediaFormat.KEY_BITRATE_MODE,
-                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);
-            }
-
-            videoCodec = MediaCodec.createEncoderByType(VIDEO_MIME);
-            videoCodec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-            inputSurface = videoCodec.createInputSurface();
-            videoCodec.start();
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to start video encoder", e);
-            releaseQuietly();
-            abortOutput();
-            return null;
-        }
-
-        baseTimeNs = System.nanoTime();
-        audioGraceDeadlineNs = baseTimeNs + AUDIO_GRACE_NS;
-        stopRequested.set(false);
-        recording.set(true);
-        activeRecorder = this;
-
-        drainThread = new Thread(this::drainLoop, "GameRecorderDrain");
-        drainThread.start();
-        Log.i(TAG, "Recording started " + width + "x" + height + "@" + fps);
-        return inputSurface;
-    }
-
-    public Surface getInputSurface() {
-        return inputSurface;
-    }
-
-    /** Tee a buffer of already-played game PCM into the recording (non-blocking; does not consume it). */
-    public void onPcm(ByteBuffer data, int sampleRate, int channelCount, int pcmEncoding) {
-        if (!recording.get() || stopRequested.get()) return;
-        try {
-            ensureAudioEncoder(sampleRate, channelCount);
-        } catch (Exception e) {
-            Log.e(TAG, "Audio encoder init failed; continuing video-only", e);
-            audioCodec = null; // give up on audio, keep recording video
+  private void configureVideo(int w, int h, int requestedFps, int bitrate) throws Exception {
+    Exception last = null;
+    for (int shortSide : new int[] {Math.min(w, h), 1080, 720, 480}) {
+      if (shortSide > Math.min(w, h)) continue;
+      for (int rate : new int[] {Math.max(1, Math.min(165, requestedFps)), 30}) {
+        if (rate > requestedFps) continue;
+        for (MediaCodecInfo info :
+            new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+          if (!info.isEncoder()) continue;
+          String name = info.getName();
+          if (Build.VERSION.SDK_INT >= 29
+              ? !info.isHardwareAccelerated()
+              : name.startsWith("OMX.google.") || name.startsWith("c2.android.")) continue;
+          try {
+            MediaCodecInfo.CodecCapabilities caps =
+                info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC);
+            MediaCodecInfo.VideoCapabilities vc = caps.getVideoCapabilities();
+            int ew = (int) ((long) w * shortSide / Math.min(w, h));
+            int eh = (int) ((long) h * shortSide / Math.min(w, h));
+            ew -= ew % vc.getWidthAlignment();
+            eh -= eh % vc.getHeightAlignment();
+            if (!vc.areSizeAndRateSupported(ew, eh, rate)) continue;
+            MediaFormat fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, ew, eh);
+            fmt.setInteger(
+                MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+            long scaled =
+                (long) bitrate * ew * eh / ((long) w * h) * rate / Math.max(1, requestedFps);
+            fmt.setInteger(
+                MediaFormat.KEY_BIT_RATE,
+                vc.getBitrateRange()
+                    .clamp((int) Math.max(1000000, Math.min(Integer.MAX_VALUE, scaled))));
+            fmt.setInteger(MediaFormat.KEY_FRAME_RATE, rate);
+            fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2);
+            if (caps.getEncoderCapabilities()
+                .isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR))
+              fmt.setInteger(
+                  MediaFormat.KEY_BITRATE_MODE,
+                  MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);
+            video = MediaCodec.createByCodecName(name);
+            video.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            surface = video.createInputSurface();
+            video.start();
+            width = ew;
+            height = eh;
+            fps = rate;
             return;
+          } catch (Exception e) {
+            last = e;
+            if (surface != null) {
+              surface.release();
+              surface = null;
+            }
+            if (video != null) {
+              try {
+                video.release();
+              } catch (Exception ignored) {
+              }
+              video = null;
+            }
+          }
         }
-        MediaCodec codec = audioCodec;
-        if (codec == null) return;
+      }
+    }
+    throw new IllegalStateException("No supported hardware recording encoder", last);
+  }
 
-        ByteBuffer pcm16 = toPcm16(data, pcmEncoding);
-        if (pcm16 == null || pcm16.remaining() == 0) return;
+  public void onPcm(Object source, ByteBuffer data, int rate, int channels, int encoding) {
+    if (!recording
+        || stopping.get()
+        || pcmQueue.remainingCapacity() == 0
+        || data.remaining() > 65536) return;
+    ByteBuffer copy = ByteBuffer.allocate(data.remaining()).order(data.order());
+    copy.put(data.duplicate()).flip();
+    pcmQueue.offer(new Pcm(source, copy, rate, channels, encoding, System.nanoTime()));
+  }
 
-        // Anchor the audio clock to the same base as the video Surface timestamps, then advance by samples.
-        if (audioBasePtsUs < 0) {
-            audioBasePtsUs = Math.max(0L, (System.nanoTime() - baseTimeNs) / 1000L);
-        }
+  public void stop() {
+    stopping.set(true);
+    if (activeRecorder == this) activeRecorder = null;
+    Thread thread = worker;
+    if (thread == null) {
+      release();
+      return;
+    }
+    if (thread != null && thread != Thread.currentThread()) {
+      boolean interrupted = false;
+      while (thread.isAlive()) {
         try {
-            while (pcm16.hasRemaining()) {
-                int inIndex = codec.dequeueInputBuffer(0);
-                if (inIndex < 0) break; // no input buffer free right now — drop the rest this tick
-                ByteBuffer in = codec.getInputBuffer(inIndex);
-                if (in == null) break;
-                in.clear();
-                int chunk = Math.min(in.remaining(), pcm16.remaining());
-                int oldLimit = pcm16.limit();
-                pcm16.limit(pcm16.position() + chunk);
-                in.put(pcm16);
-                pcm16.limit(oldLimit);
-
-                long ptsUs = audioBasePtsUs
-                        + audioFramesSubmitted * 1_000_000L / Math.max(1, audioSampleRate);
-                int bytesPerFrame = audioChannelCount * 2;
-                audioFramesSubmitted += chunk / Math.max(1, bytesPerFrame);
-                codec.queueInputBuffer(inIndex, 0, chunk, ptsUs, 0);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "queue audio failed", e);
+          thread.join();
+        } catch (InterruptedException e) {
+          interrupted = true;
         }
+      }
+      if (interrupted) Thread.currentThread().interrupt();
     }
+  }
 
-    public synchronized void stop() {
-        if (!recording.get()) return;
-        stopRequested.set(true);
+  private void run() {
+    ByteBuffer nativeBuffer = ByteBuffer.allocateDirect(4128).order(ByteOrder.LITTLE_ENDIAN);
+    ByteBuffer micBuffer = ByteBuffer.allocateDirect(9600).order(ByteOrder.nativeOrder());
+    MediaCodec.BufferInfo vi = new MediaCodec.BufferInfo(), ai = new MediaCodec.BufferInfo();
+    boolean videoDone = false, audioDone = false, eos = false, audioEos = false;
+    long deadline = Long.MAX_VALUE;
+    long stopFrame = Long.MAX_VALUE;
+    try {
+      while (!videoDone || !audioDone) {
+        long now = System.nanoTime();
+        if (stopping.get() && !eos) {
+          eos = true;
+          deadline = now + 3000000000L;
+          stopFrame = Math.max(mixer.position(), (now - baseNs) * 48000 / 1000000000L);
+          video.signalEndOfInputStream();
+        }
+        for (int n = 0; n < 32; n++) {
+          Pcm pcm = pcmQueue.poll();
+          if (pcm == null) break;
+          mixer.add(
+              pcm.source,
+              pcm.data,
+              pcm.rate,
+              pcm.channels,
+              pcm.encoding,
+              (pcm.time - baseNs) * 48000 / 1000000000L);
+        }
+        for (int n = 0; n < 64; n++) {
+          nativeBuffer.clear();
+          int bytes = NativeRecordingAudio.read(nativeAudio, nativeBuffer);
+          if (bytes <= 0) break;
+          if (bytes < 32) continue;
+          long source = nativeBuffer.getLong(), time = nativeBuffer.getLong();
+          int rate = nativeBuffer.getInt(), channels = nativeBuffer.getInt();
+          int encoding = nativeBuffer.getInt(), size = nativeBuffer.getInt();
+          if (size < 0 || size != bytes - 32) continue;
+          nativeBuffer.limit(bytes);
+          mixer.add(
+              source,
+              nativeBuffer,
+              rate,
+              channels,
+              encoding,
+              (time - baseNs) * 48000 / 1000000000L);
+        }
+        if (microphone != null) {
+          micBuffer.clear();
+          int read =
+              microphone.read(micBuffer, micBuffer.capacity(), AudioRecord.READ_NON_BLOCKING);
+          if (read < 0) throw new IllegalStateException("Microphone read failed: " + read);
+          micBuffer.position(0);
+          micBuffer.limit(read);
+          mixer.add(
+              microphone,
+              micBuffer,
+              48000,
+              1,
+              AudioFormat.ENCODING_PCM_16BIT,
+              (now - baseNs) * 48000 / 1000000000L);
+        }
+        long available =
+            eos ? stopFrame : Math.max(0, (now - baseNs - 100000000L) * 48000 / 1000000000L);
+        for (int n = 0; n < 8 && !audioEos; n++) {
+          long remaining = available - mixer.position();
+          if (remaining < RecordingAudioMixer.BLOCK && !eos) break;
+          int index = audio.dequeueInputBuffer(0);
+          if (index < 0) break;
+          ByteBuffer in = audio.getInputBuffer(index);
+          if (in == null) throw new IllegalStateException("Missing audio input buffer");
+          in.clear();
+          int frames =
+              (int)
+                  Math.min(
+                      Math.max(0, remaining),
+                      Math.min(RecordingAudioMixer.BLOCK, in.remaining() / 4));
+          long pts = mixer.position() * 1000000L / 48000;
+          mixer.read(in, frames);
+          audioEos = eos && mixer.position() >= stopFrame;
+          audio.queueInputBuffer(
+              index, 0, frames * 4, pts, audioEos ? MediaCodec.BUFFER_FLAG_END_OF_STREAM : 0);
+        }
+        if (!videoDone) videoDone = drain(video, vi, true);
+        if (!audioDone) audioDone = drain(audio, ai, false);
+        if (now > deadline) throw new IllegalStateException("Encoder did not finish");
+        if (!muxerStarted && now - baseNs > 5000000000L)
+          throw new IllegalStateException("No recording frames received");
+        Thread.sleep(3);
+      }
+    } catch (Exception e) {
+      failure = e.getMessage();
+      Timber.tag(TAG).e(e, "Recording failed");
+    } finally {
+      recording = false;
+      if (activeRecorder == this) activeRecorder = null;
+      while (!stopping.get()) {
         try {
-            if (videoCodec != null) videoCodec.signalEndOfInputStream();
-        } catch (Exception ignore) {}
-        if (audioCodec != null) {
-            try {
-                int inIndex = audioCodec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US);
-                if (inIndex >= 0) {
-                    long base = audioBasePtsUs < 0 ? 0L : audioBasePtsUs;
-                    long ptsUs = base
-                            + audioFramesSubmitted * 1_000_000L / Math.max(1, audioSampleRate);
-                    audioCodec.queueInputBuffer(inIndex, 0, 0, ptsUs,
-                            MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                }
-            } catch (Exception ignore) {}
+          Thread.sleep(10);
+        } catch (InterruptedException ignored) {
         }
-
-        // Wait for the drain thread to exit before finishOutput() releases the muxer.
-        Thread t = drainThread;
-        if (t != null) {
-            try {
-                t.join(4_000);
-            } catch (InterruptedException ignore) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        recording.set(false);
-        if (activeRecorder == this) activeRecorder = null;
-        finishOutput();
-        releaseQuietly();
-        Log.i(TAG, "Recording stopped");
+      }
+      release();
     }
+  }
 
-    // ── Draining ─────────────────────────────────────────────────────────────
-
-    private void drainLoop() {
-        MediaCodec.BufferInfo videoInfo = new MediaCodec.BufferInfo();
-        MediaCodec.BufferInfo audioInfo = new MediaCodec.BufferInfo();
-        boolean videoDone = false;
-        boolean audioDone = false;
-
-        long stopDeadlineNs = 0;
-        while (!videoDone) {
-            videoDone = drainEncoder(videoCodec, videoInfo, true);
-            if (audioCodec != null && !audioDone) { // appears partway through (lazy init)
-                audioDone = drainEncoder(audioCodec, audioInfo, false);
-            }
-            synchronized (this) { maybeStartMuxer(); }
-            if (stopRequested.get()) {
-                // Bound the wait for EOS so stop() can finalize without nulling the muxer mid-drain.
-                if (stopDeadlineNs == 0) stopDeadlineNs = System.nanoTime() + 1_500_000_000L;
-                else if (System.nanoTime() > stopDeadlineNs) break;
-            } else if (!videoDone) {
-                try { Thread.sleep(2); } catch (InterruptedException e) { break; }
-            }
+  private boolean drain(MediaCodec codec, MediaCodec.BufferInfo info, boolean isVideo) {
+    for (int n = 0; n < 16; n++) {
+      int index = codec.dequeueOutputBuffer(info, 0);
+      if (index == MediaCodec.INFO_TRY_AGAIN_LATER) return false;
+      if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+        if (isVideo) videoTrack = muxer.addTrack(codec.getOutputFormat());
+        else audioTrack = muxer.addTrack(codec.getOutputFormat());
+        if (!muxerStarted && videoTrack >= 0 && audioTrack >= 0) {
+          muxer.start();
+          muxerStarted = true;
+          for (Sample sample : pending) write(sample.video, sample.data, sample.info);
+          pending.clear();
+          pendingBytes = 0;
         }
-        // After video EOS, flush any remaining audio so trailing sound isn't truncated.
-        if (audioCodec != null) {
-            long deadline = System.nanoTime() + 500_000_000L;
-            while (!audioDone && System.nanoTime() < deadline) {
-                audioDone = drainEncoder(audioCodec, audioInfo, false);
-            }
-        }
-    }
-
-    /** Returns true when this encoder has emitted end-of-stream. */
-    private boolean drainEncoder(MediaCodec codec, MediaCodec.BufferInfo info, boolean video) {
-        if (codec == null) return true;
+      } else if (index >= 0) {
         try {
-            int index = codec.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US);
-            if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                return false;
-            } else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                MediaFormat newFormat = codec.getOutputFormat();
-                synchronized (this) {
-                    // Tracks can only be added before the muxer starts; a late stream is dropped.
-                    if (!muxerStarted && muxer != null) {
-                        if (video) videoTrackIndex = muxer.addTrack(newFormat);
-                        else audioTrackIndex = muxer.addTrack(newFormat);
-                        maybeStartMuxer();
-                    }
-                }
-                return false;
-            } else if (index >= 0) {
-                ByteBuffer out = codec.getOutputBuffer(index);
-                if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                    info.size = 0; // config already consumed by addTrack
-                }
-                if (video && info.size > 0) {
-                    // Rebase Surface timestamps to the recording start (shared origin with audio).
-                    info.presentationTimeUs = Math.max(0L,
-                            info.presentationTimeUs - baseTimeNs / 1000L);
-                }
-                if (out != null && info.size > 0) {
-                    out.position(info.offset);
-                    out.limit(info.offset + info.size);
-                    writeSample(video, out, info);
-                }
-                boolean eos = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
-                codec.releaseOutputBuffer(index, false);
-                return eos;
+          ByteBuffer data = codec.getOutputBuffer(index);
+          if (data != null
+              && info.size > 0
+              && (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+            if (isVideo)
+              info.presentationTimeUs = Math.max(0, info.presentationTimeUs - baseNs / 1000);
+            data.position(info.offset);
+            data.limit(info.offset + info.size);
+            if (muxerStarted) write(isVideo, data, info);
+            else {
+              if (pendingBytes + info.size > 8 * 1024 * 1024)
+                throw new IllegalStateException("Encoder startup buffer full");
+              ByteBuffer copy = ByteBuffer.allocate(info.size);
+              copy.put(data).flip();
+              MediaCodec.BufferInfo saved = new MediaCodec.BufferInfo();
+              saved.set(0, info.size, info.presentationTimeUs, info.flags);
+              pending.add(new Sample(isVideo, copy, saved));
+              pendingBytes += info.size;
             }
-        } catch (IllegalStateException e) {
-            // Codec released underneath us during stop().
-            return true;
-        }
-        return false;
-    }
-
-    private synchronized void writeSample(boolean video, ByteBuffer data,
-                                          MediaCodec.BufferInfo info) {
-        int track = video ? videoTrackIndex : audioTrackIndex;
-        if (muxerStarted) {
-            if (track < 0) return; // stream not in the muxer (e.g. late audio) — drop, don't buffer
-            try {
-                muxer.writeSampleData(track, data, info);
-            } catch (Exception e) {
-                Log.e(TAG, "writeSampleData failed", e);
-            }
-            return;
-        }
-        // Muxer not started yet: hold a copy until both tracks are added.
-        ByteBuffer copy = ByteBuffer.allocate(info.size);
-        copy.put(data);
-        copy.flip();
-        MediaCodec.BufferInfo ci = new MediaCodec.BufferInfo();
-        ci.set(0, info.size, info.presentationTimeUs, info.flags);
-        pending.add(new PendingSample(video, copy, ci));
-    }
-
-    /** Start the muxer once the video track is known; include audio if it has appeared. */
-    private void maybeStartMuxer() {
-        if (muxerStarted || muxer == null) return;
-        if (videoTrackIndex < 0) return;
-        // If audio exists, wait for its track; if none has appeared, give it a grace window first.
-        boolean audioTrackPending = audioCodec != null && audioTrackIndex < 0;
-        boolean audioMightStillAppear = audioCodec == null && System.nanoTime() < audioGraceDeadlineNs;
-        if (audioTrackPending || audioMightStillAppear) return;
-        try {
-            muxer.start();
-            muxerStarted = true;
-            for (PendingSample s : pending) {
-                int track = s.video ? videoTrackIndex : audioTrackIndex;
-                if (track >= 0) muxer.writeSampleData(track, s.data, s.info);
-            }
-            pending.clear();
-        } catch (Exception e) {
-            Log.e(TAG, "muxer.start failed", e);
-        }
-    }
-
-    // ── Audio helpers ────────────────────────────────────────────────────────
-
-    private synchronized void ensureAudioEncoder(int sampleRate, int channelCount) throws Exception {
-        if (audioCodec != null || sampleRate <= 0 || channelCount <= 0) return;
-        channelCount = Math.min(channelCount, 2); // AAC-LC: encode stereo at most
-        MediaFormat fmt = MediaFormat.createAudioFormat(AUDIO_MIME, sampleRate, channelCount);
-        fmt.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
-        fmt.setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE);
-        fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16 * 1024);
-        MediaCodec codec = MediaCodec.createEncoderByType(AUDIO_MIME);
-        codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        codec.start();
-        audioSampleRate = sampleRate;
-        audioChannelCount = channelCount;
-        audioCodec = codec;
-    }
-
-    /** Convert source PCM to interleaved 16-bit little-endian (the AAC encoder's input format). */
-    private static ByteBuffer toPcm16(ByteBuffer src, int pcmEncoding) {
-        int pos = src.position();
-        try {
-            if (pcmEncoding == AudioFormat.ENCODING_PCM_16BIT) {
-                if (src.order() == ByteOrder.LITTLE_ENDIAN) {
-                    ByteBuffer out = ByteBuffer.allocate(src.remaining());
-                    out.put(src.duplicate());
-                    out.flip();
-                    return out.order(ByteOrder.LITTLE_ENDIAN);
-                }
-                // Big-endian source: read shorts in source order, write little-endian.
-                ByteBuffer s = src.duplicate();
-                s.order(src.order());
-                int shorts = s.remaining() / 2;
-                ByteBuffer out = ByteBuffer.allocate(shorts * 2).order(ByteOrder.LITTLE_ENDIAN);
-                for (int i = 0; i < shorts; i++) out.putShort(s.getShort());
-                out.flip();
-                return out;
-            } else if (pcmEncoding == AudioFormat.ENCODING_PCM_FLOAT) {
-                ByteBuffer s = src.duplicate();
-                s.order(src.order());
-                int floats = s.remaining() / 4;
-                ByteBuffer out = ByteBuffer.allocate(floats * 2).order(ByteOrder.LITTLE_ENDIAN);
-                for (int i = 0; i < floats; i++) {
-                    float f = s.getFloat();
-                    int v = Math.round(f * 32767f);
-                    if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
-                    out.putShort((short) v);
-                }
-                out.flip();
-                return out;
-            } else if (pcmEncoding == AudioFormat.ENCODING_PCM_8BIT) {
-                ByteBuffer s = src.duplicate();
-                int n = s.remaining();
-                ByteBuffer out = ByteBuffer.allocate(n * 2).order(ByteOrder.LITTLE_ENDIAN);
-                for (int i = 0; i < n; i++) {
-                    int u = s.get() & 0xFF;       // unsigned 8-bit
-                    out.putShort((short) ((u - 128) << 8));
-                }
-                out.flip();
-                return out;
-            }
-            return null;
+          }
+          if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) return true;
         } finally {
-            src.position(pos);
+          codec.releaseOutputBuffer(index, false);
         }
+      }
     }
+    return false;
+  }
 
-    private static int estimateVideoBitrate(int width, int height, int fps) {
-        // ~0.07 bits per pixel·frame, clamped to a sane window for shareable clips.
-        long bps = (long) (width * (long) height * fps * 0.07);
-        return (int) Math.max(4_000_000L, Math.min(bps, 50_000_000L));
+  private void write(boolean isVideo, ByteBuffer data, MediaCodec.BufferInfo info) {
+    muxer.writeSampleData(isVideo ? videoTrack : audioTrack, data, info);
+    if (isVideo) videoWritten = true;
+  }
+
+  private void release() {
+    if (nativeAudio >= 0) {
+      NativeRecordingAudio.close(nativeAudio);
+      nativeAudio = -1;
     }
-
-    // ── Output (WinNative/Recordings in the app's external files dir) ────────
-
-    /** /sdcard/WinNative/Recordings (alongside logs/profiles/saves; needs MANAGE_EXTERNAL_STORAGE). */
-    private File recordingsDir() {
-        File ext = Environment.getExternalStorageDirectory();
-        if (ext != null) return new File(ext, "WinNative/Recordings");
-        File base = appContext.getExternalFilesDir(null);
-        if (base == null) base = appContext.getFilesDir();
-        return new File(base, "Recordings");
+    if (microphone != null) {
+      try {
+        microphone.stop();
+      } catch (Exception ignored) {
+      }
+      microphone.release();
+      microphone = null;
     }
-
-    private boolean openOutput() {
-        String name = "WinNative_" + System.currentTimeMillis() + ".mp4";
+    if (muxer != null) {
+      boolean valid = muxerStarted && videoWritten;
+      try {
+        if (muxerStarted) muxer.stop();
+      } catch (Exception e) {
+        valid = false;
+        failure = "Could not finalize recording";
+      }
+      try {
+        muxer.release();
+      } catch (Exception ignored) {
+      }
+      muxer = null;
+      if (valid) {
+        savedFile = output;
+        MediaScannerConnection.scanFile(
+            context, new String[] {output.getPath()}, new String[] {"video/mp4"}, null);
+      }
+    }
+    for (MediaCodec codec : new MediaCodec[] {video, audio}) {
+      if (codec != null) {
         try {
-            File dir = recordingsDir();
-            if (!dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) {
-                Log.e(TAG, "Could not create " + dir);
-                return false;
-            }
-            outputFile = new File(dir, name);
-            muxer = new MediaMuxer(outputFile.getAbsolutePath(),
-                    MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
-            // Must be set before the muxer starts; rotates playback to upright on any player.
-            if (orientationHint != 0) muxer.setOrientationHint(orientationHint);
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "openOutput failed", e);
-            return false;
+          codec.stop();
+        } catch (Exception ignored) {
         }
-    }
-
-    private void finishOutput() {
-        if (muxer != null) {
-            try {
-                if (muxerStarted) muxer.stop();
-            } catch (Exception ignore) {}
-            try {
-                muxer.release();
-            } catch (Exception ignore) {}
-            muxer = null;
+        try {
+          codec.release();
+        } catch (Exception ignored) {
         }
-        muxerStarted = false;
-        // Make the new file visible to media scanners / file managers right away.
-        if (outputFile != null && outputFile.length() > 0) {
-            try {
-                MediaScannerConnection.scanFile(appContext,
-                        new String[]{outputFile.getAbsolutePath()}, new String[]{"video/mp4"}, null);
-            } catch (Exception ignore) {}
-        }
-        outputFile = null;
+      }
     }
-
-    /** Release output without finalizing, and delete the empty file — used when start() fails. */
-    private void abortOutput() {
-        if (muxer != null) {
-            try { muxer.release(); } catch (Exception ignore) {}
-            muxer = null;
-        }
-        muxerStarted = false;
-        try {
-            if (outputFile != null) //noinspection ResultOfMethodCallIgnored
-                outputFile.delete();
-        } catch (Exception ignore) {}
-        outputFile = null;
+    video = null;
+    audio = null;
+    if (surface != null) {
+      surface.release();
+      surface = null;
     }
-
-    private void releaseQuietly() {
-        try {
-            if (videoCodec != null) videoCodec.stop();
-        } catch (Exception ignore) {}
-        try {
-            if (videoCodec != null) videoCodec.release();
-        } catch (Exception ignore) {}
-        videoCodec = null;
-        try {
-            if (inputSurface != null) inputSurface.release();
-        } catch (Exception ignore) {}
-        inputSurface = null;
-        try {
-            if (audioCodec != null) audioCodec.stop();
-        } catch (Exception ignore) {}
-        try {
-            if (audioCodec != null) audioCodec.release();
-        } catch (Exception ignore) {}
-        audioCodec = null;
-        drainThread = null;
-        videoTrackIndex = -1;
-        audioTrackIndex = -1;
-        audioFramesSubmitted = 0;
-        audioBasePtsUs = -1;
-    }
+    if (savedFile == null && output != null) output.delete();
+    pending.clear();
+    pcmQueue.clear();
+  }
 }

@@ -1,4 +1,5 @@
 #include <dlfcn.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -29,6 +30,10 @@ static void *align_page(void *p) {
 }
 
 static void bridge_init(void) {
+    if (getenv("WN_AUDIO_SYSTEM_NAMESPACE")) {
+        g_real_aaudio = dlopen("/system/lib64/libaaudio.so", RTLD_NOW | RTLD_LOCAL);
+        return;
+    }
     if (android_get_device_api_level() < 28) { LOGE("api < 28"); return; }
     dlopen_t real_dlopen = (dlopen_t) dlsym(RTLD_DEFAULT, "dlopen");
     if (!real_dlopen) { LOGE("no dlopen"); return; }
@@ -64,24 +69,24 @@ static void bridge_init(void) {
 }
 
 typedef long (*genfn_t)(long, long, long, long, long, long, long, long);
-static void *resolve_sym(const char *name) {
+void *wn_resolve_aaudio(const char *name) {
     pthread_once(&g_once, bridge_init);
     return g_real_aaudio ? dlsym(g_real_aaudio, name) : NULL;
 }
 
 #define FWD(name) \
+static genfn_t fn_##name; \
+static pthread_once_t once_##name = PTHREAD_ONCE_INIT; \
+static void resolve_##name(void) { fn_##name = (genfn_t)wn_resolve_aaudio(#name); } \
 __attribute__((visibility("default"))) \
 long name(long a, long b, long c, long d, long e, long f, long g, long h) { \
-    static genfn_t fn; static int resolved; \
-    if (!resolved) { fn = (genfn_t) resolve_sym(#name); resolved = 1; } \
-    if (!fn) { LOGE("unresolved %s", #name); return -1; } \
-    return fn(a, b, c, d, e, f, g, h); \
+    pthread_once(&once_##name, resolve_##name); \
+    if (!fn_##name) { LOGE("unresolved %s", #name); return -1; } \
+    return fn_##name(a, b, c, d, e, f, g, h); \
 }
-FWD(AAudioStreamBuilder_delete)
-FWD(AAudioStreamBuilder_openStream)
 FWD(AAudioStreamBuilder_setBufferCapacityInFrames)
 FWD(AAudioStreamBuilder_setChannelCount)
-FWD(AAudioStreamBuilder_setDataCallback)
+
 FWD(AAudioStreamBuilder_setDirection)
 FWD(AAudioStreamBuilder_setErrorCallback)
 FWD(AAudioStreamBuilder_setFormat)
@@ -90,7 +95,7 @@ FWD(AAudioStreamBuilder_setPerformanceMode)
 FWD(AAudioStreamBuilder_setSampleRate)
 FWD(AAudioStreamBuilder_setSharingMode)
 FWD(AAudioStreamBuilder_setUsage)
-FWD(AAudioStream_close)
+
 FWD(AAudioStream_getBufferCapacityInFrames)
 FWD(AAudioStream_getBufferSizeInFrames)
 FWD(AAudioStream_getChannelCount)

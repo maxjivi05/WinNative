@@ -1290,6 +1290,8 @@ static bool create_swapchain(VkRenderer* r, uint32_t fallback_width, uint32_t fa
     r->surface_extent = surface_extent;
     r->swapchain_extent = extent;
     r->swapchain_transform = pre_transform;
+    __atomic_store_n(&r->record_source_size, ((uint64_t)extent.width << 32) | extent.height, __ATOMIC_RELAXED);
+    __atomic_store_n(&r->record_source_transform, (uint32_t)pre_transform, __ATOMIC_RELAXED);
     // Only possible for unsupported mirrored transforms; avoid an Adreno present loop
     // while still letting normal rotation changes recreate the swapchain.
     r->ignore_suboptimal = r->caps.is_adreno && (pre_transform != caps.currentTransform);
@@ -1560,6 +1562,7 @@ static bool create_record_swapchain(VkRenderer* r) {
     aci.window = rec->anw;
     if (vkCreateAndroidSurfaceKHR(r->instance, &aci, NULL, &rec->surface) != VK_SUCCESS) {
         VK_LOGE("record: vkCreateAndroidSurfaceKHR failed");
+        destroy_record_swapchain(r);
         return false;
     }
 
@@ -1595,6 +1598,9 @@ static bool create_record_swapchain(VkRenderer* r) {
     }
     free(fmts);
     rec->format = chosen.format;
+    VkFormatProperties properties;
+    vkGetPhysicalDeviceFormatProperties(r->physical_device, rec->format, &properties);
+    if (!(properties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT)) goto fail;
 
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR; // prefer MAILBOX below
     uint32_t pm_count = 0;
@@ -1640,7 +1646,7 @@ static bool create_record_swapchain(VkRenderer* r) {
         sci.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; // Record UI renders onto the rec image
     } else if (rec->ui_enabled) {
         VK_LOGW("record: encoder surface can't be a color attachment; UI overlay disabled");
-        rec->ui_enabled = false;
+        goto fail;
     }
     sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     sci.preTransform = pre;
@@ -1675,8 +1681,8 @@ static bool create_record_swapchain(VkRenderer* r) {
     VK_LOGI("record: mirror swapchain %ux%u images=%u", extent.width, extent.height, got);
 
     if (rec->ui_enabled && !build_record_ui_resources(r)) {
-        VK_LOGW("record: UI composite unavailable; capturing game only");
-        rec->ui_enabled = false;
+        VK_LOGW("record: overlay composite unavailable");
+        goto fail;
     }
     return true;
 
@@ -2760,7 +2766,10 @@ static bool record_and_submit_frame(VkRenderer* r) {
     }
 
     // Sample the render rate down to the requested fps on a fixed grid, then acquire an encoder
-    // image to blit this frame into (bounded timeout so a busy encoder skips rather than stalls).
+    // image without waiting for a busy encoder.
+    if (r->rec.active && (r->rec.source_extent.width != r->swapchain_extent.width
+            || r->rec.source_extent.height != r->swapchain_extent.height
+            || r->rec.source_transform != r->swapchain_transform)) r->rec.disabled = true;
     bool rec_this_frame = false;
     uint32_t rec_index = 0;
     bool rec_due = true;
@@ -2779,12 +2788,12 @@ static bool record_and_submit_frame(VkRenderer* r) {
         }
     }
     if (rec_due && r->rec.active && !r->rec.disabled && r->rec.swapchain) {
-        VkResult racq = vkAcquireNextImageKHR(r->device, r->rec.swapchain, 16000000ULL,
+        VkResult racq = vkAcquireNextImageKHR(r->device, r->rec.swapchain, 0,
                                               r->rec.acquire[r->frame_index], VK_NULL_HANDLE, &rec_index);
         if (racq == VK_SUCCESS || racq == VK_SUBOPTIMAL_KHR) {
             rec_this_frame = true;
             if (r->rec.captured++ == 0) VK_LOGI("record: first frame captured (rec_index=%u)", rec_index);
-        } else if (racq == VK_ERROR_OUT_OF_DATE_KHR) {
+        } else if (racq < 0) {
             r->rec.disabled = true;
             VK_LOGW("record: mirror swapchain out of date; capture disabled");
         } else if ((r->rec.skipped++ % 120) == 0) {
@@ -2974,8 +2983,8 @@ static bool record_and_submit_frame(VkRenderer* r) {
         VkImage rec_img  = r->rec.images[rec_index];
         vkr_image_barrier(f->cmd, disp_img,
                           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
         vkr_image_barrier(f->cmd, rec_img,
                           VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -3440,7 +3449,7 @@ JNIEXPORT void JNICALL JNI_FN(nativeSurfaceChanged)(JNIEnv* env, jclass clazz, j
     pthread_mutex_unlock(&r->render_mutex);
 }
 
-JNIEXPORT jboolean JNICALL JNI_FN(nativeStartRecording)(JNIEnv* env, jclass clazz, jlong handle, jobject surface, jint fps, jboolean recordUI) {
+JNIEXPORT jboolean JNICALL JNI_FN(nativeStartRecording)(JNIEnv* env, jclass clazz, jlong handle, jobject surface, jint fps, jboolean recordUI, jint sourceWidth, jint sourceHeight, jint orientation) {
     (void)clazz;
     VkRenderer* r = (VkRenderer*)(intptr_t)handle;
     if (!r || !surface) return JNI_FALSE;
@@ -3450,6 +3459,23 @@ JNIEXPORT jboolean JNICALL JNI_FN(nativeStartRecording)(JNIEnv* env, jclass claz
     jboolean ok = JNI_FALSE;
     do {
         if (r->rec.active) { ok = JNI_TRUE; break; }
+        if (!r->device || !r->surface || !r->swapchain) break;
+        int current_orientation = 0;
+        switch (r->swapchain_transform) {
+            case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: current_orientation = 270; break;
+            case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: current_orientation = 180; break;
+            case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: current_orientation = 90; break;
+            default: break;
+        }
+        if (sourceWidth != (jint)r->swapchain_extent.width || sourceHeight != (jint)r->swapchain_extent.height
+                || orientation != current_orientation) break;
+        VkSurfaceCapabilitiesKHR caps;
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(r->physical_device, r->surface, &caps) != VK_SUCCESS
+                || !(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) break;
+        VkFormatProperties source_props;
+        vkGetPhysicalDeviceFormatProperties(r->physical_device, r->swapchain_format, &source_props);
+        if (!(source_props.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT)
+                || !(source_props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) break;
 
         ANativeWindow* anw = ANativeWindow_fromSurface(env, surface);
         if (!anw) { VK_LOGE("record: ANativeWindow_fromSurface failed"); break; }
@@ -3468,6 +3494,8 @@ JNIEXPORT jboolean JNICALL JNI_FN(nativeStartRecording)(JNIEnv* env, jclass claz
                 VK_LOGE("record: display swapchain recreate failed");
                 r->record_blit_src = false;
                 ANativeWindow_release(r->rec.anw); r->rec.anw = NULL;
+                destroy_swapchain(r);
+                create_swapchain(r, r->surface_extent.width, r->surface_extent.height);
                 break;
             }
         }
@@ -3484,6 +3512,8 @@ JNIEXPORT jboolean JNICALL JNI_FN(nativeStartRecording)(JNIEnv* env, jclass claz
             break;
         }
 
+        r->rec.source_extent = r->swapchain_extent;
+        r->rec.source_transform = r->swapchain_transform;
         r->rec.active = true;
         r->rec.disabled = false;
         r->rec.captured = 0;
@@ -3501,6 +3531,16 @@ JNIEXPORT jboolean JNICALL JNI_FN(nativeStartRecording)(JNIEnv* env, jclass claz
     pthread_mutex_unlock(&r->scene_mutex);
     pthread_mutex_unlock(&r->render_mutex);
     return ok;
+}
+
+JNIEXPORT jboolean JNICALL JNI_FN(nativeIsRecordingCaptureActive)(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    VkRenderer* r = (VkRenderer*)(intptr_t)handle;
+    if (!r) return JNI_FALSE;
+    pthread_mutex_lock(&r->render_mutex);
+    bool active = r->rec.active && !r->rec.disabled;
+    pthread_mutex_unlock(&r->render_mutex);
+    return active ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeStopRecording)(JNIEnv* env, jclass clazz, jlong handle) {
@@ -3547,11 +3587,12 @@ JNIEXPORT void JNICALL JNI_FN(nativeUpdateRecordUITexture)(JNIEnv* env, jclass c
         if (r->rec.ui_texture == NULL
             || r->rec.ui_texture->width != (uint32_t)w
             || r->rec.ui_texture->height != (uint32_t)h) {
-            if (r->rec.ui_texture) { vkr_texture_destroy(r, r->rec.ui_texture); r->rec.ui_texture = NULL; }
+            if (r->rec.ui_texture) { r->rec.disabled = true; pthread_mutex_unlock(&r->render_mutex); return; }
             r->rec.ui_texture = vkr_texture_create_uploaded(r, (uint32_t)w, (uint32_t)h, data, bytes, (uint32_t)w);
+            if (!r->rec.ui_texture) r->rec.disabled = true;
         } else {
-            vkr_texture_update(r, r->rec.ui_texture, (uint32_t)w, (uint32_t)h, data, bytes,
-                               (uint32_t)w, 0, 0, (uint32_t)w, (uint32_t)h);
+            if (!vkr_texture_update(r, r->rec.ui_texture, (uint32_t)w, (uint32_t)h, data, bytes,
+                               (uint32_t)w, 0, 0, (uint32_t)w, (uint32_t)h)) r->rec.disabled = true;
         }
     }
     pthread_mutex_unlock(&r->render_mutex);
@@ -3562,13 +3603,17 @@ JNIEXPORT void JNICALL JNI_FN(nativeUpdateRecordUITexture)(JNIEnv* env, jclass c
 JNIEXPORT jint JNICALL JNI_FN(nativeGetRecordWidth)(JNIEnv* env, jclass clazz, jlong handle) {
     (void)env; (void)clazz;
     VkRenderer* r = (VkRenderer*)(intptr_t)handle;
-    return (r != NULL) ? (jint)r->swapchain_extent.width : 0;
+    if (!r) return 0;
+    uint64_t size = __atomic_load_n(&r->record_source_size, __ATOMIC_RELAXED);
+    return (jint)(size >> 32);
 }
 
 JNIEXPORT jint JNICALL JNI_FN(nativeGetRecordHeight)(JNIEnv* env, jclass clazz, jlong handle) {
     (void)env; (void)clazz;
     VkRenderer* r = (VkRenderer*)(intptr_t)handle;
-    return (r != NULL) ? (jint)r->swapchain_extent.height : 0;
+    if (!r) return 0;
+    uint64_t size = __atomic_load_n(&r->record_source_size, __ATOMIC_RELAXED);
+    return (jint)(size & UINT32_MAX);
 }
 
 // Clockwise degrees to rotate the recording for upright playback (undoes the display preTransform).
@@ -3576,7 +3621,8 @@ JNIEXPORT jint JNICALL JNI_FN(nativeGetRecordOrientationHint)(JNIEnv* env, jclas
     (void)env; (void)clazz;
     VkRenderer* r = (VkRenderer*)(intptr_t)handle;
     if (r == NULL) return 0;
-    switch (r->swapchain_transform) {
+    uint32_t transform = __atomic_load_n(&r->record_source_transform, __ATOMIC_RELAXED);
+    switch (transform) {
         case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:  return 270;
         case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: return 180;
         case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: return 90;
@@ -3590,6 +3636,7 @@ JNIEXPORT void JNICALL JNI_FN(nativeSurfaceDestroyed)(JNIEnv* env, jclass clazz,
     if (!r) return;
 
     lifecycle_begin(r);
+    if (r->rec.active) r->rec.disabled = true;
 
     if (r->device) vkDeviceWaitIdle(r->device);
     destroy_sgsr1_resources(r);
