@@ -150,6 +150,7 @@ public class VulkanRenderer
     private boolean directCompositionActive = false;
     private boolean directCompositionUnavailable = false;
     private int directCompositionFailures = 0;
+    private String directCompositionLastBlocker;
     private long dcLastAhb = 0L;
     private final int[] dcLastGeometry = new int[8];
     private final int[] dcGeometry = new int[8];
@@ -717,15 +718,23 @@ public class VulkanRenderer
         directCompositionListener = listener;
     }
 
-    private boolean directCompositionSceneEligible() {
-        if (swapRB || recording || magnifierUIActive) return false;
-        if (frameGenerationRequested || disFrameGenerationRequested) return false;
-        if (requestedScaleFilter != SCALE_FILTER_OFF) return false;
-        if (effectComposer.hasEffects()) return false;
+    private String directCompositionBlocker() {
+        if (frameGenerationRequested || disFrameGenerationRequested) return "frame generation";
+        if (recording) return "recording";
+        if (swapRB) return "surface effect";
+        if (effectComposer.hasEffects()) return "screen effects";
+        if (requestedScaleFilter != SCALE_FILTER_OFF) return "scale filter";
+        if (magnifierUIActive) return "magnifier";
         boolean identity = magnifierEnabled
                 ? (magnifierZoom <= 1f && !screenOffsetYRelativeToCursor)
                 : fullscreen;
-        return identity;
+        return identity ? null : "scene transform";
+    }
+
+    private void logDirectCompositionBlocker(String blocker) {
+        if (java.util.Objects.equals(blocker, directCompositionLastBlocker)) return;
+        directCompositionLastBlocker = blocker;
+        if (blocker != null) Log.i(TAG, "Direct composition yielding to " + blocker);
     }
 
     private Drawable findDirectCompositionWindow() {
@@ -782,7 +791,13 @@ public class VulkanRenderer
 
     private boolean presentDirectComposition() {
         if (!directCompositionEnabled || directCompositionUnavailable
-                || surfaceWidth <= 0 || surfaceHeight <= 0 || !directCompositionSceneEligible()) {
+                || surfaceWidth <= 0 || surfaceHeight <= 0) {
+            releaseDirectComposition();
+            return false;
+        }
+        String blocker = directCompositionBlocker();
+        logDirectCompositionBlocker(blocker);
+        if (blocker != null) {
             releaseDirectComposition();
             return false;
         }
@@ -1191,7 +1206,7 @@ public class VulkanRenderer
         if (nativeHandle != 0) nativeSetPresentMode(nativeHandle, mode);
     }
 
-    private boolean frameGenerationRequested = false;
+    private volatile boolean frameGenerationRequested = false;
     private String frameGenerationShaderCache = null;
     private int frameGenerationMultiplier = 2;
     private int frameGenerationTargetRate = 0;
@@ -1201,6 +1216,7 @@ public class VulkanRenderer
     public void setFrameGenerationEnabled(boolean enabled) {
         frameGenerationRequested = enabled;
         if (nativeHandle != 0) nativeSetFrameGenerationEnabled(nativeHandle, enabled);
+        requestRenderCoalesced(WAKE_SETTING);
     }
 
     public void setFrameGenerationShaders(String cachePath) {
@@ -1234,13 +1250,14 @@ public class VulkanRenderer
         }
     }
 
-    private boolean disFrameGenerationRequested = false;
+    private volatile boolean disFrameGenerationRequested = false;
     private int disFrameGenerationScale = 180;
     private int disFrameGenerationTargetFps = 0;
 
     public void setDisFrameGenerationEnabled(boolean enabled) {
         disFrameGenerationRequested = enabled;
         if (nativeHandle != 0) nativeSetDisFrameGenerationEnabled(nativeHandle, enabled);
+        requestRenderCoalesced(WAKE_SETTING);
     }
 
     public void setDisFrameGenerationScale(int scalePercent) {

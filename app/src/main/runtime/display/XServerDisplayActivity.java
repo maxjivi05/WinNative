@@ -9607,7 +9607,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         File gamenativeMarker = new File(rootDir, "usr/lib/.wrapper_gamenative");
         File wrapperStateMarker = new File(rootDir, "usr/lib/.wrapper_state");
         String wantedWrapperState =
-                (wantLeegao ? "leegao" : wantGamenative ? "gamenative" : "stock")
+                (wantLeegao ? "leegao" : wantGamenative ? "gamenative" : "stock-" + Container.WRAPPER_REVISION)
                         + ":" + AppUtils.getVersionCode(this);
         String installedWrapperState = "";
         if (wrapperStateMarker.isFile()) {
