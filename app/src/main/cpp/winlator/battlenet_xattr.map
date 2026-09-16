@@ -3,6 +3,8 @@ LIBC {
         setxattr;
         lsetxattr;
         fsetxattr;
+        getxattr;
+        lgetxattr;
         fgetxattr;
         fremovexattr;
         chmod;
@@ -10,6 +12,8 @@ LIBC {
         stat;
         lstat;
         fstat;
+        fstatat;
+        access;
     local:
         *;
 };

@@ -175,6 +175,37 @@ static BOOL client_running(void) {
     CloseHandle(snapshot); return found;
 }
 
+static BOOL game_running(void) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return FALSE;
+    PROCESSENTRY32W entry; entry.dwSize = sizeof(entry); BOOL found = FALSE;
+    for (BOOL next = Process32FirstW(snapshot, &entry); next; next = Process32NextW(snapshot, &entry)) {
+        if (!_wcsicmp(entry.szExeFile, L"WoWClassic.exe")) { found = TRUE; break; }
+    }
+    CloseHandle(snapshot); return found;
+}
+
+typedef struct {
+    WCHAR executable[MAX_PATH];
+    WCHAR command[32767];
+} launch_request;
+
+static DWORD WINAPI auto_play(LPVOID value) {
+    launch_request *request = value;
+    Sleep(60000);
+    if (!game_running()) {
+        WCHAR command[32767];
+        wcscpy(command, request->command);
+        STARTUPINFOW startup = {0}; startup.cb = sizeof(startup); PROCESS_INFORMATION process = {0};
+        if (CreateProcessW(request->executable, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process)) {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, request);
+    return 0;
+}
+
 static BOOL append_arg(WCHAR *command, size_t *used, const WCHAR *arg) {
     size_t n = 0; if (*used + wcslen(arg) * 2 + 4 >= 32767) return FALSE;
     if (*used) command[(*used)++] = L' ';
@@ -216,9 +247,26 @@ int wmain(int argc, WCHAR **argv) {
     for (int i = 1; i < argc && valid; i++) valid = append_arg(command, &used, argv[i]);
     STARTUPINFOW startup = {0}; startup.cb = sizeof(startup); PROCESS_INFORMATION process = {0};
     BOOL launched = valid && CreateProcessW(argv[1], command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process);
-    HeapFree(GetProcessHeap(), 0, command);
-    if (!launched) { CloseHandle(ready); if (owner) { status("launch_failed"); ReleaseMutex(mutex); } CloseHandle(mutex); return 6; }
+    if (!launched) {
+        HeapFree(GetProcessHeap(), 0, command);
+        CloseHandle(ready);
+        if (owner) { status("launch_failed"); ReleaseMutex(mutex); }
+        CloseHandle(mutex);
+        return 6;
+    }
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    BOOL launch_game = FALSE;
+    for (int i = 2; i < argc; i++) if (wcsstr(argv[i], L"launch ")) launch_game = TRUE;
+    if (launch_game) {
+        launch_request *request = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*request));
+        if (request) {
+            wcsncpy(request->executable, argv[1], MAX_PATH - 1);
+            wcscpy(request->command, command);
+            HANDLE thread = CreateThread(NULL, 0, auto_play, request, 0, NULL);
+            if (thread) CloseHandle(thread); else HeapFree(GetProcessHeap(), 0, request);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, command);
     if (!owner || !has_account) { CloseHandle(ready); if (owner) ReleaseMutex(mutex); CloseHandle(mutex); return 0; }
     ULONGLONG absent_since = 0;
     for (;;) {
