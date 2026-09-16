@@ -25,4 +25,11 @@ class BattleNetBuildInfoTest {
     @Test fun doesNotMistakeAnotherProductOrInactiveBuildForInstalled() {
         assertNull(BattleNetBuildInfo.activeKey(header + "0|$key|wow\n1|$key|wow_classic", "wow"))
     }
+
+    @Test fun comparesLatestBuildAgainstDiskMetadata() {
+        val text = header + "1|$key|wow\n"
+        assertTrue(BattleNetBuildInfo.isCurrent(text, "wow", key.uppercase()))
+        assertFalse(BattleNetBuildInfo.isCurrent(text, "wow", "11111111111111111111111111111111"))
+        assertFalse(BattleNetBuildInfo.isCurrent("", "wow", key))
+    }
 }

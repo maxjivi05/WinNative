@@ -216,6 +216,15 @@ add_library(netshim SHARED
 target_compile_options(netshim PRIVATE -Wall -Wextra)
 target_link_libraries(netshim log)
 
+add_library(battlenet_xattr SHARED
+        winlator/battlenet_xattr.c
+)
+target_compile_options(battlenet_xattr PRIVATE -Wall -Wextra -fvisibility=hidden)
+target_link_options(battlenet_xattr PRIVATE
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/winlator/battlenet_xattr.map"
+)
+target_link_libraries(battlenet_xattr dl)
+
 add_library(fakeinput SHARED
         winlator/fakeinput.cpp
 )

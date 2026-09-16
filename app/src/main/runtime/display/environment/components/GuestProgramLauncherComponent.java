@@ -1123,6 +1123,15 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
           + "and titles that derive a hardware id from the MAC (e.g. Brawlhalla) will be rejected");
     }
 
+    if (this.envVars != null && "1".equals(this.envVars.get("WN_BATTLENET_XATTR_COMPAT"))) {
+      File xattrShim = ensureImageFsNativeLibrary(context, imageFs, "libbattlenet_xattr.so");
+      if (xattrShim != null && xattrShim.exists()) {
+        ld_preload = ld_preload.isEmpty()
+            ? xattrShim.getAbsolutePath()
+            : xattrShim.getAbsolutePath() + ":" + ld_preload;
+      }
+    }
+
     String effectiveAudioDriver = shortcut != null
         ? shortcut.getSettingExtra("audioDriver", container.getAudioDriver())
         : container.getAudioDriver();

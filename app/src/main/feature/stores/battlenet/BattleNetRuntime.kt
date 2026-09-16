@@ -57,6 +57,9 @@ object BattleNetRuntime {
         val helper = File(shared.root, "battlenet-session.exe")
         val bytes = context.assets.open("winnative/battlenet-session.exe").use { it.readBytes() }
         if (!helper.isFile || !helper.readBytes().contentEquals(bytes)) atomicWrite(helper, bytes)
+        val preload = File(shared.root, "libbattlenet_xattr_x86_64.so")
+        val preloadBytes = context.assets.open("winnative/battlenet/libbattlenet_xattr_x86_64.so").use { it.readBytes() }
+        if (!preload.isFile || !preload.readBytes().contentEquals(preloadBytes)) atomicWrite(preload, preloadBytes)
     }
 
     suspend fun saveCredential(context: Context, credential: BattleNetCredential) = withContext(Dispatchers.IO) {

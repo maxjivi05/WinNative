@@ -31,4 +31,7 @@ internal object BattleNetBuildInfo {
         }
         return keys.singleOrNull()?.takeIf { it.matches(Regex("[a-fA-F0-9]{32}")) }?.lowercase(java.util.Locale.ROOT)
     }
+
+    fun isCurrent(text: String, product: String, latestKey: String): Boolean =
+        activeKey(text, product) == latestKey.lowercase(java.util.Locale.ROOT)
 }

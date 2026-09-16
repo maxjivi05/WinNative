@@ -61,6 +61,24 @@ task checkSubmodules {
 
 preBuild.dependsOn(checkSubmodules)
 
+def battleNetXattrAssets = layout.buildDirectory.dir("generated/battlenetAssets")
+def compileBattleNetXattrX86 = tasks.register("compileBattleNetXattrX86", Exec) {
+    def output = battleNetXattrAssets.map { it.file("winnative/battlenet/libbattlenet_xattr_x86_64.so") }
+    inputs.file("src/main/cpp/winlator/battlenet_xattr.c")
+    inputs.file("src/main/cpp/winlator/battlenet_xattr.map")
+    outputs.file(output)
+    doFirst { output.get().asFile.parentFile.mkdirs() }
+    executable providers.environmentVariable("ANDROID_HOME")
+            .map { "${it}/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android28-clang" }
+            .get()
+    args "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-fvisibility=hidden",
+            "-Wl,--version-script=${file('src/main/cpp/winlator/battlenet_xattr.map').absolutePath}",
+            "-o", output.get().asFile.absolutePath,
+            file("src/main/cpp/winlator/battlenet_xattr.c").absolutePath, "-ldl"
+}
+
+preBuild.dependsOn(compileBattleNetXattrX86)
+
 tasks.named('preBuild') {
     dependsOn 'collectLogTags'
 }
@@ -315,6 +333,7 @@ android {
 
     sourceSets {
         main {
+            assets.srcDir battleNetXattrAssets
             java.srcDirs = [
 //                    'src/main/java',  // Needed for Android Studio
                     'src/main/app',

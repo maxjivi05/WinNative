@@ -174,6 +174,50 @@ impl Directory {
         f.sync_all().map_err(|_| "file_error")?;
         self.0.sync_all().map_err(|_| "file_error")
     }
+
+    pub fn replace_preserving(
+        &self,
+        value: &str,
+        bytes: &[u8],
+        backup: &str,
+    ) -> Result<(), &'static str> {
+        use std::io::{Read, Seek, Write};
+        let mut original = match self.file(value, false, false) {
+            Ok(file) => file,
+            Err("file_missing") => return self.write_once(value, bytes),
+            Err(error) => return Err(error),
+        };
+        let length = original.metadata().map_err(|_| "file_error")?.len();
+        if length > 1024 * 1024 {
+            return Err("content_too_large");
+        }
+        let mut old = vec![0; length as usize];
+        original.read_exact(&mut old).map_err(|_| "file_error")?;
+        if length <= bytes.len() as u64 {
+            if old == bytes[..length as usize] {
+                if length < bytes.len() as u64 {
+                    original
+                        .write_all(&bytes[length as usize..])
+                        .map_err(|_| "file_error")?;
+                    original.sync_all().map_err(|_| "file_error")?;
+                }
+                return Ok(());
+            }
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "file_error")?
+            .as_nanos();
+        let staged_name = format!(".{backup}-{}-{nonce}", std::process::id());
+        let mut previous = self.file(&staged_name, true, true)?;
+        previous.write_all(&old).map_err(|_| "file_error")?;
+        previous.sync_all().map_err(|_| "file_error")?;
+        original.rewind().map_err(|_| "file_error")?;
+        original.set_len(0).map_err(|_| "file_error")?;
+        original.write_all(bytes).map_err(|_| "file_error")?;
+        original.sync_all().map_err(|_| "file_error")?;
+        self.0.sync_all().map_err(|_| "file_error")
+    }
 }
 
 fn ofd_lock(file: &File) -> Result<(), &'static str> {
@@ -227,6 +271,28 @@ mod tests {
         assert!(root.write_once("link", b"changed").is_err());
         std::os::unix::fs::symlink(&base, base.join("directory-link")).unwrap();
         assert!(root.child("directory-link".as_ref(), true).is_err());
+    }
+
+    #[test]
+    fn replaces_owned_metadata_and_keeps_the_previous_file() {
+        let base = std::env::temp_dir().join(format!("wn-metadata-{}", std::process::id()));
+        std::fs::create_dir(&base).unwrap();
+        let root = Directory::open(&base).unwrap();
+        root.write_once(".build.info", b"previous").unwrap();
+        root.replace_preserving(".build.info", b"current", "winnative-build-info-previous")
+            .unwrap();
+        assert_eq!(std::fs::read(base.join(".build.info")).unwrap(), b"current");
+        let previous = std::fs::read_dir(&base)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".winnative-build-info-previous-")
+            })
+            .unwrap();
+        assert_eq!(std::fs::read(previous.path()).unwrap(), b"previous");
     }
 }
 

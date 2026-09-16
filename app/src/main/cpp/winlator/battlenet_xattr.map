@@ -1,0 +1,15 @@
+LIBC {
+    global:
+        setxattr;
+        lsetxattr;
+        fsetxattr;
+        fgetxattr;
+        fremovexattr;
+        chmod;
+        fchmod;
+        stat;
+        lstat;
+        fstat;
+    local:
+        *;
+};

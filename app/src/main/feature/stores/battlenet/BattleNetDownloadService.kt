@@ -122,9 +122,11 @@ internal object BattleNetDownloads {
     suspend fun hasUpdate(context: Context, product: String): Boolean = withContext(Dispatchers.IO) {
         val saved = prefs(context).getString("installed_$product", null) ?: throw IOException(context.getString(R.string.battlenet_failed))
         val installed = JSONObject(saved)
+        val buildInfo = File(installed.getString("target"), ".build.info")
+        val buildInfoText = if (buildInfo.isFile && buildInfo.length() in 1..(1024L * 1024L)) buildInfo.readText() else ""
         val latest = JSONObject(BattleNetNative.latestBuild(product, installed.getString("region")))
             .optJSONObject("build") ?: throw IOException(context.getString(R.string.battlenet_failed))
-        installed.getString("buildKey") != latest.getString("buildKey")
+        !BattleNetBuildInfo.isCurrent(buildInfoText, product, latest.getString("buildKey"))
     }
     suspend fun clearCompleted(context: Context) = withContext(Dispatchers.IO) {
         val claimed = synchronized(this@BattleNetDownloads) {

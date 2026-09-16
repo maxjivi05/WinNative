@@ -944,6 +944,20 @@ internal fun UnifiedActivity.launchCustomGame(
                 val product = shortcut.getExtra("battlenet_product")
                 val game = com.winlator.cmod.feature.stores.battlenet.BattleNetCatalog.byProduct(product)
                     ?: throw IllegalArgumentException("Unknown Battle.net game")
+                if (com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.installed(context, product) &&
+                    com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.hasUpdate(context, product)
+                ) {
+                    val preview = com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.preview(context, product)
+                    com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.start(context, product, preview)
+                    withContext(Dispatchers.Main) {
+                        com.winlator.cmod.shared.ui.toast.WinToast.show(
+                            context,
+                            com.winlator.cmod.R.string.store_game_update_available,
+                            android.widget.Toast.LENGTH_SHORT,
+                        )
+                    }
+                    return@launch
+                }
                 val battleNetIntent = com.winlator.cmod.feature.stores.battlenet.BattleNetRuntime.prepareLaunch(context, game, containerId = shortcut.container.id)
                 battleNetIntent.putExtra("shortcut_path", shortcut.file.path)
                 battleNetIntent.putExtra("shortcut_name", gameName)

@@ -5202,6 +5202,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                 drawerStateHolder.closeOpenPane();
                 return;
             }
+            if (isBattleNetSession() && (drawerStateHolder == null || !drawerStateHolder.isDrawerOpen())) {
+                exit();
+                return;
+            }
             if (drawerStateHolder == null || !drawerStateHolder.isDrawerOpen()) {
                 openDrawerMenu();
             }
@@ -7972,6 +7976,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         envVars.put("LANG", LocaleEnv.normalizeLang(lc_all));
         String winePrefix = (shortcut != null && container != null && shortcut.path != null && shortcut.path.matches("^[cC]:.*")) ? new File(container.getRootDir(), ".wine").getAbsolutePath() : imageFs.wineprefix;
         envVars.put("WINEPREFIX", winePrefix);
+        if (isBattleNetSession()) {
+            envVars.put("WN_BATTLENET_XATTR_COMPAT", "1");
+            File xattrPreload = new File(imageFs.getRootDir(), ".shared/battlenet/libbattlenet_xattr_x86_64.so");
+            String existingPreload = envVars.get("BOX64_LD_PRELOAD");
+            envVars.put("BOX64_LD_PRELOAD", existingPreload == null || existingPreload.isEmpty()
+                    ? xattrPreload.getAbsolutePath()
+                    : xattrPreload.getAbsolutePath() + ":" + existingPreload);
+        }
 
         boolean enableWineDebug = preferences.getBoolean("enable_wine_debug", false);
         String wineDebugChannels = preferences.getString("wine_debug_channels", SettingsConfig.DEFAULT_WINE_DEBUG_CHANNELS);

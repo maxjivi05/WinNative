@@ -435,7 +435,11 @@ pub fn pack(
             &index_bytes(bucket, &selected)?,
         )?;
     }
-    root.write_once(".build.info", &build_info(plan, &selection.selected_tags)?)?;
+    root.replace_preserving(
+        ".build.info",
+        &build_info(plan, &selection.selected_tags)?,
+        "winnative-build-info-previous",
+    )?;
     Ok(())
 }
 #[cfg(test)]
