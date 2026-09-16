@@ -99,7 +99,10 @@ object BattleNetRuntime {
                     com.winlator.cmod.runtime.system.SessionKeepAliveService.isSessionActive()
                 ) throw IOException("Close the running session before switching Battle.net containers.")
                 ensureSharedFiles(context, container)
-                if (game != null) registerNative(context, game)
+                if (game != null) {
+                    try { registerNative(context, game) }
+                    catch (failure: IllegalArgumentException) { throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed), failure) }
+                }
                 BattleNetSession.stage(context, shared(context).root)
                 BattleNetSession.prepareClient(context, shared(context).root)
                 val launcher = client(container)
@@ -237,8 +240,10 @@ object BattleNetRuntime {
         val resolved = File(root, path.drop(3).replace('\\', '/')).canonicalFile
         val canonicalRoot = root.canonicalFile
         val sharedGames = File(shared(context).root, "games").canonicalFile
+        val registeredNative = BattleNetCatalog.games.map { File(shared(context).root, "installed/${it.product}") }
+            .filter { java.nio.file.Files.isSymbolicLink(it.toPath()) }.map { it.canonicalFile }
         return resolved.takeIf {
-            (it.toPath().startsWith(canonicalRoot.toPath()) && it != canonicalRoot) ||
+            it in registeredNative || (it.toPath().startsWith(canonicalRoot.toPath()) && it != canonicalRoot) ||
                 (it.toPath().startsWith(sharedGames.toPath()) && it != sharedGames)
         }
     }

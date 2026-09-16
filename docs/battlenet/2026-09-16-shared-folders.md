@@ -9,3 +9,5 @@ Before launching a verified native install, the runtime stages the game's produc
 Android shared storage returned ENOSYS for flock. The installer now falls back only for unsupported flock operations to an open-file-description write lock. A device probe confirmed that a second descriptor is excluded with EAGAIN and succeeds after the owning descriptor closes. The locking test also checks that closing the rejected descriptor does not release the owner's lock.
 
 Validation: 193 JVM tests, 46 Rust tests, Clippy with warnings denied, and PUBG APK build passed. The first shared-storage attempt preserved the cache and stopped before packing at the unsupported flock operation. The replacement build is being tested against the same retained destination.
+
+The corrected build completed packing and verification in the configured shared folder: 384,508 content objects verified, and the installed record now points to the shared target. The shared WowClassic.exe MD5 matches the independently verified reference (3ed82fba3fd426b46197eaa440dd75b4). The original private installation remains intact.
