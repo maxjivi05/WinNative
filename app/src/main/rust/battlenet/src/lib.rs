@@ -1,5 +1,7 @@
 pub mod archive;
 pub mod blte;
+pub mod casc;
+pub mod install;
 pub mod manifest;
 pub mod planning;
 pub mod transfer;

@@ -46,7 +46,7 @@ impl Control {
         }
         self.wake.notify_all();
     }
-    fn checkpoint(&self) -> Result<(), &'static str> {
+    pub fn checkpoint(&self) -> Result<(), &'static str> {
         let mut command = self.command.lock().map_err(|_| "transfer_state_error")?;
         while *command == Command::Paused {
             command = self
@@ -273,7 +273,7 @@ impl Cache {
     }
 }
 fn hash_bytes(
-    file: &mut File,
+    file: &mut impl Read,
     length: u64,
     control: &Control,
 ) -> Result<md5::Digest, &'static str> {
@@ -295,6 +295,17 @@ fn verify(file: &mut File, key: &str, size: u64, control: &Control) -> Result<()
         return Err("content_size_mismatch");
     }
     file.seek(SeekFrom::Start(0)).map_err(|_| "file_error")?;
+    verify_reader(file, key, size, control)
+}
+pub fn verify_reader(
+    file: &mut impl Read,
+    key: &str,
+    size: u64,
+    control: &Control,
+) -> Result<(), &'static str> {
+    if size < 9 {
+        return Err("content_size_mismatch");
+    }
     let mut prefix = [0u8; 8];
     file.read_exact(&mut prefix).map_err(|_| "file_error")?;
     if &prefix[..4] != b"BLTE" {
@@ -302,8 +313,19 @@ fn verify(file: &mut File, key: &str, size: u64, control: &Control) -> Result<()
     }
     let header_size = u32::from_be_bytes(prefix[4..8].try_into().unwrap()) as usize;
     if header_size == 0 {
-        file.seek(SeekFrom::Start(0)).map_err(|_| "file_error")?;
-        if format!("{:x}", hash_bytes(file, size, control)?) != key {
+        let mut hash = md5::Context::new();
+        hash.consume(prefix);
+        let mut remaining = size - 8;
+        let mut buffer = [0u8; 64 * 1024];
+        while remaining > 0 {
+            control.checkpoint()?;
+            let n = remaining.min(buffer.len() as u64) as usize;
+            file.read_exact(&mut buffer[..n])
+                .map_err(|_| "file_error")?;
+            hash.consume(&buffer[..n]);
+            remaining -= n as u64;
+        }
+        if format!("{:x}", hash.finalize()) != key {
             return Err("checksum_mismatch");
         }
         return Ok(());

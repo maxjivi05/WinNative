@@ -2,11 +2,19 @@ use crate::{blte, latest_build, manifest::DownloadManifest, valid_product, valid
 use reqwest::blocking::Client;
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
+#[derive(Clone)]
+pub struct ManifestObject {
+    pub content_key: String,
+    pub encoding_key: String,
+    pub decoded_bytes: usize,
+    pub encoded_bytes: usize,
+}
 pub struct Plan {
     pub build: Build,
     pub manifest: DownloadManifest,
     pub cdns: Vec<String>,
     pub archives: Vec<String>,
+    pub metadata: BTreeMap<String, ManifestObject>,
 }
 fn fetch(client: &Client, url: &str, limit: usize) -> Result<Vec<u8>, String> {
     let response = client.get(url).send().map_err(|_| "network_error")?;
@@ -210,6 +218,28 @@ pub fn download_plan(product: &str, region: &str) -> Result<Plan, String> {
         return Err("checksum_mismatch".into());
     }
     let config = config(&bytes)?;
+    let mut metadata = BTreeMap::new();
+    for name in ["install", "encoding", "download", "size"] {
+        if let (Some(keys), Some(sizes)) = (
+            config.get(name),
+            config.get(format!("{name}-size").as_str()),
+        ) {
+            if keys.len() != 2 || sizes.len() != 2 || keys.iter().any(|h| !key(h)) {
+                return Err("invalid_config".into());
+            }
+            let decoded_bytes = sizes[0].parse::<usize>().map_err(|_| "invalid_config")?;
+            let encoded_bytes = sizes[1].parse::<usize>().map_err(|_| "invalid_config")?;
+            metadata.insert(
+                name.into(),
+                ManifestObject {
+                    content_key: keys[0].into(),
+                    encoding_key: keys[1].into(),
+                    decoded_bytes,
+                    encoded_bytes,
+                },
+            );
+        }
+    }
     let hashes = config
         .get("download")
         .filter(|v| v.len() == 2 && v.iter().all(|h| key(h)))
@@ -247,6 +277,7 @@ pub fn download_plan(product: &str, region: &str) -> Result<Plan, String> {
         manifest: DownloadManifest::parse(&decoded)?,
         cdns,
         archives,
+        metadata,
     })
 }
 impl Plan {

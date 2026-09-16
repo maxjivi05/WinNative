@@ -13,7 +13,7 @@ pub struct Tag {
     pub name: String,
     pub group: u16,
     #[serde(skip)]
-    mask: Vec<u8>,
+    pub(crate) mask: Vec<u8>,
 }
 #[derive(Debug)]
 pub struct DownloadManifest {
@@ -26,6 +26,7 @@ pub struct Selection {
     pub encoded_bytes: u64,
     pub entries: Vec<Entry>,
     pub selected_tags: Vec<String>,
+    pub excluded_tags: Vec<String>,
 }
 struct Reader<'a> {
     bytes: &'a [u8],
@@ -128,6 +129,25 @@ impl DownloadManifest {
         Ok(Self { entries, tags })
     }
     pub fn select(&self, names: &[String]) -> Result<Selection, &'static str> {
+        self.select_excluding(names, &[])
+    }
+    pub fn select_excluding(
+        &self,
+        names: &[String],
+        excluded: &[String],
+    ) -> Result<Selection, &'static str> {
+        let mut exclusions = Vec::new();
+        for name in excluded {
+            if names.contains(name) {
+                return Err("conflicting_tag_selection");
+            }
+            exclusions.push(
+                self.tags
+                    .iter()
+                    .find(|tag| tag.name == *name)
+                    .ok_or("unknown_tag")?,
+            );
+        }
         let mut groups: BTreeMap<u16, Vec<&Tag>> = BTreeMap::new();
         for name in names {
             let tag = self
@@ -141,6 +161,12 @@ impl DownloadManifest {
         let mut entries = Vec::new();
         let mut encoded_bytes: u64 = 0;
         for (index, entry) in self.entries.iter().enumerate() {
+            if exclusions
+                .iter()
+                .any(|tag| tag.mask[index / 8] & (0x80 >> (index % 8)) != 0)
+            {
+                continue;
+            }
             if !groups.values().all(|tags| {
                 tags.iter()
                     .any(|tag| tag.mask[index / 8] & (0x80 >> (index % 8)) != 0)
@@ -163,6 +189,7 @@ impl DownloadManifest {
             encoded_bytes,
             entries,
             selected_tags: names.to_vec(),
+            excluded_tags: excluded.to_vec(),
         })
     }
 }
@@ -200,6 +227,24 @@ mod tests {
             2
         );
         assert_eq!(m.select(&[]).unwrap().encoded_bytes, 8589934595);
+    }
+    #[test]
+    fn exclusions_remove_optional_content_and_reject_conflicts() {
+        let m = DownloadManifest::parse(&fixture()).unwrap();
+        let s = m
+            .select_excluding(&["enUS".into()], &["Mac".into()])
+            .unwrap();
+        assert_eq!(s.entries.len(), 1);
+        assert_eq!(s.entries[0].encoding_key, "01".repeat(16));
+        assert_eq!(
+            m.select_excluding(&["Mac".into()], &["Mac".into()])
+                .unwrap_err(),
+            "conflicting_tag_selection"
+        );
+        assert_eq!(
+            m.select_excluding(&[], &["unknown".into()]).unwrap_err(),
+            "unknown_tag"
+        );
     }
     #[test]
     fn rejects_unknown_tags_and_truncation() {
