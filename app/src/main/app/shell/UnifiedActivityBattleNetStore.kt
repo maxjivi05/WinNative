@@ -82,7 +82,7 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
             val local = BattleNetCatalog.games.filter { game -> state.installs.any { it.product == game.product && it.installed && it.playable } }
             games = local
             try {
-                games = (BattleNetAccount.games() + local).distinctBy { it.product }
+                games = (BattleNetAccount.games(applicationContext) + local).distinctBy { it.product }
             } catch (_: BattleNetAccount.SignInRequired) {
                 if (signedIn) error = getString(R.string.battlenet_library_session_hint)
             }

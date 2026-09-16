@@ -215,7 +215,7 @@ class StoresFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 com.winlator.cmod.feature.stores.battlenet.BattleNetAccount.refreshSession(requireContext())
-                com.winlator.cmod.feature.stores.battlenet.BattleNetAccount.games()
+                com.winlator.cmod.feature.stores.battlenet.BattleNetAccount.games(requireContext().applicationContext)
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

@@ -36,4 +36,20 @@ class BattleNetNativeTest {
         assertEquals(5, result.getJSONArray("selectedTags").length())
     }
 
+    @Test fun persistedLibrarySessionWhenRequested() = kotlinx.coroutines.runBlocking {
+        org.junit.Assume.assumeTrue(
+            androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("battlenetLibraryDiagnostics") == "true",
+        )
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        BattleNetAccount.refreshSession(context)
+        val games = BattleNetAccount.games(context)
+        org.junit.Assert.assertTrue(games.isNotEmpty())
+        val cookie = BattleNetWebSession.read(context)
+        org.junit.Assert.assertFalse(cookie.isNullOrBlank())
+        val request = okhttp3.Request.Builder().url("${BattleNetAccount.ORIGIN}/api/games-and-subs")
+            .header("Cookie", cookie!!).header("Accept", "application/json").build()
+        okhttp3.OkHttpClient.Builder().followRedirects(false).callTimeout(30, java.util.concurrent.TimeUnit.SECONDS).build()
+            .newCall(request).execute().use { response -> assertEquals(200, response.code) }
+    }
+
 }

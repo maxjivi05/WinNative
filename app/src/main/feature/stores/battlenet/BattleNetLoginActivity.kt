@@ -71,7 +71,7 @@ class BattleNetLoginActivity : FixedFontScaleComponentActivity() {
                 checkingLibrary = true
                 lifecycleScope.launch {
                     try {
-                        BattleNetAccount.games()
+                        BattleNetAccount.games(applicationContext)
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             CookieManager.getInstance().flush()
                         }
