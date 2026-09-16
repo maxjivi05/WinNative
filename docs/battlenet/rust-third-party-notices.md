@@ -1,5 +1,7 @@
 # Rust dependency notices
 
+The CASC index implementation uses a Rust implementation of Bob Jenkins's public-domain lookup3 algorithm (May 2006), described at https://burtleburtle.net/bob/c/lookup3.c. The source grants use for any purpose without restriction.
+
 Dependencies resolved for the Android ARM64 build, including build tools. Identical license texts are included once and referenced below.
 
 | Package | License | Notices |

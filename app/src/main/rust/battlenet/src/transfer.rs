@@ -70,7 +70,21 @@ pub struct Content<'a> {
 pub struct Cache {
     directory: File,
     _lock: File,
-    mutation: Mutex<()>,
+    active: Mutex<std::collections::HashSet<String>>,
+    client: reqwest::blocking::Client,
+}
+struct TransferGuard<'a> {
+    cache: &'a Cache,
+    key: String,
+}
+impl Drop for TransferGuard<'_> {
+    fn drop(&mut self) {
+        self.cache
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.key);
+    }
 }
 fn descriptor(fd: i32) -> Result<File, &'static str> {
     if fd < 0 {
@@ -88,6 +102,56 @@ fn regular(file: &File) -> Result<(), &'static str> {
     Ok(())
 }
 impl Cache {
+    fn claim(&self, key: &str) -> Result<TransferGuard<'_>, &'static str> {
+        if !self
+            .active
+            .lock()
+            .map_err(|_| "transfer_state_error")?
+            .insert(key.to_owned())
+        {
+            return Err("cache_busy");
+        }
+        Ok(TransferGuard {
+            cache: self,
+            key: key.into(),
+        })
+    }
+    pub fn copy_verified(
+        &self,
+        key: &str,
+        size: u64,
+        out: &mut impl Write,
+        control: &Control,
+    ) -> Result<(), &'static str> {
+        let _guard = self.claim(key)?;
+        let mut file = self.content(key, false)?;
+        verify(&mut file, key, size, control)?;
+        file.seek(SeekFrom::Start(0)).map_err(|_| "file_error")?;
+        let mut buffer = [0u8; 65536];
+        let mut remaining = size;
+        while remaining > 0 {
+            control.checkpoint()?;
+            let n = remaining.min(buffer.len() as u64) as usize;
+            file.read_exact(&mut buffer[..n])
+                .map_err(|_| "file_error")?;
+            out.write_all(&buffer[..n]).map_err(|_| "file_error")?;
+            remaining -= n as u64;
+        }
+        Ok(())
+    }
+    pub fn read_verified(
+        &self,
+        key: &str,
+        size: u64,
+        control: &Control,
+    ) -> Result<Vec<u8>, &'static str> {
+        if size > 128 * 1024 * 1024 {
+            return Err("content_too_large");
+        }
+        let mut bytes = Vec::with_capacity(size as usize);
+        self.copy_verified(key, size, &mut bytes, control)?;
+        Ok(bytes)
+    }
     pub fn open(path: &Path) -> Result<Self, &'static str> {
         if !path.is_absolute() {
             return Err("unsafe_or_unavailable_path");
@@ -116,7 +180,13 @@ impl Cache {
         Ok(Self {
             directory,
             _lock: lock,
-            mutation: Mutex::new(()),
+            active: Mutex::new(std::collections::HashSet::new()),
+            client: reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(60))
+                .build()
+                .map_err(|_| "network_error")?,
         })
     }
     fn file(directory: &File, name: &str, write: bool) -> Result<File, &'static str> {
@@ -126,14 +196,18 @@ impl Cache {
         } else {
             libc::O_RDONLY
         };
-        let file = descriptor(unsafe {
+        let fd = unsafe {
             libc::openat(
                 directory.as_raw_fd(),
                 name.as_ptr(),
                 flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
                 0o600,
             )
-        })?;
+        };
+        if fd < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+            return Err("content_missing");
+        }
+        let file = descriptor(fd)?;
         regular(&file)?;
         Ok(file)
     }
@@ -148,8 +222,71 @@ impl Cache {
         Self::file(&self.directory, &format!("{key}.blte"), write)
     }
     pub fn verify(&self, key: &str, size: u64, control: &Control) -> Result<(), &'static str> {
-        let _guard = self.mutation.try_lock().map_err(|_| "cache_busy")?;
+        let _guard = self.claim(key)?;
         verify(&mut self.content(key, false)?, key, size, control)
+    }
+    #[allow(
+        clippy::unnecessary_cast,
+        reason = "statvfs widths differ across targets"
+    )]
+    pub fn available_bytes(&self) -> Result<u64, &'static str> {
+        let mut status = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        if unsafe { libc::fstatvfs(self.directory.as_raw_fd(), status.as_mut_ptr()) } != 0 {
+            return Err("file_error");
+        }
+        let status = unsafe { status.assume_init() };
+        (status.f_bavail as u64)
+            .checked_mul(status.f_frsize as u64)
+            .ok_or("file_error")
+    }
+    pub fn complete(&self, key: &str, size: u64, control: &Control) -> Result<bool, &'static str> {
+        let _guard = self.claim(key)?;
+        let mut file = match self.content(key, false) {
+            Ok(file) => file,
+            Err("content_missing") => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let length = file.metadata().map_err(|_| "file_error")?.len();
+        if length > size {
+            return Err("content_size_mismatch");
+        }
+        if length < size {
+            return Ok(false);
+        }
+        verify(&mut file, key, size, control)?;
+        Ok(true)
+    }
+    pub fn store(&self, key: &str, bytes: &[u8], control: &Control) -> Result<(), &'static str> {
+        let mut reader = bytes;
+        verify_reader(&mut reader, key, bytes.len() as u64, control)?;
+        let _guard = self.claim(key)?;
+        control.checkpoint()?;
+        let mut file = self.content(key, true)?;
+        let length = file.metadata().map_err(|_| "file_error")?.len();
+        if length > bytes.len() as u64 {
+            return Err("content_size_mismatch");
+        }
+        let mut buffer = [0u8; 65536];
+        let mut offset = 0;
+        while offset < length as usize {
+            control.checkpoint()?;
+            let n = (length as usize - offset).min(buffer.len());
+            file.read_exact(&mut buffer[..n])
+                .map_err(|_| "file_error")?;
+            if buffer[..n] != bytes[offset..offset + n] {
+                return Err("checksum_mismatch");
+            }
+            offset += n;
+        }
+        let result = (|| {
+            for chunk in bytes[offset..].chunks(65536) {
+                control.checkpoint()?;
+                file.write_all(chunk).map_err(|_| "file_error")?;
+            }
+            Ok(())
+        })();
+        file.sync_data().map_err(|_| "file_error")?;
+        result
     }
     pub fn download(
         &self,
@@ -170,13 +307,7 @@ impl Cache {
         {
             return Err("invalid_cdn");
         }
-        let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
-            .build()
-            .map_err(|_| "network_error")?;
-        self.download_with(&client, base, content, control, progress)
+        self.download_with(&self.client, base, content, control, progress)
     }
     fn download_with(
         &self,
@@ -193,7 +324,7 @@ impl Cache {
             return Err("invalid_content_key");
         }
         let end = start.checked_add(size - 1).ok_or("invalid_content_range")?;
-        let _guard = self.mutation.try_lock().map_err(|_| "cache_busy")?;
+        let _guard = self.claim(key)?;
         control.checkpoint()?;
         let mut file = self.content(key, true)?;
         let mut offset = file.metadata().map_err(|_| "file_error")?.len();
@@ -374,6 +505,44 @@ mod tests {
         ));
         std::fs::create_dir(&path).unwrap();
         path
+    }
+    #[test]
+    fn locks_individual_objects_and_releases_claims() {
+        let root = directory();
+        let cache = Cache::open(&root).unwrap();
+        let first = cache.claim("first").unwrap();
+        let second = cache.claim("second").unwrap();
+        assert!(matches!(cache.claim("first"), Err("cache_busy")));
+        drop(first);
+        assert!(cache.claim("first").is_ok());
+        drop(second);
+    }
+    #[test]
+    fn verified_batch_storage_resumes_without_overwriting_corrupt_partial_files() {
+        let root = directory();
+        let cache = Cache::open(&root).unwrap();
+        let data = b"BLTE\0\0\0\0Nbatch content";
+        let key = format!("{:x}", md5::compute(data));
+        let control = Control::default();
+        assert!(!cache.complete(&key, data.len() as u64, &control).unwrap());
+        std::fs::write(root.join(format!("{key}.blte")), &data[..10]).unwrap();
+        cache.store(&key, data, &control).unwrap();
+        assert!(cache.complete(&key, data.len() as u64, &control).unwrap());
+        std::fs::write(root.join(format!("{key}.blte")), b"preserved").unwrap();
+        assert_eq!(
+            cache.store(&key, data, &control).unwrap_err(),
+            "checksum_mismatch"
+        );
+        assert_eq!(
+            std::fs::read(root.join(format!("{key}.blte"))).unwrap(),
+            b"preserved"
+        );
+        let badkey = "01".repeat(16);
+        assert_eq!(
+            cache.store(&badkey, data, &control).unwrap_err(),
+            "checksum_mismatch"
+        );
+        assert!(!root.join(format!("{badkey}.blte")).exists());
     }
     #[test]
     fn refuses_symlink_parents_files_hardlinks_and_concurrent_writers() {

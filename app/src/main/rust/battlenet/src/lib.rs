@@ -2,8 +2,12 @@ pub mod archive;
 pub mod blte;
 pub mod casc;
 pub mod install;
+mod jenkins;
 pub mod manifest;
+pub mod mirror;
+pub mod packing;
 pub mod planning;
+mod safe_dir;
 pub mod transfer;
 use jni::{
     objects::{JClass, JString},

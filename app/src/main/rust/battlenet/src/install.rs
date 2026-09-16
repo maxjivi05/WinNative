@@ -36,6 +36,7 @@ fn name(data: &mut &[u8]) -> Result<String, &'static str> {
 pub fn safe_path(path: &str) -> bool {
     !path.is_empty()
         && !path.contains(':')
+        && !path.contains('\\')
         && !path.chars().any(char::is_control)
         && path
             .split('/')

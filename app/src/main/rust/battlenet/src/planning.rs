@@ -11,12 +11,17 @@ pub struct ManifestObject {
 }
 pub struct Plan {
     pub build: Build,
+    pub product: String,
+    pub region: String,
+    pub cdn_key: String,
+    pub build_config: Vec<u8>,
+    pub cdn_config: Vec<u8>,
     pub manifest: DownloadManifest,
     pub cdns: Vec<String>,
     pub archives: Vec<String>,
     pub metadata: BTreeMap<String, ManifestObject>,
 }
-fn fetch(client: &Client, url: &str, limit: usize) -> Result<Vec<u8>, String> {
+pub(crate) fn fetch(client: &Client, url: &str, limit: usize) -> Result<Vec<u8>, String> {
     let response = client.get(url).send().map_err(|_| "network_error")?;
     if !response.status().is_success() {
         return Err("content_unavailable".into());
@@ -146,6 +151,33 @@ fn object(
     }
     Err("content_unavailable".into())
 }
+fn manifest_objects(
+    config: &BTreeMap<&str, Vec<&str>>,
+) -> Result<BTreeMap<String, ManifestObject>, String> {
+    let mut metadata = BTreeMap::new();
+    for name in ["install", "encoding", "download", "size"] {
+        if let (Some(keys), Some(sizes)) = (
+            config.get(name),
+            config.get(format!("{name}-size").as_str()),
+        ) {
+            if keys.len() != 2 || sizes.len() != 2 || keys.iter().any(|h| !key(h)) {
+                return Err("invalid_config".into());
+            }
+            let decoded_bytes = sizes[0].parse::<usize>().map_err(|_| "invalid_config")?;
+            let encoded_bytes = sizes[1].parse::<usize>().map_err(|_| "invalid_config")?;
+            metadata.insert(
+                name.into(),
+                ManifestObject {
+                    content_key: keys[0].into(),
+                    encoding_key: keys[1].into(),
+                    decoded_bytes,
+                    encoded_bytes,
+                },
+            );
+        }
+    }
+    Ok(metadata)
+}
 pub fn download_plan(product: &str, region: &str) -> Result<Plan, String> {
     if !valid_product(product) || !valid_region(region) {
         return Err("invalid_product".into());
@@ -205,6 +237,7 @@ pub fn download_plan(product: &str, region: &str) -> Result<Plan, String> {
     if format!("{:x}", md5::compute(&cdn_config)) != row[c] {
         return Err("checksum_mismatch".into());
     }
+    let cdn_config_bytes = cdn_config.clone();
     let cdn_config = config(&cdn_config)?;
     let archives: Vec<String> = cdn_config
         .get("archives")
@@ -217,29 +250,9 @@ pub fn download_plan(product: &str, region: &str) -> Result<Plan, String> {
     if format!("{:x}", md5::compute(&bytes)) != build.build_key {
         return Err("checksum_mismatch".into());
     }
+    let build_config_bytes = bytes.clone();
     let config = config(&bytes)?;
-    let mut metadata = BTreeMap::new();
-    for name in ["install", "encoding", "download", "size"] {
-        if let (Some(keys), Some(sizes)) = (
-            config.get(name),
-            config.get(format!("{name}-size").as_str()),
-        ) {
-            if keys.len() != 2 || sizes.len() != 2 || keys.iter().any(|h| !key(h)) {
-                return Err("invalid_config".into());
-            }
-            let decoded_bytes = sizes[0].parse::<usize>().map_err(|_| "invalid_config")?;
-            let encoded_bytes = sizes[1].parse::<usize>().map_err(|_| "invalid_config")?;
-            metadata.insert(
-                name.into(),
-                ManifestObject {
-                    content_key: keys[0].into(),
-                    encoding_key: keys[1].into(),
-                    decoded_bytes,
-                    encoded_bytes,
-                },
-            );
-        }
-    }
+    let metadata = manifest_objects(&config)?;
     let hashes = config
         .get("download")
         .filter(|v| v.len() == 2 && v.iter().all(|h| key(h)))
@@ -273,11 +286,111 @@ pub fn download_plan(product: &str, region: &str) -> Result<Plan, String> {
         return Err("checksum_mismatch".into());
     }
     Ok(Plan {
+        product: product.into(),
+        region: region.into(),
+        cdn_key: row[c].into(),
+        build_config: build_config_bytes,
+        cdn_config: cdn_config_bytes,
         build,
         manifest: DownloadManifest::parse(&decoded)?,
         cdns,
         archives,
         metadata,
+    })
+}
+pub fn installed_plan(root: &std::path::Path, product: &str) -> Result<Plan, String> {
+    if !valid_product(product) {
+        return Err("invalid_product".into());
+    }
+    let directory = crate::safe_dir::Directory::open(root)?;
+    let info = directory.read_limited(".build.info", 1024 * 1024)?;
+    let text = std::str::from_utf8(&info).map_err(|_| "invalid_build_info")?;
+    let mut lines = text.lines().filter(|l| !l.is_empty());
+    let columns: Vec<_> = lines
+        .next()
+        .ok_or("invalid_build_info")?
+        .split('|')
+        .map(|c| c.split('!').next().unwrap_or(""))
+        .collect();
+    let column = |name: &str| -> Result<usize, String> {
+        let matches: Vec<_> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c == name)
+            .map(|(n, _)| n)
+            .collect();
+        if matches.len() != 1 {
+            return Err("invalid_build_info".into());
+        }
+        Ok(matches[0])
+    };
+    let (active, product_column, build, cdn, version, branch) = (
+        column("Active")?,
+        column("Product")?,
+        column("Build Key")?,
+        column("CDN Key")?,
+        column("Version")?,
+        column("Branch")?,
+    );
+    let rows: Vec<_> = lines.map(|l| l.split('|').collect::<Vec<_>>()).collect();
+    if rows.iter().any(|r| r.len() != columns.len()) {
+        return Err("invalid_build_info".into());
+    }
+    let rows: Vec<_> = rows
+        .iter()
+        .filter(|r| r[active] == "1" && r[product_column] == product)
+        .collect();
+    if rows.len() != 1 {
+        return Err("invalid_build_info".into());
+    }
+    let row = rows[0];
+    if !key(row[build]) || !key(row[cdn]) || !valid_region(row[branch]) {
+        return Err("invalid_build_info".into());
+    }
+    let read = |hash: &str| -> Result<Vec<u8>, String> {
+        let bytes = directory
+            .child("Data".as_ref(), false)?
+            .child("config".as_ref(), false)?
+            .child(hash[..2].as_ref(), false)?
+            .child(hash[2..4].as_ref(), false)?
+            .read_limited(hash, 1024 * 1024)?;
+        if format!("{:x}", md5::compute(&bytes)) != hash {
+            return Err("checksum_mismatch".into());
+        }
+        Ok(bytes)
+    };
+    let build_config = read(row[build])?;
+    let cdn_config = read(row[cdn])?;
+    let metadata = manifest_objects(&config(&build_config)?)?;
+    let storage = crate::casc::Storage::open(&root.join("Data/data"))?;
+    let manifest = DownloadManifest::parse(
+        &storage.manifest(
+            metadata
+                .get("download")
+                .ok_or("download_manifest_unavailable")?,
+        )?,
+    )?;
+    let build_id = row[version]
+        .rsplit('.')
+        .next()
+        .ok_or("invalid_build_info")?
+        .parse()
+        .map_err(|_| "invalid_build_info")?;
+    Ok(Plan {
+        build: Build {
+            build_key: row[build].into(),
+            version: row[version].into(),
+            build_id,
+        },
+        product: product.into(),
+        region: row[branch].into(),
+        cdn_key: row[cdn].into(),
+        build_config,
+        cdn_config,
+        metadata,
+        manifest,
+        cdns: vec![],
+        archives: vec![],
     })
 }
 impl Plan {

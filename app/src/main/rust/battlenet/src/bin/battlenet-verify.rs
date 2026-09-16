@@ -1,6 +1,13 @@
-use wn_battlenet::{casc::Storage, planning::download_plan, transfer::Control};
+use wn_battlenet::{casc::Storage, planning::installed_plan, transfer::Control};
 fn run(args: &[String]) -> Result<(), String> {
-    let plan = download_plan(&args[0], &args[1])?;
+    let root = std::path::Path::new(&args[2])
+        .parent()
+        .and_then(|p| p.parent())
+        .ok_or("invalid_install_path")?;
+    let plan = installed_plan(root, &args[0])?;
+    if plan.region != args[1] {
+        return Err("region_unavailable".into());
+    }
     let names: Vec<_> = args[4..]
         .iter()
         .filter(|s| !s.starts_with('!'))

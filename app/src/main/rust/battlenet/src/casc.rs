@@ -77,6 +77,22 @@ fn index(bytes: &[u8], bucket: u8) -> Result<Vec<([u8; 9], Location)>, &'static 
     if !length.is_multiple_of(18) || length > bytes.len() - 40 {
         return Err("invalid_casc_index");
     }
+    if crate::jenkins::hash(&bytes[8..24], 0, 0).0
+        != u32::from_le_bytes(bytes[4..8].try_into().unwrap())
+    {
+        return Err("checksum_mismatch");
+    }
+    let mut high = 0;
+    let mut low = 0;
+    let mut legacy = 0;
+    for entry in bytes[40..40 + length].as_chunks::<18>().0 {
+        (high, low) = crate::jenkins::hash(entry, high, low);
+        legacy = crate::jenkins::hash(entry, legacy, 0).0;
+    }
+    let stored = u32::from_le_bytes(bytes[36..40].try_into().unwrap());
+    if stored != high && stored != legacy {
+        return Err("checksum_mismatch");
+    }
     let mut entries = Vec::with_capacity(length / 18);
     for entry in bytes[40..40 + length].as_chunks::<18>().0 {
         let key: [u8; 9] = entry[..9].try_into().unwrap();
@@ -362,6 +378,17 @@ pub fn verify_install_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn seal(bytes: &mut [u8]) {
+        let header = crate::jenkins::hash(&bytes[8..24], 0, 0).0;
+        bytes[4..8].copy_from_slice(&header.to_le_bytes());
+        let length = u32::from_le_bytes(bytes[32..36].try_into().unwrap()) as usize;
+        let mut high = 0;
+        let mut low = 0;
+        for entry in bytes[40..40 + length].as_chunks::<18>().0 {
+            (high, low) = crate::jenkins::hash(entry, high, low);
+        }
+        bytes[36..40].copy_from_slice(&high.to_le_bytes());
+    }
     #[test]
     fn verifies_installed_content_and_rejects_symlink_substitution() {
         use crate::manifest::Entry;
@@ -386,6 +413,7 @@ mod tests {
                 bytes[40..49].copy_from_slice(&hash.0[..9]);
                 bytes[54..58].copy_from_slice(&(content.len() as u32 + 30).to_le_bytes());
             }
+            seal(&mut bytes);
             std::fs::write(root.join(format!("{b:02x}00000001.idx")), bytes).unwrap();
         }
         let mut data = vec![0u8; 30];
@@ -433,6 +461,7 @@ mod tests {
         bytes[40] = 1;
         bytes[49..54].copy_from_slice(&[0, 128, 0, 0, 25]);
         bytes[54..58].copy_from_slice(&100u32.to_le_bytes());
+        seal(&mut bytes);
         let entries = index(&bytes, 1).unwrap();
         assert_eq!(
             entries[0].1,
