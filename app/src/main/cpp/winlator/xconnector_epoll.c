@@ -1,5 +1,6 @@
 #include <android/log.h>
 #include <jni.h>
+#include <errno.h>
 #include <malloc.h>
 #include <string.h>
 #include <sys/epoll.h>
@@ -16,7 +17,6 @@
 #define MAX_EVENTS 10
 #define MAX_FDS 32
 
-struct epoll_event events[MAX_EVENTS];
 
 JNIEXPORT jint JNICALL
 Java_com_winlator_cmod_runtime_display_connector_XConnectorEpoll_createAFUnixSocket(
@@ -70,7 +70,9 @@ Java_com_winlator_cmod_runtime_display_connector_XConnectorEpoll_doEpollIndefini
   jmethodID handleExistingConnection =
       (*env)->GetMethodID(env, cls, "handleExistingConnection", "(I)V");
 
-  int numFds = epoll_wait(epollFd, events, MAX_EVENTS, -1);
+  struct epoll_event events[MAX_EVENTS];
+  int numFds;
+  do { numFds = epoll_wait(epollFd, events, MAX_EVENTS, -1); } while (numFds < 0 && errno == EINTR);
   for (int i = 0; i < numFds; i++) {
     if (events[i].data.fd == serverFd) {
       int clientFd = accept(serverFd, NULL, NULL);
@@ -217,17 +219,12 @@ Java_com_winlator_cmod_runtime_display_connector_XConnectorEpoll_waitForSocketRe
   pfds[1].fd = shutdownFd;
   pfds[1].events = POLLIN;
 
-  int res = poll(pfds, 2, -1);
-  if (res < 0 || (pfds[1].revents & POLLIN))
+  int res;
+  do { res = poll(pfds, 2, -1); } while (res < 0 && errno == EINTR);
+  if (res < 0 || pfds[1].revents || (pfds[0].revents & POLLNVAL))
     return JNI_FALSE;
+  return (pfds[0].revents & (POLLIN | POLLHUP | POLLERR)) ? JNI_TRUE : JNI_FALSE;
 
-  if (pfds[0].revents & POLLIN) {
-    jclass cls = (*env)->GetObjectClass(env, obj);
-    jmethodID handleExistingConnection =
-        (*env)->GetMethodID(env, cls, "handleExistingConnection", "(I)V");
-    (*env)->CallVoidMethod(env, obj, handleExistingConnection, clientFd);
-  }
-  return JNI_TRUE;
 }
 
 JNIEXPORT jintArray JNICALL
@@ -251,4 +248,10 @@ Java_com_winlator_cmod_runtime_display_connector_XConnectorEpoll_pollEpollEvents
 
   (*env)->ReleaseIntArrayElements(env, result, r, 0);
   return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_winlator_cmod_runtime_display_connector_XConnectorEpoll_shutdownSocket(
+    JNIEnv *env, jclass cls, jint fd) {
+  shutdown(fd, SHUT_RDWR);
 }
