@@ -153,6 +153,16 @@ class StoresFragment : Fragment() {
                             EpicAuthManager.logoutSync(requireContext())
                             refresh()
                         },
+                        onBattleNetSignIn = {
+                            itchLoginLauncher.launch(Intent(requireContext(), com.winlator.cmod.feature.stores.battlenet.BattleNetLoginActivity::class.java))
+                        },
+                        onBattleNetSignOut = {
+                            viewLifecycleOwner.lifecycleScope.launch {
+                                try { com.winlator.cmod.feature.stores.battlenet.BattleNetAccount.signOut(requireContext()) }
+                                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                catch (failure: Exception) { android.widget.Toast.makeText(context, failure.message, android.widget.Toast.LENGTH_LONG).show() }
+                            }
+                        },
                         onItchSignIn = { itchLoginLauncher.launch(Intent(requireContext(), ItchLoginActivity::class.java)) },
                         onItchSignOut = {
                             CoroutineScope(Dispatchers.Main).launch {
@@ -202,6 +212,15 @@ class StoresFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         refresh()
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                com.winlator.cmod.feature.stores.battlenet.BattleNetAccount.refreshSession(requireContext())
+                com.winlator.cmod.feature.stores.battlenet.BattleNetAccount.games()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+            }
+        }
     }
 
     // Helpers

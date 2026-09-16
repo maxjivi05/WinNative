@@ -332,6 +332,10 @@ public class WinHandler {
         parameters = "";
       }
     }
+    exec(filename, parameters);
+  }
+
+  public void exec(String filename, String parameters) {
     addAction(
         () -> {
           try {

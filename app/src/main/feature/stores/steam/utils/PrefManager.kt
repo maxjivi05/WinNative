@@ -273,7 +273,12 @@ object PrefManager {
 
     var libraryStoreVisible: String
         get() {
-            val stored = getString("library_store_visible", DEFAULT_STORE_VISIBLE)
+            var stored = getString("library_store_visible", DEFAULT_STORE_VISIBLE)
+            if (!getBoolean("library_store_visible_battlenet_added", false)) {
+                setBoolean("library_store_visible_battlenet_added", true)
+                stored = (stored.split(",").filter { it.isNotBlank() } + "battlenet").distinct().joinToString(",")
+                setString("library_store_visible", stored)
+            }
             if (!getBoolean("library_store_visible_itch_added", false)) {
                 setBoolean("library_store_visible_itch_added", true)
                 if (stored.isNotBlank() && !stored.split(",").contains("itch")) {
@@ -454,5 +459,5 @@ object PrefManager {
         requirePrefs().edit().clear().commit()
     }
 
-    const val DEFAULT_STORE_VISIBLE = "steam,epic,gog,itch"
+    const val DEFAULT_STORE_VISIBLE = "steam,epic,gog,itch,battlenet"
 }

@@ -486,6 +486,9 @@ internal fun UnifiedActivity.DrawerContent(
 
             Spacer(Modifier.height(16.dp))
 
+            DrawerFilterButton("Battle.net", storeVisible["battlenet"] == true, Modifier.fillMaxWidth()) { onStoreVisibleChanged("battlenet", it) }
+            Spacer(Modifier.height(16.dp))
+
             // ── Content Types ──
             Text(
                 stringResource(R.string.settings_content_types_header),

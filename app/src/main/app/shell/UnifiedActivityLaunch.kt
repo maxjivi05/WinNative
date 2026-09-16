@@ -939,6 +939,25 @@ internal fun UnifiedActivity.launchCustomGame(
             return@launch
         }
 
+        if (shortcut.getExtra("game_source") == "BATTLENET") {
+            try {
+                val product = shortcut.getExtra("battlenet_product")
+                val game = com.winlator.cmod.feature.stores.battlenet.BattleNetCatalog.byProduct(product)
+                    ?: throw IllegalArgumentException("Unknown Battle.net game")
+                val battleNetIntent = com.winlator.cmod.feature.stores.battlenet.BattleNetRuntime.prepareLaunch(context, game, containerId = shortcut.container.id)
+                battleNetIntent.putExtra("shortcut_path", shortcut.file.path)
+                battleNetIntent.putExtra("shortcut_name", gameName)
+                withContext(Dispatchers.Main) { launchGame(context, battleNetIntent) }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                withContext(Dispatchers.Main) {
+                    com.winlator.cmod.shared.ui.toast.WinToast.show(context, failure.message ?: "Battle.net launch failed")
+                }
+            }
+            return@launch
+        }
+
         // Backfill custom_name if missing (legacy shortcuts)
         if (shortcut.getExtra("custom_name").isEmpty()) {
             shortcut.putExtra("custom_name", gameName)

@@ -264,7 +264,7 @@ import kotlin.math.roundToInt
 
 // Main hub scaffold + top bar + glasses sheet + library carousel, split out of UnifiedActivity.kt (behavior-identical).
 
-private val StoreTabKeys = setOf("steam", "epic", "gog", "itch")
+private val StoreTabKeys = setOf("steam", "epic", "gog", "itch", "battlenet")
 private val HeaderCollapseTriggerDistance = 24.dp
 private const val HeaderRevealFraction = 0.5f
 private val TabLabelAutoSize =
@@ -275,7 +275,7 @@ internal fun UnifiedActivity.UnifiedHub() {
     val horizontalNavigationInsets =
         WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal)
     val initialLibraryLayoutMode = startupLibraryLayoutMode
-    val initialStoreVisible = startupStoreVisible ?: mapOf("steam" to true, "epic" to true, "gog" to true, "itch" to true)
+    val initialStoreVisible = startupStoreVisible ?: mapOf("steam" to true, "epic" to true, "gog" to true, "itch" to true, "battlenet" to true)
     val initialContentFilters = startupContentFilters ?: mapOf("games" to true, "dlc" to false, "applications" to false, "tools" to false)
     if (!startupBootstrapReady || initialLibraryLayoutMode == null) {
         Box(
@@ -1054,6 +1054,8 @@ internal fun UnifiedActivity.UnifiedHub() {
                                         gogLoginLauncher.launch(Intent(this@UnifiedHub, GOGOAuthActivity::class.java))
                                     }
                                 }
+
+                                "battlenet" -> BattleNetStoreTab(searchQuery)
 
                                 "itch" -> {
                                     ItchStoreTab(

@@ -31,7 +31,7 @@ object LibraryShortcutUtils {
     }
 
     @JvmStatic
-    fun isCustomLibraryShortcut(shortcut: Shortcut): Boolean = inferGameSource(shortcut) == "CUSTOM"
+    fun isCustomLibraryShortcut(shortcut: Shortcut): Boolean = inferGameSource(shortcut) in setOf("CUSTOM", "BATTLENET")
 
     @JvmStatic
     fun detectCustomGameFolder(exeFile: File): File {

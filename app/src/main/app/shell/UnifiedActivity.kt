@@ -614,7 +614,10 @@ class UnifiedActivity :
         return super.dispatchKeyEvent(event)
     }
 
+    private var battleNetRefreshJob: kotlinx.coroutines.Job? = null
+
     override fun onPause() {
+        battleNetRefreshJob?.cancel()
         super.onPause()
         chasingBordersPaused.value = true
         UpdateService.stopHourlyLoop()
@@ -623,6 +626,20 @@ class UnifiedActivity :
 
     override fun onResume() {
         super.onResume()
+        battleNetRefreshJob?.cancel()
+        battleNetRefreshJob = lifecycleScope.launch {
+            while (true) {
+                try {
+                    val state = com.winlator.cmod.feature.stores.battlenet.BattleNetRuntime.importInstalled(applicationContext)
+                    if (state.importedCount > 0) libraryRefreshSignal++
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    android.util.Log.w("BattleNet", "Could not refresh installed Battle.net games", failure)
+                }
+                delay(5000)
+            }
+        }
         settingsStickEngaged = 0
         joystickActive = false
         chasingBordersPaused.value = false

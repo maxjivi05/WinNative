@@ -424,8 +424,9 @@ internal fun UnifiedActivity.bootstrapStartupState() {
                     "epic" to ("epic" in saved),
                     "gog" to ("gog" in saved),
                     "itch" to ("itch" in saved),
+                    "battlenet" to ("battlenet" in saved),
                 )
-            }.getOrElse { mapOf("steam" to true, "epic" to true, "gog" to true, "itch" to true) }
+            }.getOrElse { mapOf("steam" to true, "epic" to true, "gog" to true, "itch" to true, "battlenet" to true) }
 
         val resolvedContentFilters =
             runCatching {
@@ -515,6 +516,7 @@ internal fun UnifiedActivity.buildTabs(storeVisible: Map<String, Boolean>): List
     if (storeVisible["epic"] != false) base.add(TabDef("Epic", "epic"))
     if (storeVisible["gog"] != false) base.add(TabDef("GOG", "gog"))
     if (storeVisible["itch"] != false) base.add(TabDef("itch.io", "itch"))
+    if (storeVisible["battlenet"] != false) base.add(TabDef("Battle.net", "battlenet"))
     return base
 }
 

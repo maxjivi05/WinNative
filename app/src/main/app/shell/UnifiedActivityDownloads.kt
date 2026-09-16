@@ -364,6 +364,7 @@ internal fun UnifiedActivity.DownloadsTab(
                 }
             },
     ) {
+        val hasBattleNetDownloads = BattleNetDownloads()
         @Suppress("UNUSED_EXPRESSION")
         tick
 
@@ -569,7 +570,7 @@ internal fun UnifiedActivity.DownloadsTab(
                 }
             }
 
-        if (sortedDownloads.isEmpty()) {
+        if (sortedDownloads.isEmpty() && !hasBattleNetDownloads) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,

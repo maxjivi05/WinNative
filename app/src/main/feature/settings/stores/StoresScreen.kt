@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Wifi
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -58,6 +59,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -140,6 +142,8 @@ fun StoresScreen(
     onGogSignOut: () -> Unit,
     onItchSignIn: () -> Unit,
     onItchSignOut: () -> Unit,
+    onBattleNetSignIn: () -> Unit,
+    onBattleNetSignOut: () -> Unit,
     onSharedFolderChanged: (Boolean) -> Unit,
     onDownloadSpeedChanged: (Int) -> Unit,
     onDownloadServerChanged: (Int) -> Unit,
@@ -215,6 +219,17 @@ fun StoresScreen(
                 onSignIn = onItchSignIn,
                 onSignOut = onItchSignOut,
             )
+
+            val battleNetSignedIn by com.winlator.cmod.feature.stores.battlenet.BattleNetAccount.authenticated.collectAsState()
+            StoreCard(
+                name = stringResource(R.string.battlenet_account),
+                icon = Icons.Outlined.Gamepad,
+                accentColor = MaterialTheme.colorScheme.primary,
+                isLoggedIn = battleNetSignedIn,
+                onSignIn = onBattleNetSignIn,
+                onSignOut = onBattleNetSignOut,
+            )
+            Text(stringResource(R.string.battlenet_library_session_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             SectionLabel(stringResource(R.string.stores_accounts_download_settings), modifier = Modifier.padding(top = 8.dp))
 

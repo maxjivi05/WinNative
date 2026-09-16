@@ -1595,6 +1595,15 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         int currentContainerId = container != null ? container.id : 0;
         String currentBootExe = bootExePath != null ? bootExePath : "";
 
+        if (isBattleNetSession() && intent.getBooleanExtra("battlenet_session", false)
+                && incomingContainerId == currentContainerId && winHandler != null
+                && incomingBootExe != null && !incomingBootExe.isEmpty()
+                && !exitRequested.get() && !sessionCleanupStarted.get()) {
+            winHandler.exec(incomingBootExe, intent.getStringExtra("boot_exe_args") != null
+                    ? intent.getStringExtra("boot_exe_args") : "");
+            return;
+        }
+
         setIntent(intent);
         launchedFromPinnedShortcut = isPinnedShortcutLaunchIntent(intent);
 
@@ -2396,7 +2405,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
 
         // Dependency-install sessions must not become background/reattachable sessions.
         backgroundSessionEnabled = !isDependencyInstall
-                && preferences.getBoolean("enable_background_session", false);
+                && (preferences.getBoolean("enable_background_session", false) || isBattleNetSession());
+        if (isBattleNetSession()) autoPauseContainer = false;
         if (backgroundSessionEnabled) {
             SessionKeepAliveService.startSession(this);
         }
@@ -2604,6 +2614,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                     }
 
                     try {
+                        if (isBattleNetSession()) {
+                            com.winlator.cmod.feature.stores.battlenet.BattleNetRuntime.ensureSharedFiles(this, container);
+                        }
                         setupXEnvironment();
                     } catch (PackageManager.NameNotFoundException e) {
                         throw new RuntimeException(e);
@@ -3491,6 +3504,48 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         } finally {
             snapshotWinHandler.setOnGetProcessInfoListener(previousListener);
         }
+    }
+
+    private final AtomicBoolean battleNetExitWatchRunning = new AtomicBoolean(false);
+
+    private boolean isBattleNetSession() {
+        return getIntent().getBooleanExtra("battlenet_session", false)
+                || (shortcut != null && "BATTLENET".equals(shortcut.getExtra("game_source")));
+    }
+
+    private boolean watchBattleNetTermination() {
+        if (!isBattleNetSession()) return false;
+        if (!battleNetExitWatchRunning.compareAndSet(false, true)) return true;
+        Thread watcher = new Thread(() -> {
+            long lastActive = SystemClock.elapsedRealtime();
+            try {
+                while (!exitRequested.get() && !activityDestroyed.get()) {
+                    boolean active = false;
+                    for (String detail : ProcessHelper.listRunningWineProcessDetails()) {
+                        String name = detail.substring(detail.indexOf(' ') + 1).split(" :: ", 2)[0];
+                        String normalized = normalizeProcessName(name);
+                        if (!normalized.isEmpty() && !STEAM_EXIT_ALLOWLIST.contains(normalized)) {
+                            active = true;
+                            break;
+                        }
+                    }
+                    long now = SystemClock.elapsedRealtime();
+                    if (active) lastActive = now;
+                    else if (now - lastActive >= 15000L) {
+                        requestExitOnUiThread("Battle.net processes drained");
+                        return;
+                    }
+                    Thread.sleep(1000L);
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            } finally {
+                battleNetExitWatchRunning.set(false);
+            }
+        }, "BattleNetExitWatch");
+        watcher.setDaemon(true);
+        watcher.start();
+        return true;
     }
 
     private boolean shouldWatchSteamTermination(int status) {
@@ -5035,7 +5090,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         }
 
         if (!sessionCleanupStarted.get()) {
-            if (exitRequested.get() || !preferences.getBoolean("enable_background_session", false)) {
+            if (exitRequested.get() || !backgroundSessionEnabled) {
                 performForcedSessionCleanup("onDestroy");
             }
         }
@@ -8601,6 +8656,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                                 + "Steam session for this app run)");
             }
 
+            if (watchBattleNetTermination()) return;
+
             if (shouldWatchSteamTermination(status)) {
                 return;
             }
@@ -10507,7 +10564,12 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                 path = path.substring(0, 2) + "\\" + path.substring(2);
             }
 
-            if (gameSource.equals("STEAM")) {
+            if (gameSource.equals("BATTLENET")) {
+                com.winlator.cmod.feature.stores.battlenet.BattleNetGame game =
+                        com.winlator.cmod.feature.stores.battlenet.BattleNetCatalog.INSTANCE.byProduct(shortcut.getExtra("battlenet_product"));
+                args = buildGuestProgramArgs(com.winlator.cmod.feature.stores.battlenet.BattleNetRuntime.SESSION_EXE) + " "
+                        + com.winlator.cmod.feature.stores.battlenet.BattleNetRuntime.sessionArguments(container, game);
+            } else if (gameSource.equals("STEAM")) {
                 int appId = Integer.parseInt(shortcut.getExtra("app_id"));
                 // Reset per launch; set below once the launch exe is resolved.
                 wnSteamDirectExeOverride = false;
