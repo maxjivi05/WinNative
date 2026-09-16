@@ -41,6 +41,38 @@ object BattleNetProductDb {
         }.filter { it.product.isNotBlank() && it.path.isNotBlank() }
     }
 
+    internal fun registerNative(bytes: ByteArray, product: String, path: String, buildKey: String, version: String): ByteArray {
+        require(product in setOf("wow", "wow_classic", "wow_classic_era"))
+        require(buildKey.matches(Regex("[a-f0-9]{32}")))
+        require(path.startsWith("C:\\WinNative\\Battle.net\\installed\\") && !path.contains('\n') && !path.contains('\r'))
+        val existing = parse(bytes).filter { it.product == product }
+        if (existing.isNotEmpty()) {
+            require(existing.size == 1 && existing.single().path == path) { "An existing Battle.net installation was preserved." }
+            return bytes
+        }
+        fun number(value: Long): ByteArray {
+            var remaining = value
+            val out = java.io.ByteArrayOutputStream()
+            do {
+                val low = (remaining and 127).toInt()
+                remaining = remaining ushr 7
+                out.write(low or if (remaining != 0L) 128 else 0)
+            } while (remaining != 0L)
+            return out.toByteArray()
+        }
+        fun message(n: Int, value: ByteArray) = number((n * 8 + 2).toLong()) + number(value.size.toLong()) + value
+        fun text(n: Int, value: String) = message(n, value.toByteArray(Charsets.UTF_8))
+        fun integer(n: Int, value: Long) = number((n * 8).toLong()) + number(value)
+        val flavor = when (product) { "wow" -> "_retail_"; "wow_classic" -> "_classic_"; else -> "_classic_era_" }
+        val settings = text(1, path) + text(2, "us") + integer(5, 3) + text(6, "enUS") + text(7, "enUS") +
+            message(8, text(1, "enUS") + integer(2, 3)) + text(11, "USA") + text(12, "US") + text(13, flavor)
+        val base = integer(1, 1) + integer(2, 1) + integer(3, 1) + text(7, version) + text(12, buildKey) + text(14, buildKey)
+        val entry = text(1, product) + text(2, product) + message(3, settings) + message(4, message(1, base)) + text(6, "wow")
+        return (bytes + message(1, entry)).also { require(it.size <= MAX_BYTES); parse(it) }
+    }
+
+    internal fun nativeRecord(bytes: ByteArray): ByteArray = fields(bytes).single { it.number == 1 }.data()
+
     private data class Field(val number: Int, val wire: Int, val numeric: Long = 0, val bytes: ByteArray? = null) {
         fun data(): ByteArray = requireNotNull(bytes) { "Invalid Battle.net database field" }
     }

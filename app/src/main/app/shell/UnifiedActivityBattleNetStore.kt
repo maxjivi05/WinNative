@@ -63,7 +63,9 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
             error = null
             scope.launch {
                 try {
-                    client.launch(BattleNetRuntime.prepareLaunch(applicationContext, game, install))
+                    if (game == null || BattleNetDownloads.prepareSharedInstall(applicationContext, game.product)) {
+                        client.launch(BattleNetRuntime.prepareLaunch(applicationContext, game, install))
+                    }
                     selected = null
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -170,7 +172,7 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
         val product = selected?.product
         if (product != null) {
             try {
-                availableBytes = withContext(Dispatchers.IO) { applicationContext.filesDir.usableSpace }
+                availableBytes = withContext(Dispatchers.IO) { BattleNetDownloads.gameRoot(applicationContext).usableSpace }
                 nativeInstalled = BattleNetDownloads.installed(applicationContext, product)
                 if (nativeInstalled) nativePath = BattleNetDownloads.installPath(applicationContext, product)
                 nativePreview = BattleNetDownloads.preview(applicationContext, product)

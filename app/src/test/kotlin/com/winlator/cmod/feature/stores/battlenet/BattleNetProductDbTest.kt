@@ -28,6 +28,20 @@ class BattleNetProductDbTest {
         return message(1, text(1, "fenris") + text(2, "fenris") + message(3, settings) + message(4, state))
     }
 
+    @Test fun registersNativeInstallWithoutChangingOtherProducts() {
+        val original = database() + text(111, "future metadata")
+        val path = "C:\\WinNative\\Battle.net\\installed\\wow_classic"
+        val result = BattleNetProductDb.registerNative(original, "wow_classic", path, "a".repeat(32), "5.5.4.69585")
+        assertArrayEquals(original, result.copyOf(original.size))
+        val installed = BattleNetProductDb.parse(result).last()
+        assertEquals(path, installed.path)
+        assertTrue(installed.complete && installed.installed && installed.playable)
+        assertArrayEquals(result, BattleNetProductDb.registerNative(result, "wow_classic", path, "a".repeat(32), "5.5.4.69585"))
+        assertThrows(IllegalArgumentException::class.java) {
+            BattleNetProductDb.registerNative(result, "wow_classic", path + "-other", "a".repeat(32), "5.5.4.69585")
+        }
+    }
+
     @Test fun readsLargeDownloadsAndKeepsPlayableSeparateFromComplete() {
         val game = BattleNetProductDb.parse(database()).single()
         assertEquals("fenris", game.product)

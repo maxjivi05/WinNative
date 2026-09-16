@@ -353,6 +353,10 @@ object PrefManager {
             setString("gog_download_folder", value)
         }
 
+    var battleNetDownloadFolder: String
+        get() = getString("battlenet_download_folder", "")
+        set(value) { setString("battlenet_download_folder", value) }
+
     var itchDownloadFolder: String
         get() = getString("itch_download_folder", "")
         set(value) {

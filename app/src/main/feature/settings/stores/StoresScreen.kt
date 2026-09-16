@@ -117,6 +117,7 @@ data class StoreState(
     val epicFolder: String = "",
     val gogFolder: String = "",
     val itchFolder: String = "",
+    val battleNetFolder: String = "",
     val containerLanguageLabels: List<String> = emptyList(),
     val containerLanguageIndex: Int = 0,
     val externalDrives: List<ExternalDriveRow> = emptyList(),
@@ -152,6 +153,7 @@ fun StoresScreen(
     onPickEpicFolder: () -> Unit,
     onPickGogFolder: () -> Unit,
     onPickItchFolder: () -> Unit,
+    onPickBattleNetFolder: () -> Unit,
     onAddExternalStorage: () -> Unit,
     onRemoveExternalStorage: (String) -> Unit,
     onContainerLanguageSelected: (Int) -> Unit,
@@ -271,6 +273,11 @@ fun StoresScreen(
                             stringResource(R.string.stores_accounts_gog_downloads),
                             state.gogFolder,
                             onPickGogFolder,
+                        )
+                        FolderPathCard(
+                            stringResource(R.string.battlenet_downloads),
+                            state.battleNetFolder,
+                            onPickBattleNetFolder,
                         )
                         FolderPathCard(
                             stringResource(R.string.itch_store_downloads),

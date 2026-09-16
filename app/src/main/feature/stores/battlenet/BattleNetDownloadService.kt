@@ -45,6 +45,7 @@ internal object BattleNetDownloads {
         private set
     private var pending = false
     private var restored = false
+    @Synchronized fun isBusy(): Boolean = activeId != 0L || pending
     fun supported(product: String) = product in setOf("wow", "wow_classic", "wow_classic_era")
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     suspend fun restore(context: Context) = withContext(Dispatchers.IO) {
@@ -70,11 +71,35 @@ internal object BattleNetDownloads {
         require(supported(product))
         val root = BattleNetRuntime.shared(context).root
         if (!cache) require(buildKey.matches(Regex("[a-f0-9]{32}")))
-        val file = File(root, if (cache) "native-cache/$product" else "games/native-$product-$buildKey")
+        val file = if (cache) File(root, "native-cache/$product")
+            else File(gameRoot(context), "${BattleNetCatalog.byProduct(product)!!.title}-$buildKey")
         BattleNetSharedFiles.requireUnlinkedPath(file)
         if (!file.isDirectory && !file.mkdirs() && !file.isDirectory) throw IOException(context.getString(R.string.battlenet_failed))
         return file
     }
+    fun gameRoot(context: Context): File {
+        val pref = com.winlator.cmod.feature.stores.steam.utils.PrefManager
+        val uri = if (pref.useSingleDownloadFolder) pref.defaultDownloadFolder else pref.battleNetDownloadFolder
+        val selected = if (uri.isNotEmpty()) {
+            com.winlator.cmod.shared.io.FileUtils.getFilePathFromUri(context, android.net.Uri.parse(uri))
+                ?: throw IOException(context.getString(R.string.battlenet_failed))
+        } else null
+        val fallback = if (pref.useExternalStorage && File(pref.externalStoragePath).isDirectory)
+            File(pref.externalStoragePath, "Battle.net/games") else File(context.dataDir, "Battle.net/games")
+        return (selected?.let { File(it) } ?: fallback).canonicalFile
+    }
+
+    suspend fun prepareSharedInstall(context: Context, product: String): Boolean = withContext(Dispatchers.IO) {
+        val saved = prefs(context).getString("installed_$product", null) ?: return@withContext true
+        val request = JSONObject(saved)
+        val target = File(request.getString("target"))
+        val legacy = File(BattleNetRuntime.shared(context).root, "games")
+        if (!target.toPath().startsWith(legacy.toPath())) return@withContext true
+        val destination = directory(context, product, false, request.getString("buildKey"))
+        dispatch(context, request.put("target", destination.absolutePath).put("action", "download"))
+        false
+    }
+
     suspend fun start(context: Context, product: String, preview: JSONObject) = withContext(Dispatchers.IO) {
         val buildKey = preview.getString("buildKey")
         val request = JSONObject().put("product", product).put("region", BattleNetSession.region(context))

@@ -138,7 +138,11 @@ impl Directory {
     pub fn lock(&self) -> Result<File, &'static str> {
         let f = self.file(".winnative-install-lock", true, false)?;
         if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err("install_busy");
+            let error = std::io::Error::last_os_error().raw_os_error();
+            if !matches!(error, Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP)) {
+                return Err("install_busy");
+            }
+            ofd_lock(&f)?;
         }
         Ok(f)
     }
@@ -170,6 +174,16 @@ impl Directory {
         f.sync_all().map_err(|_| "file_error")?;
         self.0.sync_all().map_err(|_| "file_error")
     }
+}
+
+fn ofd_lock(file: &File) -> Result<(), &'static str> {
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_WRLCK as _;
+    lock.l_whence = libc::SEEK_SET as _;
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } != 0 {
+        return Err("install_busy");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -213,5 +227,44 @@ mod tests {
         assert!(root.write_once("link", b"changed").is_err());
         std::os::unix::fs::symlink(&base, base.join("directory-link")).unwrap();
         assert!(root.child("directory-link".as_ref(), true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ofd_tests {
+    #[test]
+    fn separate_handles_remain_excluded_until_owner_closes() {
+        let folder = std::env::temp_dir().join(format!(
+            "wn-ofd-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&folder).unwrap();
+        let path = folder.join("lock");
+        let first = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let second = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        super::ofd_lock(&first).unwrap();
+        assert_eq!(super::ofd_lock(&second), Err("install_busy"));
+        drop(second);
+        let third = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert_eq!(super::ofd_lock(&third), Err("install_busy"));
+        drop(first);
+        super::ofd_lock(&third).unwrap();
     }
 }
