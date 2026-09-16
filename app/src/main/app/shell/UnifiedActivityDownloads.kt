@@ -268,6 +268,31 @@ internal fun UnifiedActivity.DownloadsTab(
     var tick by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val nativeDownload by com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.state.collectAsState()
+    LaunchedEffect(Unit) { com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.restore(applicationContext) }
+    val nativeId = "BATTLENET_${nativeDownload.product}"
+    LaunchedEffect(nativeId, selectedId) {
+        if (selectedId?.startsWith("BATTLENET_") == true && (selectedId != nativeId || nativeDownload.product.isEmpty())) onSelectDownload(null)
+    }
+    val nativeInfo = remember(nativeDownload.product) { DownloadInfo(gameId = 0, downloadingAppIds = java.util.concurrent.CopyOnWriteArrayList()) }
+    val nativePhase by nativeInfo.getStatusFlow().collectAsState()
+    LaunchedEffect(nativeDownload) {
+        nativeInfo.setActive(!nativeDownload.done)
+        nativeInfo.setTotalExpectedBytes(0)
+        if (nativeDownload.done) nativeInfo.initializeBytesDownloaded(nativeDownload.downloadedBytes)
+        else nativeInfo.setBytesDownloaded(nativeDownload.downloadedBytes)
+        nativeInfo.setProgress(nativeDownload.fraction)
+        nativeInfo.updateStatus(when {
+            nativeDownload.paused -> DownloadPhase.PAUSED
+            nativeDownload.stage == "downloading" -> DownloadPhase.DOWNLOADING
+            nativeDownload.stage == "installing" -> DownloadPhase.UNPACKING
+            nativeDownload.stage == "verifying" -> DownloadPhase.VERIFYING
+            nativeDownload.stage == "complete" -> DownloadPhase.COMPLETE
+            nativeDownload.stage == "cancelled" -> DownloadPhase.CANCELLED
+            nativeDownload.stage == "failed" -> DownloadPhase.FAILED
+            else -> DownloadPhase.PREPARING
+        }, if (nativeDownload.error != null) getString(R.string.battlenet_failed) else null)
+    }
+    val displayedDownloads = downloads.toList() + if (nativeDownload.product.isNotEmpty()) listOf(nativeId to nativeInfo) else emptyList()
     val nativePausable = nativeDownload.product.isNotEmpty() && nativeDownload.stage !in setOf("complete", "cancelled")
     var cancelWarningRequest by remember { mutableStateOf<DownloadCancelRequest?>(null) }
 
@@ -285,7 +310,7 @@ internal fun UnifiedActivity.DownloadsTab(
                 val currentDownloads = DownloadService.getAllDownloads()
                 downloads.clear()
                 downloads.addAll(currentDownloads)
-                if (selectedId != null && currentDownloads.none { it.first == selectedId }) {
+                if (selectedId != null && !selectedId.startsWith("BATTLENET_") && currentDownloads.none { it.first == selectedId }) {
                     onSelectDownload(null)
                 }
             }
@@ -366,7 +391,6 @@ internal fun UnifiedActivity.DownloadsTab(
                 }
             },
     ) {
-        val hasBattleNetDownloads = BattleNetDownloads()
         @Suppress("UNUSED_EXPRESSION")
         tick
 
@@ -375,8 +399,8 @@ internal fun UnifiedActivity.DownloadsTab(
             horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val selectedInfo = downloads.find { it.first == selectedId }?.second
-            val selectedStatus = selectedInfo?.getStatusFlow()?.value
+            val selectedInfo = displayedDownloads.find { it.first == selectedId }?.second
+            val selectedStatus = if (selectedId == nativeId) nativePhase else selectedInfo?.getStatusFlow()?.value
             // FAILED is resumable: the dispatcher preserves every breadcrumb
             // on failure, so one click continues from where it left off.
             val isResumable =
@@ -441,7 +465,7 @@ internal fun UnifiedActivity.DownloadsTab(
                 onClick = {
                     val isResumeAction =
                         if (selectedId == null) allPausableDownloadsPaused else isResumable
-                    val run = {
+                    val run: () -> Unit = {
                         when {
                             selectedId == null && allPausableDownloadsPaused -> {
                                 DownloadService.resumeAll()
@@ -454,6 +478,14 @@ internal fun UnifiedActivity.DownloadsTab(
                             selectedId == null -> {
                                 DownloadService.pauseAll()
                                 com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.command("pause")
+                            }
+                            selectedId == nativeId -> {
+                                if (isResumable) scope.launch {
+                                    try { com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.resume(applicationContext) }
+                                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                    catch (_: Exception) { android.widget.Toast.makeText(this@DownloadsTab, R.string.battlenet_failed, android.widget.Toast.LENGTH_LONG).show() }
+                                }
+                                else com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.command("pause")
                             }
                             isResumable -> DownloadService.resumeDownload(selectedId)
                             else -> DownloadService.pauseDownload(selectedId)
@@ -469,7 +501,7 @@ internal fun UnifiedActivity.DownloadsTab(
                     label = cancelLabel,
                     accentColor = DangerRed,
                     onClick = {
-                        if (selectedId == null && pausableDownloads.isEmpty() && nativePausable) {
+                        if (selectedId == nativeId || (selectedId == null && pausableDownloads.isEmpty() && nativePausable)) {
                             scope.launch { com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.cancel(applicationContext) }
                         } else if (selectedId == null) {
                             cancelWarningRequest =
@@ -511,7 +543,7 @@ internal fun UnifiedActivity.DownloadsTab(
 
             // Clear button - clears completed, cancelled, and failed downloads
             val hasCompletedOrCancelled =
-                downloads.any {
+                (nativeDownload.product.isNotEmpty() && nativeDownload.done) || downloads.any {
                     val s = it.second.getStatusFlow().value
                     s == DownloadPhase.COMPLETE || s == DownloadPhase.CANCELLED || s == DownloadPhase.FAILED
                 }
@@ -521,6 +553,8 @@ internal fun UnifiedActivity.DownloadsTab(
                 accentColor = Accent,
                 onClick = {
                     DownloadService.clearCompletedDownloads()
+                    scope.launch { com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.clearCompleted(applicationContext) }
+                    onSelectDownload(null)
                 },
                 enabled = hasCompletedOrCancelled,
             )
@@ -564,7 +598,7 @@ internal fun UnifiedActivity.DownloadsTab(
         @Suppress("UNUSED_EXPRESSION")
         tick
         val sortedDownloads =
-            downloads.sortedBy { (_, info) ->
+            displayedDownloads.sortedBy { (_, info) ->
                 when (info.getStatusFlow().value) {
                     // In-progress states grouped together at the top.
                     DownloadPhase.DOWNLOADING,
@@ -586,7 +620,7 @@ internal fun UnifiedActivity.DownloadsTab(
                 }
             }
 
-        if (sortedDownloads.isEmpty() && !hasBattleNetDownloads) {
+        if (sortedDownloads.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -599,6 +633,7 @@ internal fun UnifiedActivity.DownloadsTab(
                     DownloadItemDeck(
                         id,
                         info,
+                        bytesOverride = if (id == nativeId) nativeDownload.downloadedBytes to nativeDownload.downloadTotalBytes else null,
                         isSelected = selectedId == id,
                         animationsActive = animationsActive,
                         onClick = {
@@ -1036,6 +1071,7 @@ internal fun UnifiedActivity.DownloadCancelWarningMenu(
 internal fun UnifiedActivity.DownloadItemDeck(
     id: String,
     info: DownloadInfo,
+    bytesOverride: Pair<Long, Long>? = null,
     isSelected: Boolean,
     animationsActive: Boolean,
     onClick: () -> Unit,
@@ -1052,6 +1088,14 @@ internal fun UnifiedActivity.DownloadItemDeck(
     val statusMessage by info.getStatusMessageFlow().collectAsState()
     var previousStatus by remember { mutableStateOf(status) }
     var showCompletedProgressBar by remember { mutableStateOf(status != DownloadPhase.COMPLETE) }
+    val isBattleNet = id.startsWith("BATTLENET_")
+    val battleNetGame = if (isBattleNet) com.winlator.cmod.feature.stores.battlenet.BattleNetCatalog.byProduct(id.removePrefix("BATTLENET_")) else null
+    val nativeScope = rememberCoroutineScope()
+    val cancelRow = {
+        if (isBattleNet) nativeScope.launch { com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.cancel(applicationContext) }
+        else showDeleteDialog = true
+        Unit
+    }
     val isSteam = id.startsWith("STEAM_")
     val isEpic = id.startsWith("EPIC_")
     val isGog = id.startsWith("GOG_")
@@ -1112,7 +1156,7 @@ internal fun UnifiedActivity.DownloadItemDeck(
 
     val unknownGameLabel = stringResource(R.string.library_games_unknown_game)
     val displayName =
-        if (isSteam) {
+        if (isBattleNet) battleNetGame?.title else if (isSteam) {
             steamApp?.name
         } else if (isEpic) {
             epicGame?.title
@@ -1124,7 +1168,7 @@ internal fun UnifiedActivity.DownloadItemDeck(
             unknownGameLabel
         }
     val displayImage =
-        if (isSteam) {
+        if (isBattleNet) battleNetGame?.coverUrl else if (isSteam) {
             steamApp?.getHeaderImageUrl()
         } else if (isEpic) {
             epicGame?.primaryImageUrl ?: epicGame?.iconUrl
@@ -1154,7 +1198,7 @@ internal fun UnifiedActivity.DownloadItemDeck(
                     onActivate = onClick,
                     onSecondary = {
                         if (status != DownloadPhase.COMPLETE && status != DownloadPhase.CANCELLED) {
-                            showDeleteDialog = true
+                            cancelRow()
                         }
                     },
                 )
@@ -1181,7 +1225,7 @@ internal fun UnifiedActivity.DownloadItemDeck(
 
             Column(Modifier.weight(1f)) {
                 val currentFile by info.getCurrentFileNameFlow().collectAsState()
-                val (downloadedBytes, totalBytes) = info.getDisplayBytesProgress()
+                val (downloadedBytes, totalBytes) = bytesOverride ?: info.getDisplayBytesProgress()
                 val speed = info.getCurrentDownloadSpeed() ?: 0L
                 val percentage = (animatedProgress * 100).roundToInt()
                 val showDownloadSpeed =
@@ -1348,7 +1392,7 @@ internal fun UnifiedActivity.DownloadItemDeck(
 
             Box(contentAlignment = Alignment.Center) {
                 IconButton(
-                    onClick = { showDeleteDialog = true },
+                    onClick = cancelRow,
                     enabled = status != DownloadPhase.COMPLETE && status != DownloadPhase.CANCELLED,
                 ) {
                     Icon(

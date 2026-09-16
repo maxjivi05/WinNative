@@ -11,3 +11,11 @@ Android shared storage returned ENOSYS for flock. The installer now falls back o
 Validation: 193 JVM tests, 46 Rust tests, Clippy with warnings denied, and PUBG APK build passed. The first shared-storage attempt preserved the cache and stopped before packing at the unsupported flock operation. The replacement build is being tested against the same retained destination.
 
 The corrected build completed packing and verification in the configured shared folder: 384,508 content objects verified, and the installed record now points to the shared target. The shared WowClassic.exe MD5 matches the independently verified reference (3ed82fba3fd426b46197eaa440dd75b4). The original private installation remains intact.
+
+Battle.net downloads now use DownloadItemDeck in the common queue, below Pause/Cancel/Clear, including catalog artwork, byte totals, phase, progress, selection and pane controls. Device screenshots show the native WoW row alongside Steam's Cyberpunk row. Native verification completed, Pause stopped at 71%, and selected Resume continued verification. Clear retained the installed record. A cancellation during hashing exposed a decorated cancellation error; the verifier now preserves the cancellation classification.
+
+The Agent rejects symlinked Windows game and client directories during permission checks. The runtime now registers dedicated container drives for the shared game folder and shared client, preserving existing directories and links. Registration accepts Blizzard's slash-normalized Windows paths. Launch recognition is still under device validation.
+
+Current checks: 195 JVM tests, 46 Rust tests, Clippy with warnings denied, and the PUBG APK build passed. Upgrades use adb install -r and preserve application data.
+
+Final device check on pubg-battlenet-unified-downloads.apk: cancelling paused verification at 379,968/384,508 returned stage=cancelled and retained installed_wow_classic. Container Exit returned to the library with no Wine processes left. The shared client launched from H:/client, but requested sign-in; Agent also reported client permission and Agent install-handler errors. Authenticated game launch and recognition remain unresolved. No uninstall, data clear, or game/cache deletion was performed.

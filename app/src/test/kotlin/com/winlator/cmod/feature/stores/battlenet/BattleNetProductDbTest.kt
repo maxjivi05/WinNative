@@ -42,6 +42,25 @@ class BattleNetProductDbTest {
         }
     }
 
+    @Test fun rebindsOnlyOwnedLegacyNativeRecordsToADrive() {
+        val original = database()
+        val first = BattleNetProductDb.registerNative(original, "wow_classic", "C:\\WinNative\\Battle.net\\installed\\wow_classic", "a".repeat(32), "5.5.4.69585")
+        val moved = BattleNetProductDb.registerNative(first, "wow_classic", "F:\\World of Warcraft Classic", "a".repeat(32), "5.5.4.69585")
+        assertArrayEquals(original, moved.copyOf(original.size))
+        assertEquals("F:\\World of Warcraft Classic", BattleNetProductDb.parse(moved).last().path)
+        val normalized = BattleNetProductDb.relocateInstall(moved, "wow_classic", "F:/World of Warcraft Classic", "F:/World of Warcraft Classic")
+        assertArrayEquals(normalized, BattleNetProductDb.registerNative(normalized, "wow_classic", "F:\\World of Warcraft Classic", "a".repeat(32), "5.5.4.69585"))
+    }
+
+    @Test fun relocatesOnlyTheExpectedInstallAndPreservesMetadata() {
+        val original = database() + text(111, "future metadata")
+        val moved = BattleNetProductDb.relocateInstall(original, "fenris", "C:/Games/Diablo IV", "G:/Diablo IV")
+        assertEquals(BattleNetProductDb.parse(original).single().copy(path = "G:/Diablo IV"), BattleNetProductDb.parse(moved).single())
+        assertArrayEquals(moved, BattleNetProductDb.relocateInstall(moved, "fenris", "C:/Games/Diablo IV", "G:/Diablo IV"))
+        assertArrayEquals(original, BattleNetProductDb.relocateInstall(original, "bna", "C:/client", "H:/client"))
+        assertThrows(IllegalArgumentException::class.java) { BattleNetProductDb.relocateInstall(original, "fenris", "C:/other", "G:/Diablo IV") }
+    }
+
     @Test fun readsLargeDownloadsAndKeepsPlayableSeparateFromComplete() {
         val game = BattleNetProductDb.parse(database()).single()
         assertEquals("fenris", game.product)

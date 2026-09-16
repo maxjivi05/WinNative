@@ -161,6 +161,10 @@ impl Job {
             s["stage"] = json!(stage);
             s["current"] = json!(s["current"].as_u64().unwrap_or(0).max(current));
             s["total"] = json!(total);
+            if stage == "downloading" {
+                s["downloadedBytes"] = json!(current);
+                s["downloadTotalBytes"] = json!(total);
+            }
         }
     }
 }
@@ -177,6 +181,14 @@ fn execute(j: &Job, r: Request) -> Result<(), String> {
         return Err("build_changed_retry".into());
     }
     let selected = selection(&plan)?;
+    if let Ok(mut status) = j.status.lock() {
+        status["downloadTotalBytes"] = json!(selected.encoded_bytes);
+        status["downloadedBytes"] = json!(if r.action == "verify" {
+            selected.encoded_bytes
+        } else {
+            0
+        });
+    }
     if r.action == "download" {
         let cache = Cache::open(Path::new(&r.cache))?;
         let required = selected

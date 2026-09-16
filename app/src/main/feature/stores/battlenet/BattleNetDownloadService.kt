@@ -23,6 +23,7 @@ internal data class BattleNetDownloadState(
     val product: String = "", val stage: String = "", val current: Long = 0,
     val total: Long = 0, val paused: Boolean = false, val done: Boolean = true,
     val error: String? = null,
+    val downloadedBytes: Long = 0, val downloadTotalBytes: Long = 0,
 ) {
     val fraction: Float get() = if (total > 0) (current.toDouble() / total).coerceIn(0.0, 1.0).toFloat() else 0f
     fun label(context: Context): String = context.getString(when {
@@ -125,6 +126,15 @@ internal object BattleNetDownloads {
             .optJSONObject("build") ?: throw IOException(context.getString(R.string.battlenet_failed))
         installed.getString("buildKey") != latest.getString("buildKey")
     }
+    suspend fun clearCompleted(context: Context) = withContext(Dispatchers.IO) {
+        val claimed = synchronized(this@BattleNetDownloads) {
+            if (activeId == 0L && !pending && mutable.value.done) { pending = true; true } else false
+        }
+        if (claimed) try {
+            if (prefs(context).edit().remove("request").remove("status").commit()) mutable.value = BattleNetDownloadState()
+        } finally { synchronized(this@BattleNetDownloads) { pending = false } }
+    }
+
     suspend fun resume(context: Context) = withContext(Dispatchers.IO) {
         val id = activeId
         if (id != 0L) { BattleNetNative.commandJob(id, "resume"); return@withContext }
@@ -170,7 +180,7 @@ internal object BattleNetDownloads {
     }
     @Synchronized fun finished(id: Long) { if (activeId == id) activeId = 0 }
     fun publish(request: JSONObject, status: JSONObject) {
-        mutable.value = BattleNetDownloadState(request.optString("product"), status.optString("stage"), status.optLong("current"), status.optLong("total"), status.optBoolean("paused"), status.optBoolean("done"), status.optString("error").takeIf { it.isNotEmpty() })
+        mutable.value = BattleNetDownloadState(request.optString("product"), status.optString("stage"), status.optLong("current"), status.optLong("total"), status.optBoolean("paused"), status.optBoolean("done"), status.optString("error").takeIf { it.isNotEmpty() }, status.optLong("downloadedBytes"), status.optLong("downloadTotalBytes"))
     }
     fun persist(context: Context, request: JSONObject, status: JSONObject): Boolean {
         val edit = prefs(context).edit().putString("status", status.toString())

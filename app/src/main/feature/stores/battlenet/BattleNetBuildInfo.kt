@@ -1,6 +1,18 @@
 package com.winlator.cmod.feature.stores.battlenet
 
 internal object BattleNetBuildInfo {
+    fun clientCompatible(text: String): String {
+        val lines = text.lineSequence().filter { it.isNotBlank() }.toList()
+        require(lines.size == 2)
+        val headers = lines[0].split('|')
+        val row = lines[1].split('|')
+        require(headers.size == row.size)
+        val missing = listOf("Install Key!HEX:16", "IM Size!DEC:4", "CDN Servers!STRING:0", "Armadillo!STRING:0", "Last Activated!STRING:0", "KeyRing!HEX:16")
+            .filter { field -> headers.none { it.substringBefore('!') == field.substringBefore('!') } }
+        if (missing.isEmpty()) return text
+        return (headers + missing).joinToString("|") + "\n" + (row + missing.map { "" }).joinToString("|") + "\n"
+    }
+
     fun activeKey(text: String, product: String): String? {
         if (text.length > 1024 * 1024) return null
         val lines = text.lineSequence().filter { it.isNotBlank() && !it.startsWith('#') }.iterator()

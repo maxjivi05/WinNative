@@ -80,8 +80,14 @@ object BattleNetRuntime {
         "Program Files/Battle.net/Battle.net Launcher.exe",
     ).map { File(container.rootDir, ".wine/drive_c/$it") }.firstOrNull { it.isFile }
 
-    private fun windowsPath(container: Container, file: File): String =
-        "C:\\" + file.relativeTo(File(container.rootDir, ".wine/drive_c")).path.replace('/', '\\')
+    private fun windowsPath(container: Container, file: File): String {
+        val resolved = file.canonicalFile.toPath()
+        for (entry in Container.drivesIterator(container.drives.orEmpty())) {
+            val root = File(entry[1]).canonicalFile.toPath()
+            if (resolved.startsWith(root)) return entry[0] + ":\\" + root.relativize(resolved).toString().replace('/', '\\')
+        }
+        return "C:\\" + file.relativeTo(File(container.rootDir, ".wine/drive_c")).path.replace('/', '\\')
+    }
 
     @JvmStatic
     fun launcherWindowsPath(container: Container): String =
@@ -99,8 +105,9 @@ object BattleNetRuntime {
                     com.winlator.cmod.runtime.system.SessionKeepAliveService.isSessionActive()
                 ) throw IOException("Close the running session before switching Battle.net containers.")
                 ensureSharedFiles(context, container)
+                registerClientDrive(context, container)
                 if (game != null) {
-                    try { registerNative(context, game) }
+                    try { registerNative(context, container, game) }
                     catch (failure: IllegalArgumentException) { throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed), failure) }
                 }
                 BattleNetSession.stage(context, shared(context).root)
@@ -118,7 +125,27 @@ object BattleNetRuntime {
             }
         }
 
-    private suspend fun registerNative(context: Context, game: BattleNetGame) {
+    private fun registerClientDrive(context: Context, container: Container) {
+        if (com.winlator.cmod.runtime.system.SessionKeepAliveService.isSessionActive()) throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
+        val shared = shared(context)
+        val root = shared.root.canonicalFile
+        val drives = Container.drivesIterator(container.drives.orEmpty()).map { it.copyOf() }
+        val drive = drives.firstOrNull { File(it[1]).canonicalFile == root }?.get(0)
+            ?: ('D'..'Y').first { it != 'E' && drives.none { entry -> entry[0].equals(it.toString(), true) } }.toString().also {
+                container.drives = container.drives.orEmpty() + "$it:${root.path}"
+                container.saveData()
+            }
+        if (!shared.database.isFile) return
+        val original = shared.database.inputStream().use { readLimited(it, BattleNetProductDb.MAX_BYTES) }
+        var updated = original
+        for ((product, from, to) in listOf(
+            Triple("bna", "C:/Program Files (x86)/Battle.net", "$drive:/client"),
+            Triple("agent", "C:/ProgramData/Battle.net/Agent", "$drive:/programdata/Battle.net/Agent"),
+        )) updated = BattleNetProductDb.relocateInstall(updated, product, from, to)
+        if (!original.contentEquals(updated)) atomicWrite(shared.database, updated)
+    }
+
+    private suspend fun registerNative(context: Context, container: Container, game: BattleNetGame) {
         if (!BattleNetDownloads.installed(context, game.product)) return
         if (com.winlator.cmod.runtime.system.SessionKeepAliveService.isSessionActive()) {
             throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
@@ -127,19 +154,36 @@ object BattleNetRuntime {
         BattleNetSharedFiles.requireUnlinkedPath(folder)
         val info = File(folder, ".build.info")
         val text = info.inputStream().use { readLimited(it, 1024 * 1024) }.toString(Charsets.UTF_8)
+        val compatible = BattleNetBuildInfo.clientCompatible(text)
+        if (compatible != text) {
+            atomicWrite(File(folder, ".winnative-build-info-${UUID.randomUUID()}"), text.toByteArray())
+            atomicWrite(info, compatible.toByteArray())
+        }
         val key = BattleNetBuildInfo.activeKey(text, game.product) ?: throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
         val rows = text.lineSequence().filter { it.isNotBlank() }.toList()
         val headers = rows.first().split('|').map { it.substringBefore('!') }
         val row = rows.drop(1).map { it.split('|') }.single { it[headers.indexOf("Product")] == game.product }
         val version = row[headers.indexOf("Version")]
         val files = shared(context)
-        val path = "C:\\WinNative\\Battle.net\\installed\\${game.product}"
+        val driveRoot = folder.parentFile!!.canonicalFile
+        val drives = Container.drivesIterator(container.drives.orEmpty()).map { it.copyOf() }
+        val existingDrive = drives.firstOrNull { File(it[1]).canonicalFile == driveRoot }
+        val drive = existingDrive?.get(0) ?: ('D'..'Y').first { letter -> letter != 'E' && drives.none { it[0].equals(letter.toString(), true) } }.toString().also { letter ->
+            container.drives = container.drives.orEmpty() + "$letter:${driveRoot.path}"
+            container.saveData()
+        }
+        val path = "$drive:\\${folder.name}"
         val original = if (files.database.isFile) files.database.inputStream().use { readLimited(it, BattleNetProductDb.MAX_BYTES) } else byteArrayOf()
         val updated = BattleNetProductDb.registerNative(original, game.product, path, key, version)
         val single = BattleNetProductDb.registerNative(byteArrayOf(), game.product, path, key, version)
         val local = File(folder, ".product.db")
         BattleNetSharedFiles.requireUnlinkedPath(local)
-        if (!local.exists()) atomicWrite(local, BattleNetProductDb.nativeRecord(single))
+        val localBytes = BattleNetProductDb.nativeRecord(single)
+        val previousLocal = if (local.exists()) local.inputStream().use { readLimited(it, BattleNetProductDb.MAX_BYTES) } else null
+        if (previousLocal == null || !previousLocal.contentEquals(localBytes)) {
+            if (previousLocal != null) atomicWrite(File(folder, ".winnative-product-${UUID.randomUUID()}"), previousLocal)
+            atomicWrite(local, localBytes)
+        }
         val flavor = when (game.product) { "wow" -> "_retail_"; "wow_classic" -> "_classic_"; else -> "_classic_era_" }
         val flavorFile = File(folder, "$flavor/.flavor.info")
         BattleNetSharedFiles.requireUnlinkedPath(flavorFile)

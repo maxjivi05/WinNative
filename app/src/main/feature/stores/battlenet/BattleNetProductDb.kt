@@ -44,11 +44,13 @@ object BattleNetProductDb {
     internal fun registerNative(bytes: ByteArray, product: String, path: String, buildKey: String, version: String): ByteArray {
         require(product in setOf("wow", "wow_classic", "wow_classic_era"))
         require(buildKey.matches(Regex("[a-f0-9]{32}")))
-        require(path.startsWith("C:\\WinNative\\Battle.net\\installed\\") && !path.contains('\n') && !path.contains('\r'))
+        require((path.startsWith("C:\\WinNative\\Battle.net\\installed\\") || Regex("^[D-Y]:[\\\\].+").matches(path)) && !path.contains('\n') && !path.contains('\r'))
         val existing = parse(bytes).filter { it.product == product }
         if (existing.isNotEmpty()) {
-            require(existing.size == 1 && existing.single().path == path) { "An existing Battle.net installation was preserved." }
-            return bytes
+            require(existing.size == 1) { "An existing Battle.net installation was preserved." }
+            if (existing.single().path.replace('/', '\\').equals(path, true)) return bytes
+            require(existing.single().path.replace('/', '\\') == "C:\\WinNative\\Battle.net\\installed\\$product" && path.first() != 'C')
+
         }
         fun number(value: Long): ByteArray {
             var remaining = value
@@ -66,9 +68,52 @@ object BattleNetProductDb {
         val flavor = when (product) { "wow" -> "_retail_"; "wow_classic" -> "_classic_"; else -> "_classic_era_" }
         val settings = text(1, path) + text(2, "us") + integer(5, 3) + text(6, "enUS") + text(7, "enUS") +
             message(8, text(1, "enUS") + integer(2, 3)) + text(11, "USA") + text(12, "US") + text(13, flavor)
-        val base = integer(1, 1) + integer(2, 1) + integer(3, 1) + text(7, version) + text(12, buildKey) + text(14, buildKey)
+        val base = integer(1, 1) + integer(2, 1) + integer(3, 1) + text(7, version) + text(12, buildKey) + text(14, buildKey) + text(17, "Windows x86_64 US? acct-USA? geoip-US? enUS speech?:Windows x86_64 US? acct-USA? geoip-US? enUS text?")
         val entry = text(1, product) + text(2, product) + message(3, settings) + message(4, message(1, base)) + text(6, "wow")
-        return (bytes + message(1, entry)).also { require(it.size <= MAX_BYTES); parse(it) }
+        val retained = if (existing.isEmpty()) bytes else fields(bytes).filterNot { it.number == 1 && fields(it.data()).text(2) == product }.fold(byteArrayOf()) { out, f ->
+            out + when (f.wire) {
+                2 -> message(f.number, f.data())
+                0 -> integer(f.number, f.numeric)
+                1 -> number((f.number * 8 + 1).toLong()) + ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(f.numeric).array()
+                else -> number((f.number * 8 + 5).toLong()) + ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(f.numeric.toInt()).array()
+            }
+        }
+        return (retained + message(1, entry)).also { require(it.size <= MAX_BYTES); parse(it) }
+    }
+
+    internal fun relocateInstall(bytes: ByteArray, product: String, oldPath: String, newPath: String): ByteArray {
+        parse(bytes)
+        return encode(fields(bytes).map { field ->
+            if (field.number != 1 || field.wire != 2) field else {
+                val entry = fields(field.data())
+                if (entry.text(2) != product) field else {
+                    val settings = fields(entry.message(3))
+                    val current = settings.text(1).replace('/', '\\')
+                    require(current == oldPath.replace('/', '\\') || current == newPath.replace('/', '\\'))
+                    val replaced = encode(settings.map { if (it.number == 1 && it.wire == 2) it.copy(bytes = newPath.toByteArray()) else it })
+                    field.copy(bytes = encode(entry.map { if (it.number == 3 && it.wire == 2) it.copy(bytes = replaced) else it }))
+                }
+            }
+        })
+    }
+
+    private fun encode(fields: List<Field>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        fun number(value: Long) {
+            var remaining = value
+            do { val low = (remaining and 127).toInt(); remaining = remaining ushr 7; out.write(low or if (remaining != 0L) 128 else 0) } while (remaining != 0L)
+        }
+        for (field in fields) {
+            number((field.number.toLong() shl 3) or field.wire.toLong())
+            when (field.wire) {
+                0 -> number(field.numeric)
+                2 -> { val data = field.data(); number(data.size.toLong()); out.write(data) }
+                1 -> out.write(ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(field.numeric).array())
+                5 -> out.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(field.numeric.toInt()).array())
+                else -> error("Invalid field")
+            }
+        }
+        return out.toByteArray()
     }
 
     internal fun nativeRecord(bytes: ByteArray): ByteArray = fields(bytes).single { it.number == 1 }.data()

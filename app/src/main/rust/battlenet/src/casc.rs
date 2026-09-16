@@ -299,7 +299,13 @@ impl Storage {
                 entry.encoded_bytes,
                 control,
             )
-            .map_err(|error| format!("{error}:{}", entry.encoding_key))?;
+            .map_err(|error| {
+                if error == "cancelled" {
+                    error.to_owned()
+                } else {
+                    format!("{error}:{}", entry.encoding_key)
+                }
+            })?;
             verified += entry.encoded_bytes;
             progress(number + 1, verified);
         }
