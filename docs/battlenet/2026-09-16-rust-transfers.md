@@ -2,6 +2,8 @@
 
 The device at `192.168.50.53:44609` returned HTTP 401 from `/api/games-and-subs` despite having cookies and a saved desktop credential. This was an authorization failure, not an empty owned-game list. The login flow now connects the account website session after saving the desktop credential. Reconnect can establish that website session without replacing the existing desktop token. A failed refresh no longer displays the empty-library message. The opt-in device diagnostic emits HTTP status, JSON field names and product title IDs; it does not emit credentials or account identifiers.
 
+A subsequent on-device library diagnostic returned HTTP 200. The custom store UI visibly displayed World of Warcraft, Classic, Classic Era, Hearthstone and Diablo Immortal. The original empty-library symptom is resolved on the tested account.
+
 ## Rust implementation
 
 - BLTE raw/zlib decoding validates chunk checksums, declared lengths and output limits. Encrypted chunks fail explicitly when a key is needed.
@@ -37,4 +39,4 @@ The cache command accepts `pause`, `resume` and `cancel` on stdin. Cancellation 
 
 Protocol layouts were checked against [CascLib](https://github.com/ladislav-zezula/CascLib) and [TACTLib](https://github.com/overtools/TACTLib); the implementation here is Rust. Ghidra analysis of Agent 9775 also identified `paused` in handler `0x004320dd`, with response references in `0x00439c15` and `0x0043161d`. This is evidence for further control-request validation, not proof of tested Agent pause behavior.
 
-Still required: persistent Android foreground-service ownership and UI controls, complete CASC installation/index writing or an authenticated Agent bridge, install-manifest extraction, entitlement/encryption handling, update/repair transactions, reconciled download and disk requirements, and authenticated game-launch tests on both Proton architectures. No game launch or full-game transfer is marked validated.
+Still required: persistent Android foreground-service ownership and UI controls, complete CASC installation/index writing or an authenticated Agent bridge, install-manifest extraction, entitlement/encryption handling, update/repair transactions, reconciled download and disk requirements, and authenticated game-launch tests on both Proton architectures. A device launch test started the official client and Agent and found the imported native session file, but the client rendered a blank window in the current container. The test session was exited through the normal UI and its Wine processes stopped. The blank desktop rendering remains unresolved. No game launch or full-game transfer is marked validated.
