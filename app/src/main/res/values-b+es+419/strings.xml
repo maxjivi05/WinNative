@@ -2879,4 +2879,7 @@ Ruta instalada:
     <string name="steam_controller_left_pad_click">Clic del panel izquierdo</string>
     <string name="steam_controller_right_pad_click">Clic del panel derecho</string>
     <string name="controller_test_generic">Genérico</string>
+    <string name="battlenet_native_unavailable">Las descargas nativas aún no están disponibles para esta configuración del juego.</string>
+    <string name="battlenet_download_busy">Termina o cancela primero la operación actual de Battle.net.</string>
+    <string name="battlenet_native_selection">Windows · Inglés (EE. UU.) · Juego base</string>
 </resources>

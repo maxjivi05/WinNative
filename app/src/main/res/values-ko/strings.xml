@@ -2882,5 +2882,8 @@
     <string name="steam_controller_left_pad_click">왼쪽 패드 클릭</string>
     <string name="steam_controller_right_pad_click">오른쪽 패드 클릭</string>
     <string name="controller_test_generic">일반</string>
+    <string name="battlenet_native_unavailable">이 게임 구성에서는 아직 네이티브 다운로드를 사용할 수 없습니다.</string>
+    <string name="battlenet_download_busy">먼저 현재 Battle.net 작업을 완료하거나 취소하세요.</string>
+    <string name="battlenet_native_selection">Windows · 영어(미국) · 기본 게임</string>
 </resources>
 

@@ -2880,4 +2880,7 @@ Installerad sökväg:
     <string name="steam_controller_left_pad_click">Klick på vänster styrplatta</string>
     <string name="steam_controller_right_pad_click">Klick på höger styrplatta</string>
     <string name="controller_test_generic">Generisk</string>
+    <string name="battlenet_native_unavailable">Direkta hämtningar är ännu inte tillgängliga för den här spelkonfigurationen.</string>
+    <string name="battlenet_download_busy">Slutför eller avbryt den aktuella Battle.net-åtgärden först.</string>
+    <string name="battlenet_native_selection">Windows · Engelska (USA) · Grundspel</string>
 </resources>

@@ -2908,4 +2908,7 @@ Installed path:
     <string name="battlenet_download_progress">%1$d%% · %2$s (Agent reported)</string>
     <string name="battlenet_manage_downloads">Manage downloads in Battle.net</string>
     <string name="battlenet_launcher_name" translatable="false">Battlenet</string>
+    <string name="battlenet_native_unavailable">Native downloads are not available for this game configuration yet.</string>
+    <string name="battlenet_download_busy">Finish or cancel the current Battle.net operation first.</string>
+    <string name="battlenet_native_selection">Windows · English (US) · Base game</string>
 </resources>

@@ -267,6 +267,8 @@ internal fun UnifiedActivity.DownloadsTab(
     val downloads = remember { mutableStateListOf<Pair<String, DownloadInfo>>() }
     var tick by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    val nativeDownload by com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.state.collectAsState()
+    val nativePausable = nativeDownload.product.isNotEmpty() && nativeDownload.stage !in setOf("complete", "cancelled")
     var cancelWarningRequest by remember { mutableStateOf<DownloadCancelRequest?>(null) }
 
     val downloadsActivity = LocalContext.current as? UnifiedActivity
@@ -387,7 +389,8 @@ internal fun UnifiedActivity.DownloadsTab(
                     status != DownloadPhase.COMPLETE && status != DownloadPhase.CANCELLED
                 }
             val allPausableDownloadsPaused =
-                pausableDownloads.isNotEmpty() &&
+                (pausableDownloads.isNotEmpty() || nativePausable) &&
+                    (!nativePausable || nativeDownload.paused || nativeDownload.stage == "failed") &&
                     pausableDownloads.all {
                         val s = it.second.getStatusFlow().value
                         s == DownloadPhase.PAUSED || s == DownloadPhase.FAILED
@@ -422,14 +425,14 @@ internal fun UnifiedActivity.DownloadsTab(
                 if (selectedId != null) {
                     !isComplete && !isCancelled
                 } else {
-                    pausableDownloads.isNotEmpty()
+                    pausableDownloads.isNotEmpty() || nativePausable
                 }
 
             val cancelEnabled =
                 if (selectedId != null) {
                     !isComplete && !isCancelled
                 } else {
-                    pausableDownloads.isNotEmpty()
+                    pausableDownloads.isNotEmpty() || nativePausable
                 }
 
             DownloadsQueueButton(
@@ -440,8 +443,18 @@ internal fun UnifiedActivity.DownloadsTab(
                         if (selectedId == null) allPausableDownloadsPaused else isResumable
                     val run = {
                         when {
-                            selectedId == null && allPausableDownloadsPaused -> DownloadService.resumeAll()
-                            selectedId == null -> DownloadService.pauseAll()
+                            selectedId == null && allPausableDownloadsPaused -> {
+                                DownloadService.resumeAll()
+                                if (nativePausable) scope.launch {
+                                    try { com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.resume(applicationContext) }
+                                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                    catch (_: Exception) { android.widget.Toast.makeText(this@DownloadsTab, R.string.battlenet_failed, android.widget.Toast.LENGTH_LONG).show() }
+                                }
+                            }
+                            selectedId == null -> {
+                                DownloadService.pauseAll()
+                                com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.command("pause")
+                            }
                             isResumable -> DownloadService.resumeDownload(selectedId)
                             else -> DownloadService.pauseDownload(selectedId)
                         }
@@ -456,7 +469,9 @@ internal fun UnifiedActivity.DownloadsTab(
                     label = cancelLabel,
                     accentColor = DangerRed,
                     onClick = {
-                        if (selectedId == null) {
+                        if (selectedId == null && pausableDownloads.isEmpty() && nativePausable) {
+                            scope.launch { com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.cancel(applicationContext) }
+                        } else if (selectedId == null) {
                             cancelWarningRequest =
                                 DownloadCancelRequest(
                                     ids = pausableDownloads.map { it.first },
@@ -483,6 +498,7 @@ internal fun UnifiedActivity.DownloadsTab(
                             val ids = activeRequest?.ids.orEmpty()
                             if (activeRequest?.isCancelAll == true) {
                                 DownloadService.cancelAll()
+                                if (nativePausable) scope.launch { com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.cancel(applicationContext) }
                             } else {
                                 ids.forEach(DownloadService::cancelDownload)
                             }

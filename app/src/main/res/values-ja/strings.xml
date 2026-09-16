@@ -2880,4 +2880,7 @@
     <string name="steam_controller_left_pad_click">左パッドのクリック</string>
     <string name="steam_controller_right_pad_click">右パッドのクリック</string>
     <string name="controller_test_generic">汎用</string>
+    <string name="battlenet_native_unavailable">このゲーム構成では、ネイティブダウンロードはまだ利用できません。</string>
+    <string name="battlenet_download_busy">まず現在のBattle.netの処理を完了またはキャンセルしてください。</string>
+    <string name="battlenet_native_selection">Windows · 英語（米国）· 基本ゲーム</string>
 </resources>

@@ -2880,4 +2880,7 @@ Asennuspolku:
     <string name="steam_controller_left_pad_click">Vasemman kosketuslevyn painallus</string>
     <string name="steam_controller_right_pad_click">Oikean kosketuslevyn painallus</string>
     <string name="controller_test_generic">Yleinen</string>
+    <string name="battlenet_native_unavailable">Suora lataus ei ole vielä käytettävissä tälle pelikokoonpanolle.</string>
+    <string name="battlenet_download_busy">Viimeistele tai peruuta ensin nykyinen Battle.net-toiminto.</string>
+    <string name="battlenet_native_selection">Windows · Englanti (Yhdysvallat) · Peruspeli</string>
 </resources>

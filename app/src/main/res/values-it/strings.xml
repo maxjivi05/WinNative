@@ -2882,5 +2882,8 @@ Percorso installato:
     <string name="steam_controller_left_pad_click">Clic del pad sinistro</string>
     <string name="steam_controller_right_pad_click">Clic del pad destro</string>
     <string name="controller_test_generic">Generico</string>
+    <string name="battlenet_native_unavailable">I download nativi non sono ancora disponibili per questa configurazione del gioco.</string>
+    <string name="battlenet_download_busy">Completa o annulla prima l’operazione Battle.net in corso.</string>
+    <string name="battlenet_native_selection">Windows · Inglese (USA) · Gioco base</string>
 </resources>
 

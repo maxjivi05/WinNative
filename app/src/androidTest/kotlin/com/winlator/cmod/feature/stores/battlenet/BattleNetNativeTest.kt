@@ -8,6 +8,25 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class BattleNetNativeTest {
+    @Test fun nativeJobLifecycleDoesNotStartContainer() {
+        val id = BattleNetNative.createJob()
+        org.junit.Assert.assertTrue(id > 0)
+        try {
+            assertEquals(0L, BattleNetNative.createJob())
+            org.junit.Assert.assertTrue(BattleNetNative.commandJob(id, "pause"))
+            org.junit.Assert.assertTrue(JSONObject(BattleNetNative.jobStatus(id)).getBoolean("paused"))
+            org.junit.Assert.assertTrue(BattleNetNative.commandJob(id, "cancel"))
+            val result = JSONObject(BattleNetNative.runJob(id, "{}"))
+            org.junit.Assert.assertTrue(result.getBoolean("done"))
+            org.junit.Assert.assertFalse(BattleNetNative.commandJob(id, "resume"))
+        } finally { BattleNetNative.releaseJob(id) }
+    }
+    @Test fun nativeInstallPreviewWhenRequested() {
+        org.junit.Assume.assumeTrue(androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("battlenetLiveMetadata") == "true")
+        val result = JSONObject(BattleNetNative.installPreview("wow_classic", "us"))
+        org.junit.Assert.assertTrue(result.getLong("downloadBytes") > 20_000_000_000L)
+        org.junit.Assert.assertTrue(result.getLong("requiredBytes") > result.getLong("downloadBytes"))
+    }
     @Test fun jniRejectsInvalidProductsWithoutMakingANetworkRequest() {
         val result = JSONObject(BattleNetNative.latestBuild("../wow", "us"))
         assertEquals("invalid_product", result.getString("error"))

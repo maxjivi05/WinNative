@@ -2880,5 +2880,8 @@ Cale instalata:
     <string name="steam_controller_left_pad_click">Clic pe panoul stâng</string>
     <string name="steam_controller_right_pad_click">Clic pe panoul drept</string>
     <string name="controller_test_generic">Generic</string>
+    <string name="battlenet_native_unavailable">Descărcările native nu sunt încă disponibile pentru această configurație a jocului.</string>
+    <string name="battlenet_download_busy">Finalizează sau anulează mai întâi operațiunea Battle.net curentă.</string>
+    <string name="battlenet_native_selection">Windows · Engleză (SUA) · Joc de bază</string>
 </resources>
 

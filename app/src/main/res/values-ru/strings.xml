@@ -2786,4 +2786,7 @@
     <string name="steam_controller_left_pad_click">Нажатие левой панели</string>
     <string name="steam_controller_right_pad_click">Нажатие правой панели</string>
     <string name="controller_test_generic">Универсальный</string>
+    <string name="battlenet_native_unavailable">Встроенная загрузка пока недоступна для этой конфигурации игры.</string>
+    <string name="battlenet_download_busy">Сначала завершите или отмените текущую операцию Battle.net.</string>
+    <string name="battlenet_native_selection">Windows · Английский (США) · Базовая игра</string>
 </resources>

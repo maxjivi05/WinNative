@@ -2882,4 +2882,7 @@ Installeret sti:
     <string name="steam_controller_left_pad_click">Klik på venstre pegefelt</string>
     <string name="steam_controller_right_pad_click">Klik på højre pegefelt</string>
     <string name="controller_test_generic">Generisk</string>
+    <string name="battlenet_native_unavailable">Direkte downloads er endnu ikke tilgængelige for denne spilkonfiguration.</string>
+    <string name="battlenet_download_busy">Afslut eller annuller først den aktuelle Battle.net-handling.</string>
+    <string name="battlenet_native_selection">Windows · Engelsk (USA) · Grundspil</string>
 </resources>

@@ -2887,5 +2887,8 @@ Zainstalowana ścieżka:
     <string name="steam_controller_left_pad_click">Kliknięcie lewego panelu</string>
     <string name="steam_controller_right_pad_click">Kliknięcie prawego panelu</string>
     <string name="controller_test_generic">Ogólny</string>
+    <string name="battlenet_native_unavailable">Pobieranie natywne nie jest jeszcze dostępne dla tej konfiguracji gry.</string>
+    <string name="battlenet_download_busy">Najpierw zakończ lub anuluj bieżącą operację Battle.net.</string>
+    <string name="battlenet_native_selection">Windows · Angielski (USA) · Podstawowa gra</string>
 </resources>
 

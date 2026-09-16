@@ -2815,4 +2815,7 @@
     <string name="steam_controller_left_pad_click">बाएँ पैड पर क्लिक</string>
     <string name="steam_controller_right_pad_click">दाएँ पैड पर क्लिक</string>
     <string name="controller_test_generic">सामान्य</string>
+    <string name="battlenet_native_unavailable">इस गेम कॉन्फ़िगरेशन के लिए नेटिव डाउनलोड अभी उपलब्ध नहीं हैं।</string>
+    <string name="battlenet_download_busy">पहले मौजूदा Battle.net कार्रवाई पूरी करें या रद्द करें।</string>
+    <string name="battlenet_native_selection">Windows · अंग्रेज़ी (अमेरिका) · मूल गेम</string>
 </resources>

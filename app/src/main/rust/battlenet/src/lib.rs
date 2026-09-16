@@ -3,6 +3,7 @@ pub mod blte;
 pub mod casc;
 pub mod install;
 mod jenkins;
+mod jobs;
 pub mod manifest;
 pub mod mirror;
 pub mod packing;
@@ -192,6 +193,85 @@ pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNet
         Ok(value) => value,
         Err(code) => serde_json::json!({"error":code}),
     };
+    env.new_string(value.to_string())
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNetNative_createJob(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jni::sys::jlong {
+    jobs::create()
+}
+#[no_mangle]
+pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNetNative_releaseJob(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) {
+    jobs::release(id);
+}
+#[no_mangle]
+pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNetNative_jobStatus(
+    env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) -> jstring {
+    env.new_string(jobs::status(id).to_string())
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+#[no_mangle]
+pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNetNative_commandJob(
+    mut env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+    command: JString,
+) -> jni::sys::jboolean {
+    let Ok(command) = env.get_string(&command) else {
+        return 0;
+    };
+    jobs::command(id, &command.to_string_lossy()) as jni::sys::jboolean
+}
+#[no_mangle]
+pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNetNative_runJob(
+    mut env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+    request: JString,
+) -> jstring {
+    let value = match env.get_string(&request) {
+        Ok(s) => jobs::run(id, &s.to_string_lossy()),
+        Err(_) => serde_json::json!({"error":"invalid_job","done":true}),
+    };
+    env.new_string(value.to_string())
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+#[no_mangle]
+pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNetNative_installPreview(
+    mut env: JNIEnv,
+    _class: JClass,
+    product: JString,
+    region: JString,
+) -> jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> Result<serde_json::Value, String> {
+            let product: String = env
+                .get_string(&product)
+                .map_err(|_| "invalid_product")?
+                .into();
+            let region: String = env
+                .get_string(&region)
+                .map_err(|_| "invalid_product")?
+                .into();
+            jobs::preview(&product, &region)
+        },
+    ))
+    .unwrap_or_else(|_| Err("native_error".into()));
+    let value = result.unwrap_or_else(|e| serde_json::json!({"error":e}));
     env.new_string(value.to_string())
         .map(|s| s.into_raw())
         .unwrap_or(std::ptr::null_mut())

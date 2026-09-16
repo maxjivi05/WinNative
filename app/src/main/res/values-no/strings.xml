@@ -2880,4 +2880,7 @@ Installert bane:
     <string name="steam_controller_left_pad_click">Klikk på venstre styreflate</string>
     <string name="steam_controller_right_pad_click">Klikk på høyre styreflate</string>
     <string name="controller_test_generic">Generisk</string>
+    <string name="battlenet_native_unavailable">Direkte nedlastinger er ikke tilgjengelige for denne spillkonfigurasjonen ennå.</string>
+    <string name="battlenet_download_busy">Fullfør eller avbryt den gjeldende Battle.net-operasjonen først.</string>
+    <string name="battlenet_native_selection">Windows · Engelsk (USA) · Grunnspill</string>
 </resources>

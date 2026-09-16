@@ -2880,5 +2880,8 @@ Caminho instalado:
     <string name="steam_controller_left_pad_click">Clique no painel esquerdo</string>
     <string name="steam_controller_right_pad_click">Clique no painel direito</string>
     <string name="controller_test_generic">Genérico</string>
+    <string name="battlenet_native_unavailable">Os downloads nativos ainda não estão disponíveis para esta configuração do jogo.</string>
+    <string name="battlenet_download_busy">Conclua ou cancele primeiro a operação atual do Battle.net.</string>
+    <string name="battlenet_native_selection">Windows · Inglês (EUA) · Jogo base</string>
 </resources>
 

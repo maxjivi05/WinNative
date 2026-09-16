@@ -11,7 +11,7 @@ use std::{
         fd::{AsRawFd, FromRawFd},
         unix::ffi::OsStrExt,
     },
-    path::{Component, Path},
+    path::Path,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -53,19 +53,9 @@ fn open_at(
     Ok(file)
 }
 fn directory(path: &Path) -> Result<File, &'static str> {
-    if !path.is_absolute() {
-        return Err("unsafe_or_unavailable_path");
-    }
-    let mut file = File::open("/").map_err(|_| "file_error")?;
-    for component in path.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => file = open_at(&file, name, true)?,
-            _ => return Err("unsafe_or_unavailable_path"),
-        }
-    }
-    Ok(file)
+    Ok(crate::safe_dir::Directory::open(path)?.0)
 }
+
 fn index(bytes: &[u8], bucket: u8) -> Result<Vec<([u8; 9], Location)>, &'static str> {
     if bytes.len() < 40
         || bytes[..4] != 16u32.to_le_bytes()

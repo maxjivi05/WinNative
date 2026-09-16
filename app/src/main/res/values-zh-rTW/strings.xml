@@ -2879,5 +2879,8 @@
     <string name="steam_controller_left_pad_click">左觸控板按下</string>
     <string name="steam_controller_right_pad_click">右觸控板按下</string>
     <string name="controller_test_generic">通用</string>
+    <string name="battlenet_native_unavailable">此遊戲設定尚不支援原生下載。</string>
+    <string name="battlenet_download_busy">請先完成或取消目前的 Battle.net 作業。</string>
+    <string name="battlenet_native_selection">Windows · 英語（美國）· 基本遊戲</string>
 </resources>
 

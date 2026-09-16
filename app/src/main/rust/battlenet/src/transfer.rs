@@ -2,11 +2,8 @@ use std::{
     ffi::CString,
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::ffi::OsStrExt,
-    },
-    path::{Component, Path},
+    os::fd::{AsRawFd, FromRawFd},
+    path::Path,
     sync::{Condvar, Mutex},
     time::Duration,
 };
@@ -153,26 +150,7 @@ impl Cache {
         Ok(bytes)
     }
     pub fn open(path: &Path) -> Result<Self, &'static str> {
-        if !path.is_absolute() {
-            return Err("unsafe_or_unavailable_path");
-        }
-        let mut directory = File::open("/").map_err(|_| "file_error")?;
-        for component in path.components() {
-            let name = match component {
-                Component::RootDir => continue,
-                Component::Normal(name) => {
-                    CString::new(name.as_bytes()).map_err(|_| "unsafe_or_unavailable_path")?
-                }
-                _ => return Err("unsafe_or_unavailable_path"),
-            };
-            directory = descriptor(unsafe {
-                libc::openat(
-                    directory.as_raw_fd(),
-                    name.as_ptr(),
-                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                )
-            })?;
-        }
+        let directory = crate::safe_dir::Directory::open(path)?.0;
         let lock = Self::file(&directory, ".winnative-transfer-lock", true)?;
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err("cache_busy");

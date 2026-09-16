@@ -27,16 +27,37 @@ impl Directory {
         if !path.is_absolute() {
             return Err("unsafe_install_path");
         }
-        let mut folder = Self(File::open("/").map_err(|_| "file_error")?);
-        for c in path.components() {
-            match c {
+        let mut folder = descriptor(unsafe {
+            libc::open(
+                c"/".as_ptr(),
+                libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        })?;
+        for component in path.components() {
+            match component {
                 Component::RootDir => {}
-                Component::Normal(n) => folder = folder.child(n, false)?,
+                Component::Normal(value) => {
+                    let n = name(value)?;
+                    folder = descriptor(unsafe {
+                        libc::openat(
+                            folder.as_raw_fd(),
+                            n.as_ptr(),
+                            libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                        )
+                    })?;
+                }
                 _ => return Err("unsafe_install_path"),
             }
         }
-        Ok(folder)
+        Ok(Self(descriptor(unsafe {
+            libc::openat(
+                folder.as_raw_fd(),
+                c".".as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        })?))
     }
+
     pub fn child(&self, value: &OsStr, create: bool) -> Result<Self, &'static str> {
         let n = name(value)?;
         if create
@@ -154,6 +175,22 @@ impl Directory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn traverses_search_only_ancestors_without_following_links() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("wn-search-only-{}", std::process::id()));
+        std::fs::create_dir(&base).unwrap();
+        let owned = base.join("owned");
+        std::fs::create_dir(&owned).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o111)).unwrap();
+        let result = crate::transfer::Cache::open(&owned);
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_ok());
+        Directory::open(&owned)
+            .unwrap()
+            .write_once("probe", b"retained")
+            .unwrap();
+    }
     #[test]
     fn rejects_links_and_preserves_conflicting_files() {
         let base = std::env::temp_dir().join(format!("wn-safe-dir-{}", std::process::id()));

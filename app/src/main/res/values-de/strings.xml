@@ -2882,4 +2882,7 @@ Installierter Pfad:
     <string name="steam_controller_left_pad_click">Linkes Touchpad drücken</string>
     <string name="steam_controller_right_pad_click">Rechtes Touchpad drücken</string>
     <string name="controller_test_generic">Allgemein</string>
+    <string name="battlenet_native_unavailable">Native Downloads sind für diese Spielkonfiguration noch nicht verfügbar.</string>
+    <string name="battlenet_download_busy">Beende oder stoppe zuerst den aktuellen Battle.net-Vorgang.</string>
+    <string name="battlenet_native_selection">Windows · Englisch (USA) · Basisspiel</string>
 </resources>

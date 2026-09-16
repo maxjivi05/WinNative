@@ -34,6 +34,12 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
     val scope = rememberCoroutineScope()
+    val nativeState by BattleNetDownloads.state.collectAsState()
+    var nativePreview by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    var nativeInstalled by remember { mutableStateOf(false) }
+    var nativePath by remember { mutableStateOf("") }
+    var previewLoading by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { BattleNetDownloads.restore(applicationContext) }
     var refresh by remember { mutableIntStateOf(0) }
     var games by remember { mutableStateOf<List<BattleNetGame>>(emptyList()) }
     var installs by remember { mutableStateOf<List<BattleNetInstall>>(emptyList()) }
@@ -152,12 +158,22 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
         }
     }
 
-    LaunchedEffect(selected?.product) {
+    LaunchedEffect(selected?.product, nativeState.stage) {
+        nativePreview = null
+        nativeInstalled = false
+        nativePath = ""
+        previewLoading = selected != null
         availableBytes = 0L
-        if (selected != null) {
-            availableBytes = withContext(Dispatchers.IO) {
-                BattleNetRuntime.shared(applicationContext).root.usableSpace
-            }
+        val product = selected?.product
+        if (product != null) {
+            try {
+                availableBytes = withContext(Dispatchers.IO) { applicationContext.filesDir.usableSpace }
+                nativeInstalled = BattleNetDownloads.installed(applicationContext, product)
+                if (nativeInstalled) nativePath = BattleNetDownloads.installPath(applicationContext, product)
+                nativePreview = BattleNetDownloads.preview(applicationContext, product)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { error = getString(R.string.battlenet_native_unavailable) }
+            finally { previewLoading = false }
         }
     }
 
@@ -165,15 +181,33 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
         val install = installs.firstOrNull { it.product == game.product }
         BattleNetGameDetailDialog(
             game = game,
-            isInstalled = game.product in installed,
-            installPath = install?.path.orEmpty(),
-            downloadSize = install?.totalBytes ?: 0L,
+            isInstalled = game.product in installed || nativeInstalled,
+            installPath = nativePath.ifEmpty { install?.path.orEmpty() },
+            downloadSize = nativePreview?.optLong("downloadBytes") ?: install?.totalBytes ?: 0L,
             availableBytes = availableBytes,
             busy = busy,
             onDismiss = { if (!busy) selected = null },
-            onDownload = { open(game, true) },
+            installEnabled = !previewLoading && nativePreview != null && nativeState.done,
+            detailStatus = if (previewLoading) getString(R.string.downloads_queue_preparing_download) else if (nativePreview == null) getString(R.string.battlenet_native_unavailable) else getString(R.string.battlenet_native_selection),
+            onVerify = if (nativeInstalled) ({
+                scope.launch {
+                    try { BattleNetDownloads.verify(applicationContext, game.product); selected = null }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { error = failure.message }
+                }
+            }) else null,
+            onDownload = {
+                nativePreview?.let { preview ->
+                    scope.launch {
+                        try { BattleNetDownloads.start(applicationContext, game.product, preview); selected = null }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) { error = failure.message }
+                    }
+                }
+            },
             onPlay = { open(game, false) },
-            checkForUpdate = if (install != null) suspend { BattleNetRuntime.hasUpdate(applicationContext, install) } else null,
+            checkForUpdate = if (nativeInstalled) suspend { BattleNetDownloads.hasUpdate(applicationContext, game.product) }
+                else if (install != null) suspend { BattleNetRuntime.hasUpdate(applicationContext, install) } else null,
         )
     }
 }
@@ -190,6 +224,9 @@ internal fun BattleNetGameDetailDialog(
     onDownload: () -> Unit,
     onPlay: () -> Unit,
     checkForUpdate: (suspend () -> Boolean)? = null,
+    installEnabled: Boolean = true,
+    detailStatus: String = "",
+    onVerify: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -203,7 +240,7 @@ internal fun BattleNetGameDetailDialog(
         Surface(Modifier.fillMaxSize(), shape = RectangleShape, color = Color.Black) {
             StoreGameDetailScreen(
                 title = game.title,
-                subtitle = "",
+                subtitle = detailStatus,
                 sourceLabel = stringResource(R.string.battlenet_launcher_name),
                 heroImageUrl = game.coverUrl,
                 isLoading = busy,
@@ -212,7 +249,7 @@ internal fun BattleNetGameDetailDialog(
                 downloadSize = downloadSize,
                 installSize = 0L,
                 availableBytes = availableBytes,
-                isInstallEnabled = !busy,
+                isInstallEnabled = !busy && installEnabled,
                 customPathLabel = "",
                 showCustomPath = false,
                 showUninstall = false,
@@ -220,6 +257,8 @@ internal fun BattleNetGameDetailDialog(
                 onBack = onDismiss,
                 onInstall = onDownload,
                 onPlay = onPlay,
+                showVerifyFiles = onVerify != null,
+                onVerifyFiles = { onVerify?.invoke() },
                 showUpdateCheck = isInstalled && checkForUpdate != null,
                 isCheckingForUpdate = checking,
                 isUpdateAvailable = updateAvailable,
@@ -252,6 +291,8 @@ internal fun BattleNetGameDetailDialog(
 
 @Composable
 internal fun UnifiedActivity.BattleNetDownloads(): Boolean {
+    val native by BattleNetDownloads.state.collectAsState()
+    LaunchedEffect(Unit) { BattleNetDownloads.restore(applicationContext) }
     data class Transfer(val install: BattleNetInstall, val speed: Long?)
     var transfers by remember { mutableStateOf<List<Transfer>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -275,6 +316,25 @@ internal fun UnifiedActivity.BattleNetDownloads(): Boolean {
                 error = failure.message
             }
             delay(2000)
+        }
+    }
+    if (native.product.isNotEmpty()) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(BattleNetCatalog.byProduct(native.product)?.title.orEmpty(), style = MaterialTheme.typography.titleMedium)
+            Text(native.label(this@BattleNetDownloads))
+            LinearProgressIndicator(progress = { native.fraction }, modifier = Modifier.fillMaxWidth())
+            if (native.stage == "downloading") Text("${android.text.format.Formatter.formatFileSize(this@BattleNetDownloads, native.current)} / ${android.text.format.Formatter.formatFileSize(this@BattleNetDownloads, native.total)}")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!native.done && !native.paused) TextButton(onClick = { BattleNetDownloads.command("pause") }) { Text(stringResource(R.string.session_drawer_pause)) }
+                if (native.paused || native.stage in setOf("cancelled", "failed")) TextButton(onClick = {
+                    scope.launch {
+                        try { BattleNetDownloads.resume(applicationContext) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) { error = failure.message }
+                    }
+                }) { Text(stringResource(R.string.session_drawer_resume)) }
+                if (!native.done) TextButton(onClick = { scope.launch { BattleNetDownloads.cancel(applicationContext) } }) { Text(stringResource(R.string.common_ui_cancel)) }
+            }
         }
     }
     if (transfers.isNotEmpty()) {
@@ -303,5 +363,5 @@ internal fun UnifiedActivity.BattleNetDownloads(): Boolean {
         }
     }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-    return transfers.isNotEmpty()
+    return transfers.isNotEmpty() || native.product.isNotEmpty()
 }

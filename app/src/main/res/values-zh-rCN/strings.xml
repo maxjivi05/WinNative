@@ -2880,5 +2880,8 @@
     <string name="steam_controller_left_pad_click">左触控板按下</string>
     <string name="steam_controller_right_pad_click">右触控板按下</string>
     <string name="controller_test_generic">通用</string>
+    <string name="battlenet_native_unavailable">此游戏配置暂不支持原生下载。</string>
+    <string name="battlenet_download_busy">请先完成或取消当前的 Battle.net 操作。</string>
+    <string name="battlenet_native_selection">Windows · 英语（美国）· 基础游戏</string>
 </resources>
 

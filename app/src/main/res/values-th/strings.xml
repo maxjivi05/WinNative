@@ -2879,4 +2879,7 @@
     <string name="steam_controller_left_pad_click">คลิกแพดซ้าย</string>
     <string name="steam_controller_right_pad_click">คลิกแพดขวา</string>
     <string name="controller_test_generic">ทั่วไป</string>
+    <string name="battlenet_native_unavailable">การดาวน์โหลดแบบเนทีฟยังไม่พร้อมใช้งานสำหรับการตั้งค่าเกมนี้</string>
+    <string name="battlenet_download_busy">โปรดดำเนินการหรือยกเลิกการทำงานของ Battle.net ปัจจุบันก่อน</string>
+    <string name="battlenet_native_selection">Windows · อังกฤษ (สหรัฐฯ) · เกมหลัก</string>
 </resources>

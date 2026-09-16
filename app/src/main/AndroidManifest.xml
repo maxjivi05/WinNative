@@ -291,5 +291,6 @@
             </intent-filter>
         </receiver>
 
+        <service android:name="com.winlator.cmod.feature.stores.battlenet.BattleNetDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

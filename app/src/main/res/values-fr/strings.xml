@@ -2882,5 +2882,8 @@ Chemin installé :
     <string name="steam_controller_left_pad_click">Clic du pavé gauche</string>
     <string name="steam_controller_right_pad_click">Clic du pavé droit</string>
     <string name="controller_test_generic">Générique</string>
+    <string name="battlenet_native_unavailable">Les téléchargements natifs ne sont pas encore disponibles pour cette configuration de jeu.</string>
+    <string name="battlenet_download_busy">Terminez ou annulez d’abord l’opération Battle.net en cours.</string>
+    <string name="battlenet_native_selection">Windows · Anglais (États-Unis) · Jeu de base</string>
 </resources>
 

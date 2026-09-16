@@ -2886,5 +2886,8 @@
     <string name="steam_controller_left_pad_click">Натискання лівої панелі</string>
     <string name="steam_controller_right_pad_click">Натискання правої панелі</string>
     <string name="controller_test_generic">Універсальний</string>
+    <string name="battlenet_native_unavailable">Вбудоване завантаження ще недоступне для цієї конфігурації гри.</string>
+    <string name="battlenet_download_busy">Спочатку завершіть або скасуйте поточну операцію Battle.net.</string>
+    <string name="battlenet_native_selection">Windows · Англійська (США) · Базова гра</string>
 </resources>
 
