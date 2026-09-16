@@ -21,3 +21,11 @@ The device subsequently completed all 22,546,600,744 selected content bytes, pac
 An independent Android `md5sum` comparison of all 35 extracted files matched the host reference. Windows directory casing varied (`UTILS` versus `Utils`); comparison resolved names case-insensitively, as the runtime verifier does. No container was needed for any download, packing or verification stage.
 
 Evidence is retained in `research/device-native-complete.json` and `research/device-native-reference-comparison.json`. The signed in-place upgrade is `artifacts/pubg-battlenet-native-download-final.apk`. The extra Verify Files menu interaction remains to be driven after the device is unlocked; the automatic verification backend completed successfully.
+
+## Follow-up device verification
+
+The signed PUBG APK was upgraded in place again without clearing application data. Native completed installs now join the local Battle.net library even when the website account-library request requires sign-in. The installed WoW Classic card and its existing native path were confirmed on the device in that state.
+
+The detail menu's Verify Files action started an Android Rust `verify` job and completed all 384,508 content objects. No Wine or translator process ran. Check for Update returned “No update available” against the installed build. The 192 JVM tests passed and the PUBG debug build succeeded.
+
+The account-library endpoint currently still requests sign-in despite the retained desktop credential. This remains unresolved; local installation visibility does not renew authentication. Official-client registration and authenticated game launch remain unverified. During navigation a stale Steam detail initiated a Cyberpunk verification, which completed; subsequent actions were checked against the WoW Classic title.

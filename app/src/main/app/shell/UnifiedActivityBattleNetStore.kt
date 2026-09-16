@@ -85,7 +85,10 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
             val state = BattleNetRuntime.importInstalled(applicationContext)
             error = state.sessionProblem
             installs = state.installs
-            val local = BattleNetCatalog.games.filter { game -> state.installs.any { it.product == game.product && it.installed && it.playable } }
+            val local = BattleNetCatalog.games.filter { game ->
+                BattleNetDownloads.installed(applicationContext, game.product) ||
+                    state.installs.any { it.product == game.product && it.installed && it.playable }
+            }
             games = local
             try {
                 games = (BattleNetAccount.games(applicationContext) + local).distinctBy { it.product }
