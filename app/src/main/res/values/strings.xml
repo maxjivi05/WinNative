@@ -2907,4 +2907,5 @@ Installed path:
     <string name="battlenet_downloads">Battle.net downloads</string>
     <string name="battlenet_download_progress">%1$d%% · %2$s (Agent reported)</string>
     <string name="battlenet_manage_downloads">Manage downloads in Battle.net</string>
+    <string name="battlenet_launcher_name" translatable="false">Battlenet</string>
 </resources>

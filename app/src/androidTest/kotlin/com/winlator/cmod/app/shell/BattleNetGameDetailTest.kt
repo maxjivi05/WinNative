@@ -37,7 +37,7 @@ class BattleNetGameDetailTest {
             )
         }
         composeRule.onNodeWithContentDescription("Diablo IV artwork").assertIsDisplayed()
-        composeRule.onNodeWithText("BATTLE.NET").assertIsDisplayed()
+        composeRule.onNodeWithText("BATTLENET").assertIsDisplayed()
         composeRule.onNodeWithText("Play").assertDoesNotExist()
         composeRule.onNodeWithText("Download").performClick()
         composeRule.runOnIdle { assertEquals(1, downloads); assertEquals(0, plays) }
@@ -79,4 +79,26 @@ class BattleNetGameDetailTest {
         composeRule.onNodeWithText("Play").assertDoesNotExist()
         composeRule.onNodeWithText("Download").assertDoesNotExist()
     }
+    @Test fun battlenetMenuChecksUpdatesAndReportsCompletion() {
+        var checks = 0
+        composeRule.setContent {
+            BattleNetGameDetailDialog(
+                game = BattleNetCatalog.byProduct("wow")!!,
+                isInstalled = true,
+                installPath = "C:\\Games\\World of Warcraft",
+                downloadSize = 0L,
+                availableBytes = 0L,
+                busy = false,
+                onDismiss = {},
+                onDownload = {},
+                onPlay = {},
+                checkForUpdate = { checks++; false },
+            )
+        }
+        composeRule.onNodeWithText("BATTLENET").performClick()
+        composeRule.onNodeWithText("Check for Update").performClick()
+        composeRule.onNodeWithText("No update available").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(1, checks) }
+    }
+
 }

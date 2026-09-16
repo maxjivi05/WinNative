@@ -106,3 +106,5 @@
 -dontwarn androidx.window.sidecar.SidecarInterface
 -dontwarn androidx.window.sidecar.SidecarProvider
 -dontwarn androidx.window.sidecar.SidecarWindowLayoutInfo
+
+-keep class com.winlator.cmod.feature.stores.battlenet.BattleNetNative { *; }

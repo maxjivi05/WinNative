@@ -95,4 +95,34 @@ class BattleNetSharedFilesTest {
             executor.shutdownNow()
         }
     }
+    @Test fun preservesEmptyDirectoriesInsteadOfDeletingThem() {
+        val store = BattleNetSharedFiles(temporary.newFolder("shared"))
+        val prefix = prefix("container")
+        val client = File(prefix, ".wine/drive_c/Program Files (x86)/Battle.net").apply { mkdirs() }
+        store.bind(prefix)
+        assertTrue(Files.isSymbolicLink(client.toPath()))
+        assertEquals(1, client.parentFile.listFiles()!!.count { it.name.startsWith("Battle.net.winnative-preserved-") && it.isDirectory })
+    }
+
+    @Test fun refusesLinkedParentWithoutChangingItsContents() {
+        val store = BattleNetSharedFiles(temporary.newFolder("shared"))
+        val prefix = prefix("container")
+        val foreign = temporary.newFolder("foreign")
+        File(foreign, "keep").writeText("original")
+        Files.createSymbolicLink(File(prefix, ".wine/drive_c/Program Files (x86)").toPath(), foreign.toPath())
+        assertThrows(IOException::class.java) { store.bind(prefix) }
+        assertEquals(listOf("keep"), foreign.list()!!.toList())
+        assertEquals("original", File(foreign, "keep").readText())
+    }
+
+    @Test fun refusesLinkedSharedTargetIncludingDanglingLinks() {
+        val store = BattleNetSharedFiles(temporary.newFolder("shared"))
+        val prefix = prefix("container")
+        val missing = File(temporary.root, "missing")
+        Files.createSymbolicLink(File(store.root, "client").toPath(), missing.toPath())
+        assertThrows(IOException::class.java) { store.bind(prefix) }
+        assertFalse(missing.exists())
+        assertTrue(Files.isSymbolicLink(File(store.root, "client").toPath()))
+    }
+
 }

@@ -5,12 +5,13 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
+import java.util.UUID
 
 class BattleNetSharedFiles(val root: File) {
     val database: File get() = File(root, "programdata/Battle.net/Agent/product.db")
 
     fun bind(containerRoot: File) = synchronized(bindingLock) {
-        val drive = File(containerRoot, ".wine/drive_c")
+        val drive = File(containerRoot.canonicalFile, ".wine/drive_c")
         require(drive.isDirectory) { "The Wine container has not been initialized." }
         link(File(drive, "Program Files (x86)/Battle.net"), File(root, "client"))
         link(File(drive, "Program Files/Battle.net"), File(root, "client"))
@@ -32,6 +33,8 @@ class BattleNetSharedFiles(val root: File) {
     }
 
     internal fun link(destination: File, target: File) {
+        requireUnlinkedPath(destination.parentFile!!)
+        requireUnlinkedPath(target)
         val destPath = destination.toPath()
         if (Files.isSymbolicLink(destPath)) {
             if (destination.canonicalFile == target.canonicalFile) return
@@ -45,10 +48,10 @@ class BattleNetSharedFiles(val root: File) {
                     throw IOException("Separate Battle.net files already exist at ${destination.path}. Move or back them up before sharing this container.")
                 }
                 ensureDirectory(target.parentFile!!)
-                if (target.exists()) Files.delete(target.toPath())
+                if (target.exists()) preserveDirectory(target)
                 Files.move(destPath, target.toPath(), StandardCopyOption.ATOMIC_MOVE)
             } else {
-                Files.delete(destPath)
+                preserveDirectory(destination)
             }
         }
         ensureDirectory(target)
@@ -56,11 +59,27 @@ class BattleNetSharedFiles(val root: File) {
         Files.createSymbolicLink(destPath, target.canonicalFile.toPath())
     }
 
+    private fun preserveDirectory(directory: File) {
+        val backup = File(directory.parentFile, "${directory.name}.winnative-preserved-${UUID.randomUUID()}")
+        Files.move(directory.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
+    }
+
     private fun ensureDirectory(directory: File) {
+        requireUnlinkedPath(directory)
         if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) throw IOException("Could not create ${directory.name}.")
     }
 
     companion object {
+        internal fun requireUnlinkedPath(directory: File) {
+            var current: File? = directory.absoluteFile
+            while (current != null) {
+                if (Files.isSymbolicLink(current.toPath())) {
+                    throw IOException("Battle.net will not modify a directory through the link at ${current.path}.")
+                }
+                current = current.parentFile
+            }
+        }
+
         private val bindingLock = Any()
         val gameFolders = listOf(
             "World of Warcraft", "StarCraft", "StarCraft II", "Overwatch", "Warcraft III", "Hearthstone",

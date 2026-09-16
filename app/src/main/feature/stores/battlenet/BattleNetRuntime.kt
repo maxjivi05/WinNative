@@ -46,10 +46,11 @@ object BattleNetRuntime {
     }
 
     internal fun shared(context: Context) = BattleNetSharedFiles(
-        File(com.winlator.cmod.runtime.display.environment.ImageFs.find(context).rootDir, ".shared/battlenet"),
+        File(com.winlator.cmod.runtime.display.environment.ImageFs.find(context).rootDir.canonicalFile, ".shared/battlenet"),
     )
 
     @JvmStatic
+    @Synchronized
     fun ensureSharedFiles(context: Context, container: Container) {
         val shared = shared(context)
         shared.bind(container.rootDir)
@@ -99,7 +100,7 @@ object BattleNetRuntime {
                 ensureSharedFiles(context, container)
                 BattleNetSession.stage(context, shared(context).root)
                 val launcher = client(container)
-                val executable = launcher ?: downloadInstaller(container)
+                val executable = launcher ?: downloadInstaller(context, container)
                 if (!prefs.edit().putInt("last_container", container.id).commit()) throw IOException("Could not save the Battle.net session.")
                 Intent(context, XServerDisplayActivity::class.java).apply {
                     putExtra("container_id", container.id)
@@ -152,7 +153,7 @@ object BattleNetRuntime {
                     val game = BattleNetCatalog.byProduct(install.product) ?: return@forEach
                     val folder = nativePath(context, container, install.path) ?: return@forEach
                     if (!folder.isDirectory) return@forEach
-                    val shortcutFile = File(container.desktopDir, "Battle.net-${game.product}.desktop")
+                    val shortcutFile = File(container.desktopDir.canonicalFile, "Battle.net-${game.product}.desktop")
                     val artwork = File(shared(context).root, "artwork/${game.product}.jpg")
                     scheduleArtwork(game, artwork)
                     if (shortcutFile.exists() || game.product in existingProducts) return@forEach
@@ -173,6 +174,27 @@ object BattleNetRuntime {
         }
     }
 
+    suspend fun hasUpdate(context: Context, install: BattleNetInstall): Boolean = withContext(Dispatchers.IO) {
+        val local = lock.withLock {
+            val container = container(context) ?: throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
+            val folder = nativePath(context, container, install.path)
+                ?: throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
+            val file = File(folder, ".build.info")
+            val bytes = file.inputStream().use { readLimited(it, 1024 * 1024) }
+            BattleNetBuildInfo.activeKey(bytes.toString(Charsets.UTF_8), install.product)
+                ?: throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
+        }
+        val response = try {
+            org.json.JSONObject(BattleNetNative.latestBuild(install.product, BattleNetSession.region(context)))
+        } catch (_: LinkageError) {
+            throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
+        }
+        coroutineContext.ensureActive()
+        val build = response.optJSONObject("build")
+            ?: throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
+        local != build.getString("buildKey")
+    }
+
     private fun nativePath(context: Context, container: Container, path: String): File? {
         if (!Regex("^[A-Za-z]:[\\\\/].*").matches(path) || path.any { it == '\n' || it == '\r' || it == '\u0000' }) return null
         val drive = path.take(1).uppercase(java.util.Locale.ROOT)
@@ -188,15 +210,10 @@ object BattleNetRuntime {
         }
     }
 
-    private suspend fun downloadInstaller(container: Container): File {
-        val file = File(container.rootDir, ".wine/drive_c/WinNative/Battle.net/setup/Battle.net-Setup.exe")
-        download(SETUP_URL, file, 64 * 1024 * 1024)
-        val signature = file.inputStream().use { input -> byteArrayOf(input.read().toByte(), input.read().toByte()) }
-        if (!signature.contentEquals(byteArrayOf(0x4d, 0x5a))) {
-            file.delete()
-            throw IOException("Battle.net returned an invalid installer.")
-        }
-        return file
+    private suspend fun downloadInstaller(context: Context, container: Container): File {
+        val destination = File(shared(context).root, "setup/Battle.net-Setup.exe")
+        download(SETUP_URL, destination, 64 * 1024 * 1024, executable = true)
+        return File(container.rootDir, ".wine/drive_c/WinNative/Battle.net/setup/Battle.net-Setup.exe")
     }
 
     private fun scheduleArtwork(game: BattleNetGame, artwork: File) {
@@ -214,11 +231,20 @@ object BattleNetRuntime {
         }
     }
 
-    private suspend fun download(url: String, destination: File, limit: Int, client: OkHttpClient = http) {
+    private suspend fun download(url: String, destination: File, limit: Int, client: OkHttpClient = http, executable: Boolean = false) {
         client.newCall(Request.Builder().url(url).build()).execute().use { response ->
             if (!response.isSuccessful || response.request.url.scheme != "https") throw IOException("Battle.net download failed (${response.code}).")
             val body = response.body ?: throw IOException("Empty Battle.net download.")
             if (body.contentLength() > limit) throw IOException("Battle.net download is too large.")
+            if (executable) {
+                val source = body.source()
+                if (!source.request(2) || source.buffer[0] != 0x4d.toByte() || source.buffer[1] != 0x5a.toByte()) {
+                    throw IOException("Battle.net returned an invalid installer.")
+                }
+            }
+            BattleNetSharedFiles.requireUnlinkedPath(destination)
+            BattleNetSharedFiles.requireUnlinkedPath(File(destination.path + ".new"))
+            BattleNetSharedFiles.requireUnlinkedPath(File(destination.path + ".bak"))
             if (!destination.parentFile!!.isDirectory && !destination.parentFile!!.mkdirs() && !destination.parentFile!!.isDirectory) {
                 throw IOException("Could not create the Battle.net directory.")
             }
@@ -258,6 +284,9 @@ object BattleNetRuntime {
     }
 
     internal fun atomicWrite(file: File, bytes: ByteArray) {
+        BattleNetSharedFiles.requireUnlinkedPath(file)
+        BattleNetSharedFiles.requireUnlinkedPath(File(file.path + ".new"))
+        BattleNetSharedFiles.requireUnlinkedPath(File(file.path + ".bak"))
         if (!file.parentFile!!.isDirectory && !file.parentFile!!.mkdirs()) throw IOException("Could not create the Battle.net directory.")
         val atomic = AtomicFile(file)
         val stream = atomic.startWrite()

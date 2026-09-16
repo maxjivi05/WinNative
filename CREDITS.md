@@ -242,3 +242,7 @@ uses a separate Java/JNI namespace and native library for this integration, with
 > Steam Controller support, controller test and visual binder by The412Banner
 > (https://github.com/The412Banner/Bannerlator)
 
+
+### Battle.net build metadata
+
+The Rust JNI build-metadata client uses reqwest/rustls, jni and serde. Dependency licenses and notices are collected in [the Rust notices](docs/battlenet/rust-third-party-notices.md); its reproducible source and lockfile are in `app/src/main/rust/battlenet`.

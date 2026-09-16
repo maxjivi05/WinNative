@@ -1008,7 +1008,7 @@ private fun StoreSourceTag(
                 if (menuEnabled) {
                     Icon(
                         Icons.Outlined.ArrowDropDown,
-                        contentDescription = stringResource(R.string.store_game_steam_options),
+                        contentDescription = sourceLabel,
                         tint = StoreTextPrimary,
                         modifier = Modifier.size(18.dp),
                     )

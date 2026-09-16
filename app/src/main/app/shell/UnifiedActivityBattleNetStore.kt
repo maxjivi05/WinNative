@@ -84,7 +84,7 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
             try {
                 games = (BattleNetAccount.games() + local).distinctBy { it.product }
             } catch (_: BattleNetAccount.SignInRequired) {
-                if (signedIn) error = "The account library could not be refreshed. Reconnect Battle.net to renew website access."
+                if (signedIn) error = getString(R.string.battlenet_failed)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -172,6 +172,7 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
             onDismiss = { if (!busy) selected = null },
             onDownload = { open(game, true) },
             onPlay = { open(game, false) },
+            checkForUpdate = if (install != null) suspend { BattleNetRuntime.hasUpdate(applicationContext, install) } else null,
         )
     }
 }
@@ -187,7 +188,13 @@ internal fun BattleNetGameDetailDialog(
     onDismiss: () -> Unit,
     onDownload: () -> Unit,
     onPlay: () -> Unit,
+    checkForUpdate: (suspend () -> Boolean)? = null,
 ) {
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var checking by remember(game.product) { mutableStateOf(false) }
+    var updateAvailable by remember(game.product) { mutableStateOf(false) }
+    var updateStatus by remember(game.product) { mutableStateOf<String?>(null) }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -196,7 +203,7 @@ internal fun BattleNetGameDetailDialog(
             StoreGameDetailScreen(
                 title = game.title,
                 subtitle = "",
-                sourceLabel = "Battle.net",
+                sourceLabel = stringResource(R.string.battlenet_launcher_name),
                 heroImageUrl = game.coverUrl,
                 isLoading = busy,
                 isInstalled = isInstalled,
@@ -212,6 +219,31 @@ internal fun BattleNetGameDetailDialog(
                 onBack = onDismiss,
                 onInstall = onDownload,
                 onPlay = onPlay,
+                showUpdateCheck = isInstalled && checkForUpdate != null,
+                isCheckingForUpdate = checking,
+                isUpdateAvailable = updateAvailable,
+                updateStatusText = updateStatus,
+                isUpdateActionEnabled = !busy && !checking,
+                areSteamActionsEnabled = !busy && !checking,
+                onDownloadUpdate = onDownload,
+                onCheckForUpdate = {
+                    if (!checking && checkForUpdate != null) {
+                        checking = true
+                        scope.launch {
+                            try {
+                                updateAvailable = checkForUpdate()
+                                updateStatus = context.getString(if (updateAvailable) R.string.store_game_update_available else R.string.store_game_no_update_available)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                updateAvailable = false
+                                updateStatus = context.getString(R.string.battlenet_failed)
+                            } finally {
+                                checking = false
+                            }
+                        }
+                    }
+                },
             )
         }
     }

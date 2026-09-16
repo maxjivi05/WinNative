@@ -25,6 +25,9 @@ internal object BattleNetSession {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
+    fun region(context: Context): String =
+        prefs(context).getString("region", "US")!!.lowercase(java.util.Locale.ROOT)
+
     fun save(context: Context, root: File, credential: BattleNetCredential) {
         requireIdle(checkProcesses = true)
         val secure = prefs(context)
@@ -42,6 +45,7 @@ internal object BattleNetSession {
         val token = secure.getString("token", null) ?: return
         val region = secure.getString("region", "US")!!
         val auth = File(root, "auth")
+        BattleNetSharedFiles.requireUnlinkedPath(auth)
         auth.mkdirs()
         File(auth, "session.bin").let { if (it.exists() && !it.delete()) throw IOException("Could not replace the Battle.net session.") }
         writePrivate(File(auth, "account"), account.toByteArray())
@@ -53,6 +57,7 @@ internal object BattleNetSession {
 
     private fun configure(root: File, account: String?, region: String?) {
         val file = File(root, "appdata/roaming/Battle.net/Battle.net.config")
+        BattleNetSharedFiles.requireUnlinkedPath(file)
         val json = if (file.isFile) {
             if (file.length() > 2 * 1024 * 1024) throw IOException("Battle.net configuration is too large.")
             try { JSONObject(file.readText()) } catch (_: Exception) { throw IOException("Battle.net configuration could not be read.") }
@@ -76,8 +81,11 @@ internal object BattleNetSession {
 
     fun clear(context: Context, root: File) {
         requireIdle(checkProcesses = true)
-        ContainerManager(context).containers.forEach { container ->
-            val registry = File(container.rootDir, ".wine/user.reg")
+        BattleNetSharedFiles.requireUnlinkedPath(File(root, "auth"))
+        BattleNetSharedFiles.requireUnlinkedPath(File(root, "appdata/roaming/Battle.net/Battle.net.config"))
+        val registries = ContainerManager(context).containers.map { File(it.rootDir.canonicalFile, ".wine/user.reg") }
+        registries.forEach { BattleNetSharedFiles.requireUnlinkedPath(it) }
+        registries.forEach { registry ->
             if (registry.isFile) WineRegistryEditor(registry).use { editor ->
                 editor.removeKey(REGISTRY, true)
                 BattleNetCatalog.games.forEach { game ->

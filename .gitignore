@@ -62,3 +62,6 @@ dist/
 
 /armsx2/emucore-src/
 /armsx2/emucore-out/
+
+# Rust build artifacts
+**/target/
