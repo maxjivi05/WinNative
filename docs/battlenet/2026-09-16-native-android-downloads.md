@@ -13,3 +13,11 @@ Device testing found that Android grants search permission without directory-lis
 Validation so far: 45 Rust tests, Clippy with warnings denied, 192 JVM tests, the native JNI device test suite and four Compose detail-screen tests. On the device, the preview displayed 21.07 GiB and the native service downloaded 3,057,754,084 bytes without Wine, Box64 or FEX processes. Pause held the cache steady; cancel while paused completed and left the full cache listing identical (SHA-256 `1989e1496c590ffa621083d47b9e44016a6f40838686a60270356be1ec84860c`). After an in-place upgrade, Resume reused the retained cache and continued downloading. The global Pause All control paused the native job at 4,509,319,006 bytes; Resume All resumed it. Controller shoulder navigation also reached the Downloads pane. The full host download and installation verification are documented separately.
 
 All device app changes used signed, streamed, in-place upgrades (`adb install --no-incremental -r`). No uninstall or app-data clear was used. Existing files and store preferences were retained across the upgrades.
+
+## Completed device installation
+
+The device subsequently completed all 22,546,600,744 selected content bytes, packed 384,512 content/metadata objects, and passed final verification of all 384,508 selected content objects plus the 35 extracted files. The foreground service reached `stage=complete`, `done=true`, and published the installed record. Downloading continued while the app was in the background and the screen later locked.
+
+An independent Android `md5sum` comparison of all 35 extracted files matched the host reference. Windows directory casing varied (`UTILS` versus `Utils`); comparison resolved names case-insensitively, as the runtime verifier does. No container was needed for any download, packing or verification stage.
+
+Evidence is retained in `research/device-native-complete.json` and `research/device-native-reference-comparison.json`. The signed in-place upgrade is `artifacts/pubg-battlenet-native-download-final.apk`. The extra Verify Files menu interaction remains to be driven after the device is unlocked; the automatic verification backend completed successfully.
