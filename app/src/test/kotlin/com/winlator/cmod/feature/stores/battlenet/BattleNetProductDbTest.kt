@@ -120,7 +120,7 @@ class BattleNetProductDbTest {
 
     @Test fun launcherCommandsUseCatalogIdentifiers() {
         assertEquals("--exec=\"launch Fen\"", BattleNetCatalog.byProduct("fenris")!!.command(false))
-        assertEquals("--exec=\"install WoW_wow_classic\"", BattleNetCatalog.byProduct("wow_classic")!!.command(true))
+        assertEquals("--exec=\"install WoWC\"", BattleNetCatalog.byProduct("wow_classic")!!.command(true))
         assertNull(BattleNetCatalog.byProduct("fenris\" --bad"))
         assertEquals(BattleNetCatalog.games.size, BattleNetCatalog.games.map { it.product }.distinct().size)
     }

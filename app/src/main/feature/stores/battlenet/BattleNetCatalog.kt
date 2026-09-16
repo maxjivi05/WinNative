@@ -15,8 +15,8 @@ data class BattleNetGame(
 object BattleNetCatalog {
     val games = listOf(
         BattleNetGame("wow", "World of Warcraft", "WoW", 5730135, "world-of-warcraft"),
-        BattleNetGame("wow_classic", "World of Warcraft Classic", "WoW_wow_classic", 5730135, "world-of-warcraft-classic"),
-        BattleNetGame("wow_classic_era", "World of Warcraft Classic Era", "WoW_wow_classic_era", 5730135, "world-of-warcraft-classic"),
+        BattleNetGame("wow_classic", "World of Warcraft Classic", "WoWC", 5730135, "world-of-warcraft-classic"),
+        BattleNetGame("wow_classic_era", "World of Warcraft Classic Era", "WoWC", 5730135, "world-of-warcraft-classic"),
         BattleNetGame("s1", "StarCraft", "S1", 21297, "starcraft-remastered"),
         BattleNetGame("s2", "StarCraft II", "S2", 21298, "starcraft-ii"),
         BattleNetGame("pro", "Overwatch 2", "Pro", 5272175, "overwatch-2"),
