@@ -220,23 +220,50 @@ object BattleNetRuntime {
         val state = snapshot(context)
         return withContext(Dispatchers.IO) {
             lock.withLock {
-                if (state.containerId == 0 || state.installs.isEmpty()) return@withLock state
                 val container = container(context) ?: return@withLock state
                 ensureSharedFiles(context, container)
                 val launcher = client(container) ?: return@withLock state
-                val existingProducts = ContainerManager(context).loadShortcuts()
+                val existingByProduct = ContainerManager(context).loadShortcuts()
                     .filter { it.getExtra("game_source") == "BATTLENET" }
-                    .map { it.getExtra("battlenet_product") }.toSet()
-                var imported = 0
+                    .associateBy { it.getExtra("battlenet_product") }
+                val candidates = linkedMapOf<String, Pair<BattleNetGame, File>>()
                 state.installs.filter { it.installed && it.playable }.forEach { install ->
-                    coroutineContext.ensureActive()
                     val game = BattleNetCatalog.byProduct(install.product) ?: return@forEach
                     val folder = nativePath(context, container, install.path) ?: return@forEach
-                    if (!folder.isDirectory) return@forEach
+                    if (folder.isDirectory) candidates[game.product] = game to folder
+                }
+                BattleNetCatalog.games.forEach { game ->
+                    if (!BattleNetDownloads.installed(context, game.product)) return@forEach
+                    val folder = File(BattleNetDownloads.installPath(context, game.product)).canonicalFile
+                    BattleNetSharedFiles.requireUnlinkedPath(folder)
+                    if (folder.isDirectory) candidates[game.product] = game to folder
+                }
+                var imported = 0
+                candidates.values.forEach { (game, folder) ->
+                    coroutineContext.ensureActive()
                     val shortcutFile = File(container.desktopDir.canonicalFile, "Battle.net-${game.product}.desktop")
                     val artwork = File(shared(context).root, "artwork/${game.product}.jpg")
                     scheduleArtwork(game, artwork)
-                    if (shortcutFile.exists() || game.product in existingProducts) return@forEach
+                    existingByProduct[game.product]?.let { shortcut ->
+                        var changed = false
+                        fun update(key: String, value: String) {
+                            if (shortcut.getExtra(key) != value) {
+                                shortcut.putExtra(key, value)
+                                changed = true
+                            }
+                        }
+                        update("custom_name", game.title)
+                        update("custom_exe", launcher.absolutePath)
+                        update("game_install_path", folder.absolutePath)
+                        update("customCoverArtPath", artwork.absolutePath)
+                        update("customLibraryHeroArtPath", artwork.absolutePath)
+                        if (changed) {
+                            shortcut.saveData()
+                            imported++
+                        }
+                        return@forEach
+                    }
+                    if (shortcutFile.exists()) return@forEach
                     val uuid = UUID.nameUUIDFromBytes("battlenet:${container.id}:${game.product}".toByteArray()).toString()
                     val windowsLauncher = windowsPath(container, launcher)
                     val text = buildString {
@@ -244,7 +271,7 @@ object BattleNetRuntime {
                         append("game_source=BATTLENET\nbattlenet_product=${game.product}\ncustom_name=${game.title}\n")
                         append("custom_exe=${launcher.absolutePath}\ngame_install_path=${folder.absolutePath}\n")
                         append("uuid=$uuid\ncontainer_id=${container.id}\nuse_container_defaults=1\n")
-                        append("customCoverArtPath=${artwork.absolutePath}\n")
+                        append("customCoverArtPath=${artwork.absolutePath}\ncustomLibraryHeroArtPath=${artwork.absolutePath}\n")
                     }
                     atomicWrite(shortcutFile, text.toByteArray())
                     imported++

@@ -1727,6 +1727,7 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
     val isEpic = app.id >= 2000000000
     val isGog = gogGame != null
     val epicId = if (isEpic) app.id - 2000000000 else 0
+    val battleNetDownloadState by com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.state.collectAsState()
     val itchGameId by produceState<Int?>(null, app.id, isCustom) {
         value =
             if (isCustom) {
@@ -1881,6 +1882,11 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
         }
     }
     val hasPinnedShortcut = pinnedShortcutOverride ?: homeShortcutState.isPinned
+    val battleNetProduct = homeShortcutState.shortcut
+        ?.takeIf { it.getExtra("game_source") == "BATTLENET" }
+        ?.getExtra("battlenet_product")
+        ?.takeIf { it.isNotBlank() }
+    val isBattleNet = battleNetProduct != null
     val librarySystemIdHint = if (isCustom) retroLibrarySystemIds.value[app.id] else null
     val retroCaps =
         remember(homeShortcutState.shortcut, homeShortcutState.loaded, isCustom, librarySystemIdHint) {
@@ -1960,7 +1966,10 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
             }
 
             isCustom -> {
-                itchAuthor ?: stringResource(R.string.library_games_custom_game)
+                when {
+                    isBattleNet -> "Blizzard Entertainment"
+                    else -> itchAuthor ?: stringResource(R.string.library_games_custom_game)
+                }
             }
 
             isEpic -> {
@@ -2007,6 +2016,7 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
         when {
             isGog -> "GOG"
             isEpic -> "Epic Games"
+            isBattleNet -> stringResource(R.string.battlenet_launcher_name)
             isCustom ->
                 retroCaps.sourceLabel
                     ?: librarySystemIdHint?.let {
@@ -2348,7 +2358,13 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
                             // Lock Play while VERIFY / UPDATE is rewriting depots in place
                             // for this game — launching mid-write can corrupt the install.
                             val activePlayBlockingTask =
-                                if (isCustom) {
+                                if (isBattleNet && !battleNetDownloadState.done) {
+                                    if (battleNetDownloadState.stage == "verifying") {
+                                        com.winlator.cmod.app.db.download.DownloadRecord.TASK_VERIFY
+                                    } else {
+                                        com.winlator.cmod.app.db.download.DownloadRecord.TASK_UPDATE
+                                    }
+                                } else if (isCustom) {
                                     null
                                 } else if (isGog) {
                                     val gogIdStr = gogGame!!.id
@@ -2741,24 +2757,25 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
                                             com.winlator.cmod.feature.retro.RetroAchievementsManager.isHardcorePreferred(context)
                                     ),
                                 onUninstall = uninstallGame,
-                                steamMenuEnabled = (isCustom && isItchGame) ||
+                                steamMenuEnabled = isBattleNet || (isCustom && isItchGame) ||
                                     (
                                         !isCustom &&
                                             (!isEpic || epicGame?.isInstalled == true) &&
                                             (!isGog || gogGame?.isInstalled == true)
                                     ),
-                                showVerifyFiles = !isCustom &&
+                                showVerifyFiles = isBattleNet || (!isCustom &&
                                     (!isEpic || epicGame?.isInstalled == true) &&
-                                    (!isGog || gogGame?.isInstalled == true),
-                                showCheckForUpdate = (isCustom && isItchGame) ||
+                                    (!isGog || gogGame?.isInstalled == true)),
+                                showCheckForUpdate = isBattleNet || (isCustom && isItchGame) ||
                                     (
                                         !isCustom &&
                                             (!isEpic || epicGame?.isInstalled == true) &&
                                             (!isGog || gogGame?.isInstalled == true)
                                     ),
-                                showWorkshop = !isCustom && !isEpic && !isGog,
+                                showWorkshop = !isCustom && !isEpic && !isGog && !isBattleNet,
                                 areSteamActionsEnabled =
                                     when {
+                                        isBattleNet -> battleNetDownloadState.done
                                         isCustom && isItchGame -> true
                                         isEpic -> !hasBlockingEpicDownloadForLibrary
                                         isGog -> !hasBlockingGogDownloadForLibrary
@@ -2767,28 +2784,50 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
                                 onVerifyFiles = {
                                     context.runIfOnlineOrToast {
                                         scope.launch {
-                                            val started =
-                                                withContext(Dispatchers.IO) {
-                                                    when {
-                                                        isEpic -> EpicService.verifyGameFiles(context, epicId)
-                                                        isGog -> GOGService.verifyGameFiles(context, gogGame!!.id)
-                                                        else -> SteamService.downloadAppForVerify(app.id)
+                                            try {
+                                                val started =
+                                                    withContext(Dispatchers.IO) {
+                                                        when {
+                                                            isBattleNet -> {
+                                                                com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.verify(
+                                                                    context,
+                                                                    battleNetProduct!!,
+                                                                )
+                                                                null
+                                                            }
+                                                            isEpic -> EpicService.verifyGameFiles(context, epicId)
+                                                            isGog -> GOGService.verifyGameFiles(context, gogGame!!.id)
+                                                            else -> SteamService.downloadAppForVerify(app.id)
+                                                        }
                                                     }
+                                                if (isBattleNet) {
+                                                    com.winlator.cmod.shared.ui.toast.WinToast.show(
+                                                        context,
+                                                        getString(R.string.store_game_verify_started, app.name),
+                                                        android.widget.Toast.LENGTH_SHORT,
+                                                    )
+                                                } else if (started != null) {
+                                                    showTaskProgressPopup(
+                                                        started,
+                                                        if (isGog) gogGame!!.title else app.name,
+                                                        getString(R.string.store_game_verify_complete),
+                                                        getString(R.string.store_game_verify_failed_notice),
+                                                        completeAsToast = true,
+                                                    )
+                                                } else {
+                                                    com.winlator.cmod.shared.ui.toast.WinToast.show(
+                                                        context,
+                                                        getString(R.string.store_game_download_already_active),
+                                                        android.widget.Toast.LENGTH_SHORT,
+                                                    )
                                                 }
-                                            if (started != null) {
-                                                showTaskProgressPopup(
-                                                    started,
-                                                    if (isGog) gogGame!!.title else app.name,
-                                                    getString(R.string.store_game_verify_complete),
-                                                    getString(R.string.store_game_verify_failed_notice),
-                                                    completeAsToast = true,
-                                                )
-                                            }
-                                            if (started == null) {
+                                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                                throw cancelled
+                                            } catch (_: Exception) {
                                                 com.winlator.cmod.shared.ui.toast.WinToast.show(
                                                     context,
-                                                    getString(R.string.store_game_download_already_active),
-                                                    android.widget.Toast.LENGTH_SHORT,
+                                                    getString(R.string.battlenet_failed),
+                                                    android.widget.Toast.LENGTH_LONG,
                                                 )
                                             }
                                         }
@@ -2796,6 +2835,7 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
                                 },
                                 onCheckForUpdate = {
                                     when {
+                                        isBattleNet -> startBattleNetUpdateCheck(battleNetProduct!!, app.name)
                                         isCustom && isItchGame -> startItchUpdateCheck(itchGameId!!, app.name)
                                         isEpic -> startEpicUpdateCheck(epicId, app.name)
                                         isGog -> startGogUpdateCheck(gogGame!!.id, gogGame.title)

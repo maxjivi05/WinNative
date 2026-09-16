@@ -940,6 +940,7 @@ private fun SourceTag(
     var menuOpen by remember { mutableStateOf(false) }
     var storeMenuOpen by remember { mutableStateOf(false) }
     var anchorHeightPx by remember { mutableStateOf(0) }
+    val showStoreChange = storeOptions.size > 1
     Box {
         Surface(
             color = Color.White.copy(alpha = 0.1f),
@@ -971,7 +972,7 @@ private fun SourceTag(
                 )
                 Icon(
                     Icons.Outlined.ArrowDropDown,
-                    contentDescription = stringResource(R.string.store_game_steam_options),
+                    contentDescription = sourceLabel,
                     tint = LaunchTextPrimary,
                     modifier = Modifier.size(18.dp),
                 )
@@ -983,11 +984,13 @@ private fun SourceTag(
             onDismissRequest = { menuOpen = false },
             offset = IntOffset(0, anchorHeightPx + gapPx),
         ) {
-            LaunchSourceMenuItem(
-                icon = Icons.Outlined.Storefront,
-                label = stringResource(R.string.library_games_store_change),
-            ) { menuOpen = false; storeMenuOpen = true }
-            if (menuEnabled || showAchievements || showCheats) {
+            if (showStoreChange) {
+                LaunchSourceMenuItem(
+                    icon = Icons.Outlined.Storefront,
+                    label = stringResource(R.string.library_games_store_change),
+                ) { menuOpen = false; storeMenuOpen = true }
+            }
+            if (showStoreChange && (menuEnabled || showAchievements || showCheats)) {
                 Box(
                     Modifier
                         .fillMaxWidth()

@@ -495,3 +495,51 @@ internal fun UnifiedActivity.startEpicUpdateCheck(appId: Int, gameName: String) 
         }
     }
 }
+
+internal fun UnifiedActivity.startBattleNetUpdateCheck(product: String, gameName: String) {
+    if (updateCheckInProgress) return
+    if (!com.winlator.cmod.app.service.NetworkMonitor.hasInternet.value) {
+        com.winlator.cmod.shared.ui.toast.WinToast.show(
+            this,
+            getString(R.string.downloads_no_internet),
+            android.widget.Toast.LENGTH_SHORT,
+        )
+        return
+    }
+    updateCheckInProgress = true
+    taskCheckingGameName = gameName
+    taskCheckingShown = true
+    taskDoneMessage = null
+    lifecycleScope.launch {
+        try {
+            val available = com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.hasUpdate(
+                this@startBattleNetUpdateCheck,
+                product,
+            )
+            if (available) {
+                val preview = com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.preview(
+                    this@startBattleNetUpdateCheck,
+                    product,
+                )
+                com.winlator.cmod.feature.stores.battlenet.BattleNetDownloads.start(
+                    this@startBattleNetUpdateCheck,
+                    product,
+                    preview,
+                )
+                taskCheckingShown = false
+            } else {
+                taskCheckingShown = false
+                taskDoneFailed = false
+                taskDoneMessage = getString(R.string.store_game_no_updates_notice)
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            taskCheckingShown = false
+            taskDoneFailed = true
+            taskDoneMessage = getString(R.string.store_game_update_check_failed_notice)
+        } finally {
+            updateCheckInProgress = false
+        }
+    }
+}
