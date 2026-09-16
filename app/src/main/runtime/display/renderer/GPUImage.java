@@ -111,6 +111,10 @@ public class GPUImage extends Texture {
         return stride;
     }
 
+    public long getHardwareBufferPtr() {
+        return ahbPtr;
+    }
+
     @Keep
     private void setStride(short stride) {
         this.stride = stride;

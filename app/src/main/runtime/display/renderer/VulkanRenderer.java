@@ -12,6 +12,7 @@ import androidx.preference.PreferenceManager;
 import com.winlator.cmod.BuildConfig;
 import com.winlator.cmod.R;
 import com.winlator.cmod.runtime.system.ApplicationLogGate;
+import com.winlator.cmod.runtime.display.composition.DirectCompositionLayer;
 import com.winlator.cmod.runtime.display.renderer.effects.Effect;
 import com.winlator.cmod.runtime.display.ui.XServerSurfaceView;
 import com.winlator.cmod.runtime.display.xserver.Bitmask;
@@ -136,9 +137,28 @@ public class VulkanRenderer
 
     private final AtomicBoolean destroyed = new AtomicBoolean(false);
 
+    public interface DirectCompositionListener {
+        void onDirectCompositionChanged(boolean active);
+    }
+
+    private static final int DC_FAILURE_LIMIT = 8;
+    private volatile boolean directCompositionEnabled = false;
+    private volatile boolean recording = false;
+    private volatile DirectCompositionListener directCompositionListener;
+    private final AtomicLong directPresentFrames = new AtomicLong();
+    private DirectCompositionLayer directCompositionLayer;
+    private boolean directCompositionActive = false;
+    private boolean directCompositionUnavailable = false;
+    private int directCompositionFailures = 0;
+    private long dcLastAhb = 0L;
+    private final int[] dcLastGeometry = new int[8];
+    private final int[] dcGeometry = new int[8];
+    private final Runnable directCompositionWake;
+
     public VulkanRenderer(XServerSurfaceView view, XServer xServer) {
         this.xServerView = view;
         this.xServer = xServer;
+        this.directCompositionWake = view::requestRender;
         this.effectComposer = new EffectComposer(this);
         this.rootCursorDrawable = createRootCursorDrawable();
         this.coalescedRenderCallback = frameTimeNanos -> {
@@ -342,7 +362,12 @@ public class VulkanRenderer
         nativeLock.lock();
         try {
             if (nativeHandle == 0 || encoderSurface == null) return false;
-            return nativeStartRecording(nativeHandle, encoderSurface, fps, recordUI);
+            boolean ok = nativeStartRecording(nativeHandle, encoderSurface, fps, recordUI);
+            if (ok) {
+                recording = true;
+                xServerView.requestRender();
+            }
+            return ok;
         } finally {
             nativeLock.unlock();
         }
@@ -357,6 +382,7 @@ public class VulkanRenderer
     }
 
     public void stopRecording() {
+        recording = false;
         nativeLock.lock();
         try {
             if (nativeHandle != 0) nativeStopRecording(nativeHandle);
@@ -410,6 +436,7 @@ public class VulkanRenderer
 
     @Override
     public void onSurfaceDestroyed() {
+        releaseDirectComposition();
         destroy();
     }
 
@@ -434,6 +461,8 @@ public class VulkanRenderer
                 viewportNeedsUpdate = true;
             }
         }
+
+        if (presentDirectComposition()) return;
 
         textureUploadBatch.reset();
         boolean useScissor = false;
@@ -674,6 +703,172 @@ public class VulkanRenderer
         nativeSetSourceFrameCount(nativeHandle, presents > 0 ? presents : sourceFrames.get());
         // nativeSetFpsLimit is a native no-op (pacing is done elsewhere); not called per frame.
         nativeRenderFrame(nativeHandle);
+    }
+
+    public void setDirectCompositionEnabled(boolean enabled) {
+        if (directCompositionEnabled == enabled) return;
+        directCompositionEnabled = enabled;
+        requestRenderCoalesced(WAKE_SETTING);
+    }
+
+    public boolean isDirectCompositionEnabled() { return directCompositionEnabled; }
+
+    public void setDirectCompositionListener(DirectCompositionListener listener) {
+        directCompositionListener = listener;
+    }
+
+    private boolean directCompositionSceneEligible() {
+        if (swapRB || recording || magnifierUIActive) return false;
+        if (frameGenerationRequested || disFrameGenerationRequested) return false;
+        if (requestedScaleFilter != SCALE_FILTER_OFF) return false;
+        if (effectComposer.hasEffects()) return false;
+        boolean identity = magnifierEnabled
+                ? (magnifierZoom <= 1f && !screenOffsetYRelativeToCursor)
+                : fullscreen;
+        return identity;
+    }
+
+    private Drawable findDirectCompositionWindow() {
+        int count = renderableWindows.size();
+        if (count == 0) return null;
+        RenderableWindow top = renderableWindows.get(count - 1);
+        Drawable content = top.content;
+        if (content == null || top.rootX != 0 || top.rootY != 0) return null;
+        if (Short.toUnsignedInt(content.width) < xServer.screenInfo.width
+                || Short.toUnsignedInt(content.height) < xServer.screenInfo.height) {
+            return null;
+        }
+        if (cursorVisible) {
+            Window pointWindow = xServer.inputDeviceManager.getPointWindow();
+            Cursor cursor = pointWindow != null ? pointWindow.attributes.getCursor() : null;
+            if (cursor == null || cursor.isVisible()) return null;
+        }
+        return content;
+    }
+
+    private boolean computeDirectCompositionGeometry(int scanoutX, int scanoutY, int[] out) {
+        int screenW = xServer.screenInfo.width;
+        int screenH = xServer.screenInfo.height;
+        int dstX, dstY, dstW, dstH;
+        if (fullscreen) {
+            dstX = 0;
+            dstY = 0;
+            dstW = surfaceWidth;
+            dstH = surfaceHeight;
+        } else {
+            dstX = viewTransformation.viewOffsetX;
+            dstY = viewTransformation.viewOffsetY;
+            dstW = viewTransformation.viewWidth;
+            dstH = viewTransformation.viewHeight;
+        }
+        if (dstW <= 0 || dstH <= 0 || screenW <= 0 || screenH <= 0) return false;
+        int clipX = Math.max(dstX, 0);
+        int clipY = Math.max(dstY, 0);
+        int clipRight = Math.min(dstX + dstW, surfaceWidth);
+        int clipBottom = Math.min(dstY + dstH, surfaceHeight);
+        if (clipRight <= clipX || clipBottom <= clipY) return false;
+        float scaleX = (float) dstW / screenW;
+        float scaleY = (float) dstH / screenH;
+        out[0] = Math.round((clipX - dstX) / scaleX) - scanoutX;
+        out[1] = Math.round((clipY - dstY) / scaleY) - scanoutY;
+        out[2] = Math.max(1, Math.round((clipRight - clipX) / scaleX));
+        out[3] = Math.max(1, Math.round((clipBottom - clipY) / scaleY));
+        out[4] = clipX;
+        out[5] = clipY;
+        out[6] = clipRight - clipX;
+        out[7] = clipBottom - clipY;
+        return true;
+    }
+
+    private boolean presentDirectComposition() {
+        if (!directCompositionEnabled || directCompositionUnavailable
+                || surfaceWidth <= 0 || surfaceHeight <= 0 || !directCompositionSceneEligible()) {
+            releaseDirectComposition();
+            return false;
+        }
+
+        Drawable source = null;
+        long ahb = 0L;
+        boolean geometryOk = false;
+        try (XLock lock = xServer.lock(XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.DRAWABLE_MANAGER)) {
+            Drawable window = findDirectCompositionWindow();
+            if (window != null) {
+                synchronized (window.renderLock) {
+                    Drawable scanout = window.getScanoutSource();
+                    if (scanout != null && scanout != window) {
+                        Texture tex = scanout.getTexture();
+                        if (tex instanceof GPUImage) {
+                            ahb = ((GPUImage) tex).getHardwareBufferPtr();
+                            source = scanout;
+                            geometryOk = computeDirectCompositionGeometry(
+                                    window.getScanoutX(), window.getScanoutY(), dcGeometry);
+                        }
+                    }
+                }
+            }
+        }
+        if (ahb == 0L || !geometryOk) {
+            releaseDirectComposition();
+            return false;
+        }
+
+        if (directCompositionLayer == null) {
+            directCompositionLayer = DirectCompositionLayer.create(
+                    xServerView.getHolder().getSurface(), directCompositionWake);
+            if (directCompositionLayer == null) {
+                directCompositionUnavailable = true;
+                Log.w(TAG, "Direct composition layer unavailable, staying on the compositor");
+                return false;
+            }
+        }
+
+        boolean unchanged = ahb == dcLastAhb && java.util.Arrays.equals(dcGeometry, dcLastGeometry);
+        if (unchanged || !directCompositionLayer.isIdle()) return true;
+
+        int result = directCompositionLayer.present(ahb, source,
+                dcGeometry[0], dcGeometry[1], dcGeometry[2], dcGeometry[3],
+                dcGeometry[4], dcGeometry[5], dcGeometry[6], dcGeometry[7]);
+        if (result == DirectCompositionLayer.PRESENT_FAILED) {
+            if (++directCompositionFailures >= DC_FAILURE_LIMIT) {
+                directCompositionUnavailable = true;
+                Log.w(TAG, "Direct composition disabled after repeated failures");
+            }
+            releaseDirectComposition();
+            return false;
+        }
+        directCompositionFailures = 0;
+        dcLastAhb = ahb;
+        System.arraycopy(dcGeometry, 0, dcLastGeometry, 0, dcGeometry.length);
+        directPresentFrames.incrementAndGet();
+        if (!directCompositionActive) {
+            directCompositionActive = true;
+            Log.i(TAG, "Direct composition engaged ("
+                    + (result == DirectCompositionLayer.PRESENT_OVERLAY ? "overlay" : "composed")
+                    + ") crop=" + dcGeometry[2] + "x" + dcGeometry[3]
+                    + " dst=" + dcGeometry[6] + "x" + dcGeometry[7]
+                    + "@" + dcGeometry[4] + "," + dcGeometry[5]);
+            notifyDirectCompositionListener();
+        }
+        return true;
+    }
+
+    private void releaseDirectComposition() {
+        if (directCompositionLayer != null) {
+            directCompositionLayer.release();
+            directCompositionLayer = null;
+        }
+        dcLastAhb = 0L;
+        java.util.Arrays.fill(dcLastGeometry, 0);
+        if (directCompositionActive) {
+            directCompositionActive = false;
+            Log.i(TAG, "Direct composition released");
+            notifyDirectCompositionListener();
+        }
+    }
+
+    private void notifyDirectCompositionListener() {
+        DirectCompositionListener listener = directCompositionListener;
+        if (listener != null) listener.onDirectCompositionChanged(directCompositionActive);
     }
 
     // ----- WindowManager / Pointer listeners --------------------------------
@@ -1082,7 +1277,8 @@ public class VulkanRenderer
     }
 
     public long getPresentedFrameCount() {
-        return nativeHandle != 0 ? nativeGetPresentedFrameCount(nativeHandle) : 0L;
+        long presented = nativeHandle != 0 ? nativeGetPresentedFrameCount(nativeHandle) : 0L;
+        return presented + directPresentFrames.get();
     }
 
     public static int parsePresentMode(String name) {

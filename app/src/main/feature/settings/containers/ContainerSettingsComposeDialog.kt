@@ -454,6 +454,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             ).let { it ?: DeviceProfileSettings.adaptiveJoysticksDefaultExtra(context) } == "1"
 
         state.fullscreenStretched.value = c?.isFullscreenStretched() ?: false
+        state.directComposition.value = c?.isDirectCompositionEnabled() ?: false
         state.useUnixLibs.value = c?.isUseUnixLibs() ?: true
 
         // Steam fields are shortcut-only in the UI; leave any existing steam
@@ -928,6 +929,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 com.winlator.cmod.runtime.wine.WineUtils.applyDrivesToPrefix(c, drivesString)
             }
             c.setFullscreenStretched(state.fullscreenStretched.value)
+            c.setDirectCompositionEnabled(state.directComposition.value)
             c.setUseUnixLibs(state.useUnixLibs.value)
             c.setInputType(finalInputType)
             c.setExclusiveXInput(state.containerExclusiveInput.value)
@@ -993,6 +995,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                             "swapRB",
                             if (state.selectedSurfaceEffect.intValue == 1) "1" else "0"
                         )
+                        newContainer.setDirectCompositionEnabled(state.directComposition.value)
                         newContainer.putExtra(
                             DeviceResolutions.EXTRA_ENABLED,
                             DeviceResolutions.extraValue(state.showDeviceResolutions.value)

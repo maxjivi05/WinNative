@@ -795,6 +795,11 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                 : fallback;
     }
 
+    private boolean isDirectCompositionEnabledForSession() {
+        String containerValue = container != null && container.isDirectCompositionEnabled() ? "1" : "0";
+        return "1".equals(getShortcutSetting(Container.EXTRA_DIRECT_COMPOSITION, containerValue));
+    }
+
     private boolean isAdaptiveJoysticksEnabled() {
         return "1".equals(getShortcutSetting(InputControlsView.EXTRA_ADAPTIVE_JOYSTICKS, containerAdaptiveJoysticks()));
     }
@@ -8663,6 +8668,11 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
 
         String containerSwapRB = container != null ? container.getExtra("swapRB", "0") : "0";
         renderer.setSwapRB("1".equals(getShortcutSetting("swapRB", containerSwapRB)));
+        renderer.setDirectCompositionEnabled(isDirectCompositionEnabledForSession());
+        renderer.setDirectCompositionListener(active -> {
+            FrameRating hud = frameRating;
+            if (hud != null) hud.setDirectCompositionActive(active);
+        });
 
         applyFrameGenerationSettings(renderer, container);
         applyDisFrameGenerationSettings(renderer, container);

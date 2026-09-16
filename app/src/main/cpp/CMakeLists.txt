@@ -153,6 +153,7 @@ add_library(winlator SHARED
         winlator/drawable.c
         winlator/native_content_io.cpp
         winlator/gpu_image.c
+        winlator/direct_composition.cpp
         winlator/ring_fence.c
         winlator/sync_fence.c
         winlator/sysvshared_memory.c

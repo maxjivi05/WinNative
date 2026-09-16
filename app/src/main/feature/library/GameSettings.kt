@@ -601,6 +601,7 @@ class GameSettingsStateHolder {
     val selectedStartupSelection = mutableIntStateOf(0)
     val execArgs = mutableStateOf("")
     val fullscreenStretched = mutableStateOf(false)
+    val directComposition = mutableStateOf(false)
 
     // Advanced - CPU
     val cpuCount = mutableIntStateOf(Runtime.getRuntime().availableProcessors())
@@ -5391,6 +5392,14 @@ private fun AdvancedSection(
             label = stringResource(R.string.session_display_fullscreen_stretched),
             checked = state.fullscreenStretched.value,
             onCheckedChange = { state.fullscreenStretched.value = it }
+        )
+
+        Spacer(Modifier.height(SettingItemGap))
+
+        SettingCheckbox(
+            label = stringResource(R.string.session_display_direct_composition),
+            checked = state.directComposition.value,
+            onCheckedChange = { state.directComposition.value = it }
         )
     }
 

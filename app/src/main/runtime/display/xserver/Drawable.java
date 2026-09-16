@@ -25,6 +25,9 @@ public class Drawable extends XResource {
   private Runnable onDrawListener;
   private Callback<Drawable> onDestroyListener;
   public final Object renderLock = new Object();
+  private final Object holdLock = new Object();
+  private int displayHolds;
+  private Runnable deferredIdle;
 
   static {
     System.loadLibrary("winlator");
@@ -132,6 +135,34 @@ public class Drawable extends XResource {
     }
     this.data = data;
     hasContent = true;
+  }
+
+  public void acquireDisplayHold() {
+    synchronized (holdLock) {
+      displayHolds++;
+    }
+  }
+
+  public void releaseDisplayHold() {
+    Runnable idle;
+    synchronized (holdLock) {
+      if (displayHolds > 0) displayHolds--;
+      if (displayHolds > 0) return;
+      idle = deferredIdle;
+      deferredIdle = null;
+    }
+    if (idle != null) idle.run();
+  }
+
+  public boolean deferWhileDisplayed(Runnable idle) {
+    Runnable previous;
+    synchronized (holdLock) {
+      if (displayHolds == 0) return false;
+      previous = deferredIdle;
+      deferredIdle = idle;
+    }
+    if (previous != null) previous.run();
+    return true;
   }
 
   public void setDirectScanout(boolean value) {

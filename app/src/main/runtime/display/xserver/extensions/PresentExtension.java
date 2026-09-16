@@ -154,6 +154,14 @@ public class PresentExtension
   }
 
   private void sendIdleNotify(Window window, Pixmap pixmap, int serial, int idleFence) {
+    if (pixmap.drawable.deferWhileDisplayed(
+        () -> sendIdleNotifyNow(window, pixmap, serial, idleFence))) {
+      return;
+    }
+    sendIdleNotifyNow(window, pixmap, serial, idleFence);
+  }
+
+  private void sendIdleNotifyNow(Window window, Pixmap pixmap, int serial, int idleFence) {
     if (idleFence != 0) syncExtension.setTriggered(idleFence);
 
     synchronized (events) {

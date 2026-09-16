@@ -35,6 +35,7 @@ public class Container {
     public static final String DEFAULT_GRAPHICSDRIVERCONFIG =
             "vulkanVersion=1.4" + ";version=" + ";blacklistedExtensions=" + ";maxDeviceMemory=0" + ";presentMode=mailbox" + ";syncFrame=0" + ";disablePresentWait=0" + ";resourceType=auto" + ";bcnEmulation=auto" + ";bcnEmulationType=compute" + ";bcnEmulationCache=0" + ";gpuName=Device" + ";transcoder=cpu" + ";astcTranscoding=off";
     public static final String DEFAULT_DDRAWRAPPER = "none";
+    public static final String EXTRA_DIRECT_COMPOSITION = "directComposition";
     public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,dinput8=1,vcrun2010=1";
     public static final String FALLBACK_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=1,directplay=1,xaudio=1,dinput8=1,vcrun2010=1";
     public static final String DEFAULT_DRIVES = "D:" + Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "F:" + Environment.getExternalStorageDirectory().getAbsolutePath();
@@ -314,6 +315,14 @@ public class Container {
 
     public String getLanguage() {
         return getExtra("containerLanguage", "english");
+    }
+
+    public boolean isDirectCompositionEnabled() {
+        return "1".equals(getExtra(EXTRA_DIRECT_COMPOSITION, "0"));
+    }
+
+    public void setDirectCompositionEnabled(boolean enabled) {
+        putExtra(EXTRA_DIRECT_COMPOSITION, enabled ? "1" : "0");
     }
 
     public String getExtra(String key) {

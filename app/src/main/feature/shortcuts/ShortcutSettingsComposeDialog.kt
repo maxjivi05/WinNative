@@ -448,6 +448,10 @@ class ShortcutSettingsComposeDialog private constructor(
             if (container.isFullscreenStretched) "1" else "0"
         )
         state.fullscreenStretched.value = fullscreenStretched == "1"
+        state.directComposition.value = getShortcutSetting(
+            Container.EXTRA_DIRECT_COMPOSITION,
+            if (container.isDirectCompositionEnabled) "1" else "0"
+        ) == "1"
         state.useUnixLibs.value = getShortcutSetting(
             "useUnixLibs",
             if (container.isUseUnixLibs) "1" else "0"
@@ -1198,6 +1202,12 @@ class ShortcutSettingsComposeDialog private constructor(
                 "fullscreenStretched",
                 if (state.fullscreenStretched.value) "1" else "0",
                 if (container.isFullscreenStretched) "1" else "0"
+            )
+
+            hasContainerOverride = hasContainerOverride or saveOverride(
+                Container.EXTRA_DIRECT_COMPOSITION,
+                if (state.directComposition.value) "1" else "0",
+                if (container.isDirectCompositionEnabled) "1" else "0"
             )
 
             // Use UnixLibs
@@ -2406,6 +2416,7 @@ class ShortcutSettingsComposeDialog private constructor(
 
         state.lcAll.value = container.getLC_ALL()
         state.fullscreenStretched.value = container.isFullscreenStretched
+        state.directComposition.value = container.isDirectCompositionEnabled
         state.useUnixLibs.value = container.isUseUnixLibs
 
         val startupEntries = state.startupSelectionEntries.value

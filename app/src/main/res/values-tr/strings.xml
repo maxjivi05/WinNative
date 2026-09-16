@@ -984,6 +984,7 @@ E.g. <b>META</b> için <i>META tuşu</i>, \n
     <string name="session_display_frame_rate">Kare Hızı</string>
     <string name="session_display_title">Ekran</string>
     <string name="session_display_fullscreen_stretched">Tam Ekranı Etkinleştir (Uzatılmış)</string>
+    <string name="session_display_direct_composition">Doğrudan Birleştirme (birleştiriciyi atla)</string>
     <string name="session_display_fps_label">FPS:</string>
     <string name="session_display_renderer_label">Oluşturucu:</string>
     <string name="session_display_gpu_label">GPU:</string>

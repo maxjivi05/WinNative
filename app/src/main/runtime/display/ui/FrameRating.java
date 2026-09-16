@@ -175,6 +175,7 @@ public class FrameRating extends LinearLayout implements Runnable {
   private int frameTimesCount;
   private volatile OutputFrameSource outputFrameSource;
   private volatile boolean frameGenActive;
+  private volatile boolean directCompositionActive;
   private volatile float outputFPS;
   private volatile boolean outputGenerating;
   private final long[] outputSampleNano = new long[MAX_OUTPUT_SAMPLES];
@@ -1152,9 +1153,25 @@ public class FrameRating extends LinearLayout implements Runnable {
     }
   }
 
+  public void setDirectCompositionActive(boolean active) {
+    if (this.directCompositionActive == active) return;
+    this.directCompositionActive = active;
+    post(this::updateRendererText);
+  }
+
+  private CharSequence rendererLabel() {
+    if (!this.directCompositionActive) return this.rendererName;
+    SpannableStringBuilder sb = new SpannableStringBuilder(this.rendererName);
+    int start = sb.length();
+    sb.append(" + DC");
+    sb.setSpan(new ForegroundColorSpan(0xFF4CAF50), start, sb.length(),
+        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+    return sb;
+  }
+
   private void updateRendererText() {
     if (this.tvRenderer != null) {
-      this.tvRenderer.setText(this.rendererName);
+      this.tvRenderer.setText(rendererLabel());
       this.tvRenderer.setVisibility(this.enableRenderer ? View.VISIBLE : View.GONE);
       updateSeparators(getOrientation() == LinearLayout.HORIZONTAL);
     }
