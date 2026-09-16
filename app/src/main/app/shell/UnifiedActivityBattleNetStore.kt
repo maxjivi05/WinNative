@@ -13,6 +13,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -21,6 +25,8 @@ import com.winlator.cmod.R
 import com.winlator.cmod.feature.stores.battlenet.*
 import com.winlator.cmod.shared.ui.FourByTwoGridView
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -30,7 +36,9 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
     val scope = rememberCoroutineScope()
     var refresh by remember { mutableIntStateOf(0) }
     var games by remember { mutableStateOf<List<BattleNetGame>>(emptyList()) }
-    var installed by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var installs by remember { mutableStateOf<List<BattleNetInstall>>(emptyList()) }
+    val installed = installs.filter { it.installed && it.playable }.map { it.product }.toSet()
+    var availableBytes by remember { mutableLongStateOf(0L) }
     val signedIn by BattleNetAccount.authenticated.collectAsState()
     var loading by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
@@ -55,6 +63,7 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
                     throw cancelled
                 } catch (failure: Exception) {
                     error = failure.message ?: getString(R.string.battlenet_failed)
+                    if (selected != null) android.widget.Toast.makeText(this@BattleNetStoreTab, error, android.widget.Toast.LENGTH_LONG).show()
                 } finally {
                     busy = false
                 }
@@ -69,8 +78,8 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
             BattleNetAccount.refreshSession(applicationContext)
             val state = BattleNetRuntime.importInstalled(applicationContext)
             error = state.sessionProblem
-            installed = state.installs.filter { it.installed && it.playable }.map { it.product }.toSet()
-            val local = BattleNetCatalog.games.filter { it.product in installed }
+            installs = state.installs
+            val local = BattleNetCatalog.games.filter { game -> state.installs.any { it.product == game.product && it.installed && it.playable } }
             games = local
             try {
                 games = (BattleNetAccount.games() + local).distinctBy { it.product }
@@ -142,18 +151,69 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
         }
     }
 
+    LaunchedEffect(selected?.product) {
+        availableBytes = 0L
+        if (selected != null) {
+            availableBytes = withContext(Dispatchers.IO) {
+                BattleNetRuntime.shared(applicationContext).root.usableSpace
+            }
+        }
+    }
+
     selected?.let { game ->
-        AlertDialog(
-            onDismissRequest = { if (!busy) selected = null },
-            title = { Text(game.title) },
-            text = { Text(stringResource(R.string.battlenet_client_session_hint)) },
-            confirmButton = {
-                TextButton(onClick = { open(game, game.product !in installed) }, enabled = !busy) {
-                    Text(stringResource(if (game.product in installed) R.string.battlenet_play else R.string.battlenet_install))
-                }
-            },
-            dismissButton = { TextButton(onClick = { selected = null }, enabled = !busy) { Text(stringResource(R.string.common_ui_close)) } },
+        val install = installs.firstOrNull { it.product == game.product }
+        BattleNetGameDetailDialog(
+            game = game,
+            isInstalled = game.product in installed,
+            installPath = install?.path.orEmpty(),
+            downloadSize = install?.totalBytes ?: 0L,
+            availableBytes = availableBytes,
+            busy = busy,
+            onDismiss = { if (!busy) selected = null },
+            onDownload = { open(game, true) },
+            onPlay = { open(game, false) },
         )
+    }
+}
+
+@Composable
+internal fun BattleNetGameDetailDialog(
+    game: BattleNetGame,
+    isInstalled: Boolean,
+    installPath: String,
+    downloadSize: Long,
+    availableBytes: Long,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit,
+    onPlay: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Surface(Modifier.fillMaxSize(), shape = RectangleShape, color = Color.Black) {
+            StoreGameDetailScreen(
+                title = game.title,
+                subtitle = "",
+                sourceLabel = "Battle.net",
+                heroImageUrl = game.coverUrl,
+                isLoading = busy,
+                isInstalled = isInstalled,
+                installPathDisplay = installPath,
+                downloadSize = downloadSize,
+                installSize = 0L,
+                availableBytes = availableBytes,
+                isInstallEnabled = !busy,
+                customPathLabel = "",
+                showCustomPath = false,
+                showUninstall = false,
+                showPlay = true,
+                onBack = onDismiss,
+                onInstall = onDownload,
+                onPlay = onPlay,
+            )
+        }
     }
 }
 

@@ -52,6 +52,7 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.Construction
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -160,6 +161,8 @@ internal fun StoreGameDetailScreen(
     isDownloadActionEnabled: Boolean = isInstallEnabled,
     customPathLabel: String,
     showCustomPath: Boolean = true,
+    showPlay: Boolean = false,
+    onPlay: () -> Unit = {},
     showCloudSync: Boolean = false,
     showUninstall: Boolean = true,
     uninstallAsPrimaryAction: Boolean = false,
@@ -238,6 +241,7 @@ internal fun StoreGameDetailScreen(
         val contentGap = 18.dp
         val horizontalNavInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal)
         val hasSelectedInstallableDlc = dlcs.any { !it.isInstalled && it.id in selectedDlcIds }
+        val showPlayCta = showPlay && isInstalled
         val showDownloadCta = !isInstalled || hasSelectedInstallableDlc
         val showUninstallCta = uninstallAsPrimaryAction && showUninstall && isInstalled
         val updateCheckAvailable = showUpdateCheck && isInstalled
@@ -248,7 +252,7 @@ internal fun StoreGameDetailScreen(
         val showDlcCard = dlcs.isNotEmpty()
         val showBranchPicker = branches.size > 1
         val showActionColumn =
-            showDownloadCta || showUpdateCta ||
+            showDownloadCta || showPlayCta || showUpdateCta ||
                 (showCloudSync || showUninstall)
 
         if (heroImageUrl != null) {
@@ -608,6 +612,20 @@ internal fun StoreGameDetailScreen(
                                         menuRegistry = branchRegistry,
                                         onSelectBranch = onSelectBranch,
                                         modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+
+                                if (showPlayCta) {
+                                    StoreCtaButton(
+                                        height = ctaHeight,
+                                        icon = Icons.Outlined.PlayArrow,
+                                        label = stringResource(R.string.library_games_play),
+                                        enabled = !isLoading && isInstallEnabled,
+                                        loading = isLoading,
+                                        onClick = onPlay,
+                                        isEntry = !showDownloadCta,
+                                        navRow = 1,
+                                        navCol = 0,
                                     )
                                 }
 
