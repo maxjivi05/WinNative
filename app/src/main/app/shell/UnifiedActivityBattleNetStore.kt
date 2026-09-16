@@ -50,7 +50,7 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
         refresh++
         libraryRefreshSignal++
     }
-    val signIn = { login.launch(Intent(this, BattleNetLoginActivity::class.java)) }
+    val signIn = { login.launch(Intent(this, BattleNetLoginActivity::class.java).putExtra("libraryOnly", signedIn)) }
     val open: (BattleNetGame?, Boolean) -> Unit = { game, install ->
         if (!busy) {
             busy = true
@@ -84,7 +84,7 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
             try {
                 games = (BattleNetAccount.games() + local).distinctBy { it.product }
             } catch (_: BattleNetAccount.SignInRequired) {
-                if (signedIn) error = getString(R.string.battlenet_failed)
+                if (signedIn) error = getString(R.string.battlenet_library_session_hint)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -136,6 +136,7 @@ internal fun UnifiedActivity.BattleNetStoreTab(searchQuery: String) {
         when {
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             !signedIn && games.isEmpty() -> LoginRequiredScreen("Battle.net", signIn)
+            games.isEmpty() && error != null -> Unit
             games.isEmpty() -> Text(stringResource(R.string.battlenet_no_games), Modifier.padding(24.dp), style = MaterialTheme.typography.bodyLarge)
             else -> FourByTwoGridView(
                 items = filtered,
