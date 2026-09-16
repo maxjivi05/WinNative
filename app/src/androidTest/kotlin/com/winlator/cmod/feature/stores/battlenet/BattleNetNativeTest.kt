@@ -22,4 +22,18 @@ class BattleNetNativeTest {
         org.junit.Assert.assertTrue(build.getLong("buildId") > 0L)
     }
 
+    @Test fun jniRejectsInvalidPlanInput() {
+        assertEquals("invalid_tags", JSONObject(BattleNetNative.downloadPlan("s1", "us", "null")).getString("error"))
+        assertEquals("invalid_product", JSONObject(BattleNetNative.downloadPlan("../s1", "us", "[]")).getString("error"))
+    }
+    @Test fun liveDownloadPlanWhenRequested() {
+        org.junit.Assume.assumeTrue(
+            androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("battlenetLiveMetadata") == "true",
+        )
+        val result = JSONObject(BattleNetNative.downloadPlan("s1", "us", "[\"Windows\",\"x86_64\",\"enUS\",\"Release\",\"noigr\"]"))
+        org.junit.Assert.assertTrue(result.getLong("encodedContentBytes") > 1_000_000_000L)
+        org.junit.Assert.assertTrue(result.getLong("contentObjectCount") > 100L)
+        assertEquals(5, result.getJSONArray("selectedTags").length())
+    }
+
 }

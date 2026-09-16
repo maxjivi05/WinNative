@@ -1,3 +1,8 @@
+pub mod archive;
+pub mod blte;
+pub mod manifest;
+pub mod planning;
+pub mod transfer;
 use jni::{
     objects::{JClass, JString},
     sys::jstring,
@@ -155,6 +160,35 @@ pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNet
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_winlator_cmod_feature_stores_battlenet_BattleNetNative_downloadPlan(
+    mut env: JNIEnv,
+    _class: JClass,
+    product: JString,
+    region: JString,
+    tags: JString,
+) -> jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<serde_json::Value, String> {
+        let product: String = env.get_string(&product).map_err(|_| "invalid_product")?.into();
+        let region: String = env.get_string(&region).map_err(|_| "invalid_product")?.into();
+        let tags: String = env.get_string(&tags).map_err(|_| "invalid_tags")?.into();
+        if tags.len() > 4096 { return Err("invalid_tags".into()); }
+        let tags: Vec<String> = serde_json::from_str(&tags).map_err(|_| "invalid_tags")?;
+        if tags.len() > 64 || tags.iter().any(|tag| tag.is_empty() || tag.len() > 256) { return Err("invalid_tags".into()); }
+        let plan = planning::download_plan(&product, &region)?;
+        let selection = plan.manifest.select(&tags)?;
+        Ok(serde_json::json!({"build":plan.build,"availableTags":plan.manifest.tags,"selectedTags":tags,
+            "encodedContentBytes":selection.encoded_bytes,"contentObjectCount":selection.entries.len()}))
+    })).unwrap_or_else(|_| Err("native_error".into()));
+    let value = match result {
+        Ok(value) => value,
+        Err(code) => serde_json::json!({"error":code}),
+    };
+    env.new_string(value.to_string())
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
 }
 
 #[cfg(test)]
