@@ -55,6 +55,20 @@ internal object BattleNetSession {
         if (!secure.edit().remove("token").putBoolean("pending", false).commit()) throw IOException("Could not finish saving the Battle.net session.")
     }
 
+    fun prepareClient(context: Context, root: File) {
+        val file = File(root, "appdata/roaming/Battle.net/Battle.net.config")
+        BattleNetSharedFiles.requireUnlinkedPath(file)
+        val json = if (file.isFile) {
+            if (file.length() > 2 * 1024 * 1024) throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed))
+            try { JSONObject(file.readText()) } catch (_: Exception) { throw IOException(context.getString(com.winlator.cmod.R.string.battlenet_failed)) }
+        } else JSONObject()
+        val client = json.optJSONObject("Client") ?: JSONObject().also { json.put("Client", it) }
+        if (client.optString("HardwareAcceleration") != "false") {
+            client.put("HardwareAcceleration", "false")
+            writePrivate(file, json.toString(4).toByteArray())
+        }
+    }
+
     private fun configure(root: File, account: String?, region: String?) {
         val file = File(root, "appdata/roaming/Battle.net/Battle.net.config")
         BattleNetSharedFiles.requireUnlinkedPath(file)

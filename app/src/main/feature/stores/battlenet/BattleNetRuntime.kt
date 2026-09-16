@@ -99,6 +99,7 @@ object BattleNetRuntime {
                 ) throw IOException("Close the running session before switching Battle.net containers.")
                 ensureSharedFiles(context, container)
                 BattleNetSession.stage(context, shared(context).root)
+                BattleNetSession.prepareClient(context, shared(context).root)
                 val launcher = client(container)
                 val executable = launcher ?: downloadInstaller(context, container)
                 if (!prefs.edit().putInt("last_container", container.id).commit()) throw IOException("Could not save the Battle.net session.")
