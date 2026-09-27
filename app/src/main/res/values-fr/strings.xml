@@ -2942,6 +2942,7 @@ Chemin installé :
     <string name="container_display_server_gamescope">Gamescope dessine toujours via le compositeur Wayland.</string>
     <string name="container_graphics_driver_gamescope">Turnip %1$s (Linux ARM64)</string>
     <string name="container_graphics_driver_gamescope_help">Intégré à l\'environnement Linux. Les pilotes Android téléchargés ne s\'appliquent qu\'aux conteneurs Wine et Proton.</string>
+    <string name="container_vkd3d_feature_level_gamescope_help">Le niveau que VKD3D-Proton annonce aux jeux Direct3D 12. Au-delà de 12_0, il annonce des fonctions absentes de Turnip : un jeu peut alors démarrer puis échouer en les utilisant.</string>
     <string name="linux_runtime_windows_program">Ceci est un programme Windows. Déplacez-le dans un conteneur Wine dans les paramètres du raccourci pour le lancer.</string>
     <string name="linux_steam_library_named">WinNative (%1$s)</string>
     <string name="linux_steam_library_internal">Stockage interne</string>

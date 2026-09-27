@@ -1929,7 +1929,8 @@ private fun DisplaySection(
 
 /**
  * A GameScope container draws with the Turnip the Linux runtime carries, and its games bring their
- * own DXVK and VKD3D inside Proton, so the Android drivers and the DX wrappers are not offered.
+ * own DXVK and VKD3D inside Proton, so the Android drivers and the DX wrappers are not offered. The
+ * feature level VKD3D reports is read from the environment, so it applies to Proton's VKD3D too.
  */
 @Composable
 private fun GamescopeDisplaySection(
@@ -1963,6 +1964,27 @@ private fun GamescopeDisplaySection(
         Spacer(Modifier.height(SettingSectionGap))
 
         DisplayServerRow(state)
+
+        Spacer(Modifier.height(SettingSectionGap))
+
+        SettingPairRow {
+            Box(Modifier.weight(1f)) {
+                SettingDropdown(
+                    label = stringResource(R.string.container_wine_vkd3d_feature_level),
+                    entries = state.dxvkVkd3dFeatureLevelEntries.value,
+                    selectedIndex = state.dxvkSelectedVkd3dFeatureLevel.intValue,
+                    onSelected = { state.dxvkSelectedVkd3dFeatureLevel.intValue = it }
+                )
+            }
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                Text(
+                    text = stringResource(R.string.container_vkd3d_feature_level_gamescope_help),
+                    color = TextDim,
+                    fontSize = SettingLabelSize,
+                    modifier = Modifier.padding(top = SettingLabelRowHeight)
+                )
+            }
+        }
     }
 
     Spacer(Modifier.height(SettingItemGap))

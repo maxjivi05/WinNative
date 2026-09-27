@@ -2940,6 +2940,7 @@
     <string name="container_display_server_gamescope">Gamescope 始终通过 Wayland 合成器绘制。</string>
     <string name="container_graphics_driver_gamescope">Turnip %1$s (Linux ARM64)</string>
     <string name="container_graphics_driver_gamescope_help">内置于 Linux 运行环境。下载的 Android 驱动仅适用于 Wine 和 Proton 容器。</string>
+    <string name="container_vkd3d_feature_level_gamescope_help">VKD3D-Proton 向 Direct3D 12 游戏报告的级别。高于 12_0 时会声明 Turnip 不具备的功能，游戏可能启动后在使用这些功能时失败。</string>
     <string name="linux_runtime_windows_program">这是一个 Windows 程序。请在快捷方式设置中将其移到 Wine 容器后再启动。</string>
     <string name="linux_steam_library_named">WinNative（%1$s）</string>
     <string name="linux_steam_library_internal">内部存储</string>

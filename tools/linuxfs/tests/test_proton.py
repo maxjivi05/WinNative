@@ -110,7 +110,8 @@ class ProtonTests(unittest.TestCase):
         audio = self.root / 'winnative-directaudio'
         audio.write_text('#!/bin/sh\nexit 0\n')
         audio.chmod(0o755)
-        env = dict(os.environ, PATH=str(self.root) + ':' + os.environ['PATH'], WN_LOG=str(self.root / 'logs/session.log'))
+        env = dict(os.environ, PATH=str(self.root) + ':' + os.environ['PATH'], WN_LOG=str(self.root / 'logs/session.log'),
+                   WN_PROTON_LOG='1')
         result = subprocess.run(['sh', str(ASSETS / 'winnative-proton-launch'), str(proton),
                                  'waitforexitandrun', '/game path/a.exe', '', 'one "two"'], env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 23)

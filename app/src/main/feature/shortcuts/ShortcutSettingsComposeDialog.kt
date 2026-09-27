@@ -94,7 +94,7 @@ import com.winlator.cmod.feature.shortcuts.ShortcutsFragment
 import com.winlator.cmod.runtime.display.XServerDisplayActivity
 import com.winlator.cmod.runtime.input.controls.GestureProfileManager
 import com.winlator.cmod.runtime.input.controls.InputControlsManager
-import com.winlator.cmod.runtime.linux.LinuxDriverChoices
+import com.winlator.cmod.runtime.linux.LinuxGraphicsChoices
 import com.winlator.cmod.runtime.linux.LinuxProtons
 import com.winlator.cmod.runtime.audio.midi.MidiManager
 import com.winlator.cmod.runtime.display.winhandler.WinHandler
@@ -1612,7 +1612,7 @@ class ShortcutSettingsComposeDialog private constructor(
             }
             if (container.isGamescopeRuntime || originalContainer.isGamescopeRuntime) {
                 LinuxProtons.updateChoices(context)
-                LinuxDriverChoices.update(context)
+                LinuxGraphicsChoices.update(context)
             }
             com.winlator.cmod.app.shell.UnifiedActivity.refreshLibrary()
         }

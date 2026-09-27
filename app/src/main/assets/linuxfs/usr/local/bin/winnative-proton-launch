@@ -46,6 +46,20 @@ if [ -n "$app" ] && [ -r "$drivers" ]; then
   done < "$drivers"
   [ -n "$icd" ] && [ -r "$icd" ] && export VK_ICD_FILENAMES="$icd"
 fi
+# The Direct3D 12 feature level the app's settings chose for this game, else the container's `*`,
+# as a Wine container exports it. One set by hand in the environment stands.
+levels=/etc/winnative/vkd3d-choices
+if [ -z "${VKD3D_FEATURE_LEVEL:-}" ] && [ -n "$app" ] && [ -r "$levels" ]; then
+  level=
+  while read -r key value; do
+    if [ "$key" = "$app" ]; then
+      level=$value
+      break
+    fi
+    [ "$key" = "*" ] && level=$value
+  done < "$levels"
+  [ -n "$level" ] && export VKD3D_FEATURE_LEVEL="$level"
+fi
 base=$(dirname "$proton")
 if [ ! -x "$proton" ] || [ ! -x "$base/files/bin-arm64/wine" ]; then
   echo "winnative-proton: incomplete ARM64 tool: $base" >&2
@@ -88,7 +102,7 @@ fi
 audio=off
 [ "${WN_DIRECTAUDIO:-0}" = 1 ] && audio=on
 winnative-directaudio --prepare "$base/files" "${STEAM_COMPAT_DATA_PATH:-}" "$audio" || exit $?
-echo "winnative-proton: tool=$base verb=${1:-missing} app=${SteamAppId:-unknown} icd=${VK_ICD_FILENAMES:-none}" >&2
+echo "winnative-proton: tool=$base verb=${1:-missing} app=${SteamAppId:-unknown} icd=${VK_ICD_FILENAMES:-none} feature_level=${VKD3D_FEATURE_LEVEL:-native}" >&2
 if [ -n "${WN_EPIC:-}" ] && [ -x /usr/local/bin/winnative-epic-launch ]; then
   exec /usr/local/bin/winnative-epic-launch "$proton" "$@"
 fi

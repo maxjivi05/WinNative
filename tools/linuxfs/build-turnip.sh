@@ -51,7 +51,8 @@ EOF
 
 [ -f build/build.ninja ] || meson setup build "$src" --cross-file cross.ini --buildtype release \
   -Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm,kgsl -Dgallium-drivers= -Dplatforms=wayland,x11 \
-  -Dopengl=false -Dgbm=disabled -Dglx=disabled -Degl=disabled -Dllvm=disabled -Dvulkan-layers= -Dtools=
+  -Dopengl=false -Dgbm=disabled -Dglx=disabled -Degl=disabled -Dllvm=disabled -Dvulkan-layers= -Dtools= \
+  -Dxmlconfig=disabled
 ninja -C build src/freedreno/vulkan/libvulkan_freedreno.so
 aarch64-linux-gnu-strip -o libvulkan_freedreno.so build/src/freedreno/vulkan/libvulkan_freedreno.so
 ls -la libvulkan_freedreno.so

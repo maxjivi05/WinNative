@@ -2940,6 +2940,7 @@ Installerad sökväg:
     <string name="container_display_server_gamescope">Gamescope ritar alltid genom Wayland-kompositören.</string>
     <string name="container_graphics_driver_gamescope">Turnip %1$s (Linux ARM64)</string>
     <string name="container_graphics_driver_gamescope_help">Inbyggd i Linux-miljön. Nedladdade Android-drivrutiner gäller bara Wine- och Proton-containrar.</string>
+    <string name="container_vkd3d_feature_level_gamescope_help">Nivån som VKD3D-Proton rapporterar till Direct3D 12-spel. Nivåer över 12_0 anger funktioner som Turnip saknar, så ett spel kan starta och sedan misslyckas när det använder dem.</string>
     <string name="linux_runtime_windows_program">Detta är ett Windows-program. Flytta det till en Wine-container i genvägsinställningarna för att starta det.</string>
     <string name="linux_steam_library_named">WinNative (%1$s)</string>
     <string name="linux_steam_library_internal">Intern lagring</string>

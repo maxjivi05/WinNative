@@ -9,7 +9,7 @@ import com.winlator.cmod.shared.util.KeyValueSet;
 
 public final class DXVKConfigUtils {
     public static final String DEFAULT_CONFIG = Container.DEFAULT_DXWRAPPERCONFIG;
-    public static final String[] VKD3D_FEATURE_LEVEL = {"12_0", "12_1", "12_2", "11_1", "11_0", "10_1", "10_0", "9_3", "9_2", "9_1"};
+    public static final String[] VKD3D_FEATURE_LEVEL = {"12_0", "12_1", "12_2", "11_1", "11_0"};
 
     private DXVKConfigUtils() {}
 

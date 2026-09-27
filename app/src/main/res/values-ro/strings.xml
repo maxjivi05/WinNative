@@ -2940,6 +2940,7 @@ Cale instalata:
     <string name="container_display_server_gamescope">Gamescope desenează întotdeauna prin compozitorul Wayland.</string>
     <string name="container_graphics_driver_gamescope">Turnip %1$s (Linux ARM64)</string>
     <string name="container_graphics_driver_gamescope_help">Inclus în mediul Linux. Driverele Android descărcate se aplică doar containerelor Wine și Proton.</string>
+    <string name="container_vkd3d_feature_level_gamescope_help">Nivelul pe care VKD3D-Proton îl raportează jocurilor Direct3D 12. Nivelurile peste 12_0 declară funcții pe care Turnip nu le are, așa că un joc poate porni și apoi eșua când le folosește.</string>
     <string name="linux_runtime_windows_program">Acesta este un program Windows. Mută-l într-un container Wine din setările scurtăturii pentru a-l porni.</string>
     <string name="linux_steam_library_named">WinNative (%1$s)</string>
     <string name="linux_steam_library_internal">Stocare internă</string>

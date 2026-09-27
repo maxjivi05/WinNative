@@ -2940,6 +2940,7 @@ Yüklü konum:
     <string name="container_display_server_gamescope">Gamescope her zaman Wayland birleştiricisi üzerinden çizer.</string>
     <string name="container_graphics_driver_gamescope">Turnip %1$s (Linux ARM64)</string>
     <string name="container_graphics_driver_gamescope_help">Linux çalışma ortamına dahildir. İndirilen Android sürücüleri yalnızca Wine ve Proton kapsayıcıları için geçerlidir.</string>
+    <string name="container_vkd3d_feature_level_gamescope_help">VKD3D-Proton\'un Direct3D 12 oyunlarına bildirdiği düzey. 12_0 üzerindeki düzeyler Turnip\'te olmayan özellikleri bildirir; oyun açılabilir, ancak bu özellikleri kullanınca başarısız olabilir.</string>
     <string name="linux_runtime_windows_program">Bu bir Windows programı. Başlatmak için kısayol ayarlarından bir Wine kapsayıcısına taşıyın.</string>
     <string name="linux_steam_library_named">WinNative (%1$s)</string>
     <string name="linux_steam_library_internal">Dahili depolama</string>

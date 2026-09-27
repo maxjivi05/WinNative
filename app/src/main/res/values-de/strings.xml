@@ -2942,6 +2942,7 @@ Installierter Pfad:
     <string name="container_display_server_gamescope">Gamescope zeichnet immer über den Wayland-Compositor.</string>
     <string name="container_graphics_driver_gamescope">Turnip %1$s (Linux ARM64)</string>
     <string name="container_graphics_driver_gamescope_help">In die Linux-Laufzeit integriert. Heruntergeladene Android-Treiber gelten nur für Wine- und Proton-Container.</string>
+    <string name="container_vkd3d_feature_level_gamescope_help">Die Stufe, die VKD3D-Proton an Direct3D-12-Spiele meldet. Stufen über 12_0 geben Funktionen an, die Turnip fehlen, sodass ein Spiel starten und später bei deren Nutzung scheitern kann.</string>
     <string name="linux_runtime_windows_program">Dies ist ein Windows-Programm. Verschiebe es in den Verknüpfungseinstellungen in einen Wine-Container, um es zu starten.</string>
     <string name="linux_steam_library_named">WinNative (%1$s)</string>
     <string name="linux_steam_library_internal">Interner Speicher</string>

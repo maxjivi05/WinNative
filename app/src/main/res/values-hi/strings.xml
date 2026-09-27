@@ -2875,6 +2875,7 @@
     <string name="container_display_server_gamescope">Gamescope हमेशा Wayland कंपोज़िटर के माध्यम से ड्रॉ करता है।</string>
     <string name="container_graphics_driver_gamescope">Turnip %1$s (Linux ARM64)</string>
     <string name="container_graphics_driver_gamescope_help">Linux रनटाइम में शामिल। डाउनलोड किए गए Android ड्राइवर केवल Wine और Proton कंटेनरों पर लागू होते हैं।</string>
+    <string name="container_vkd3d_feature_level_gamescope_help">वह स्तर जो VKD3D-Proton Direct3D 12 गेम को बताता है। 12_0 से ऊपर के स्तर ऐसी सुविधाएँ बताते हैं जो Turnip में नहीं हैं, इसलिए गेम शुरू होकर उनका उपयोग करते समय विफल हो सकता है।</string>
     <string name="linux_runtime_windows_program">यह एक Windows प्रोग्राम है। इसे चलाने के लिए शॉर्टकट सेटिंग्स में इसे किसी Wine कंटेनर में ले जाएँ।</string>
     <string name="linux_steam_library_named">WinNative (%1$s)</string>
     <string name="linux_steam_library_internal">आंतरिक स्टोरेज</string>

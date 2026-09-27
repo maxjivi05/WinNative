@@ -69,7 +69,7 @@ import com.winlator.cmod.shared.util.KeyValueSet
 import com.winlator.cmod.shared.theme.WinNativeTheme
 import com.winlator.cmod.shared.util.StringUtils
 import com.winlator.cmod.runtime.input.ui.InputControlsView
-import com.winlator.cmod.runtime.linux.LinuxDriverChoices
+import com.winlator.cmod.runtime.linux.LinuxGraphicsChoices
 import com.winlator.cmod.runtime.linux.LinuxProtons
 import com.winlator.cmod.runtime.wine.WineInfo
 import com.winlator.cmod.runtime.wine.WineRegistryEditor
@@ -969,7 +969,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             c.saveData()
             if (linuxProtonIds != null) {
                 LinuxProtons.updateChoices(context)
-                LinuxDriverChoices.update(context)
+                LinuxGraphicsChoices.update(context)
             }
             saveMouseWarpOverride(c)
             dismiss()
